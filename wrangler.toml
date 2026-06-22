@@ -1,0 +1,12 @@
+name = "dashboard-tracker"
+main = "src/index.js"
+compatibility_date = "2026-06-22"
+
+# The published Google Sheet CSV (File → Share → Publish to web → CSV).
+# Change the sheet, and the dashboard reflects it within the cache window (~3 min).
+[vars]
+CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtnhH9a-ssSwVT-2xDcN2GtL6yJELJwzs1FYz9pRu4QRkEvSuqZ1WsviXSjowd2WF3vLHnbB0ZAuBH/pub?gid=461407941&single=true&output=csv"
+
+# Optional: keep the edge cache warm so the first visitor each window is fast.
+# [triggers]
+# crons = ["*/3 * * * *"]

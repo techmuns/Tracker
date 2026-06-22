@@ -1,0 +1,15 @@
+{
+  "name": "dashboard-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Live dashboard tracker synced from a published Google Sheet, deployed on Cloudflare Workers.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "^3.114.0"
+  }
+}
