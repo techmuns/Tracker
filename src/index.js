@@ -175,6 +175,10 @@ function renderPage(data, opts) {
   .stat { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; }
   .stat .num { font-size:24px; font-weight:680; line-height:1; font-variant-numeric:tabular-nums; }
   .stat .lbl { font-size:11px; color:var(--muted); margin-top:5px; }
+  .stat[data-states] { cursor:pointer; }
+  .stat[data-states]:hover { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-weak); }
+  .section-t.clk { cursor:pointer; }
+  .section-t.clk:hover { color:var(--accent); }
   .bar { display:flex; height:8px; border-radius:5px; overflow:hidden; margin:4px 0 16px; background:var(--line2); }
   .bar i { display:block; height:100%; }
   .section-t { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:650; margin:18px 0 8px; display:flex; align-items:center; gap:7px; }
@@ -233,6 +237,7 @@ function renderPage(data, opts) {
     </div>
     <div class="header-actions">
       <button class="btn ghost" id="teamToggle">👤 Team view</button>
+      <button class="btn ghost" id="clientsToggle">🏢 Clients view</button>
       <div class="dropdown">
         <button class="btn ghost" id="exportToggle">⬇ Export to Excel ▾</button>
         <div class="menu" id="exportMenu">
@@ -320,7 +325,7 @@ function card(d){
     <div class="meta">
       <span class="tag state" style="color:\${s.color}">\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
-      \${d.customers.map(c => \`<span class="tag">\${esc(c)}</span>\`).join('')}
+      \${d.customers.map(c => \`<span class="tag owner-link" data-customer="\${esc(c)}" title="View \${esc(c)}">\${esc(c)}</span>\`).join('')}
       <span class="tag owner-link" data-owner="\${esc(d.owner)}" title="View \${esc(d.owner)}'s full track">\${esc(d.owner)}</span>
       \${d.source==='manual' ? '<span class="tag src">Manual</span>' : ''}
     </div>
@@ -414,78 +419,125 @@ if (CFG.manualEnabled){
   };
 }
 
-// ── Owner profile drawer + team overview ───────────────────────────────────
+// ── Owner / client profile drawer + overviews ──────────────────────────────
 const overlay = document.getElementById('overlay');
 const drawer = document.getElementById('drawer');
 function closeDrawer(){ overlay.classList.remove('open'); }
 overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDrawer(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
-function ownerStats(name){
-  const list = DATA.dashboards.filter(d => d.owner === name);
+// Roll up a list of dashboards into the headline buckets used everywhere.
+function rollup(list){
   const byState = Object.fromEntries(STATES.map(s => [s.id, list.filter(d => d.state === s.id)]));
   const c = Object.fromEntries(STATES.map(s => [s.id, byState[s.id].length]));
   return {
-    list, byState, c,
-    total: list.length,
-    completed: c.live + c.done,                 // shipped or finished our side
-    active: c.review + c.in_progress,           // in flight
-    pending: c.not_started,                     // not started yet
-    blocked: c.blocked,                         // stuck / on hold
-    clients: [...new Set(list.flatMap(d => d.customers))].sort(),
+    list, byState, c, total: list.length,
+    completed: c.live + c.done,        // shipped or finished our side
+    active: c.review + c.in_progress,  // in flight
+    pending: c.not_started,            // not started yet
+    blocked: c.blocked,                // stuck / on hold
   };
+}
+function ownerStats(name){ const s = rollup(DATA.dashboards.filter(d => d.owner === name)); s.clients = [...new Set(s.list.flatMap(d => d.customers))].sort(); return s; }
+function clientStats(name){ const s = rollup(DATA.dashboards.filter(d => d.customers.includes(name))); s.people = [...new Set(s.list.map(d => d.owner))].sort(); return s; }
+
+function stateBar(c, total){ return STATES.filter(x => c[x.id]).map(x => \`<i style="width:\${(c[x.id]/total*100)}%;background:\${x.color}" title="\${x.label}: \${c[x.id]}"></i>\`).join(''); }
+function statCard(num, lbl, color, states){
+  return \`<div class="stat" \${num?\`data-states="\${states}"\`:''}><div class="num" style="color:\${num?color:'var(--muted)'}">\${num}</div><div class="lbl">\${lbl}</div></div>\`;
+}
+function statRow(s){
+  return \`<div class="stat-row">\${statCard(s.completed,'Completed','#16a34a','live done')}\${statCard(s.active,'Active','#f97316','review in_progress')}\${statCard(s.pending,'Pending','#9ca3af','not_started')}\${statCard(s.blocked,'Blocked','#ef4444','blocked')}</div>\`;
+}
+function sectionsHtml(s, metaFn){
+  return STATES.filter(x => s.byState[x.id].length).map(x => {
+    const rows = s.byState[x.id].map(d => \`<div class="drow"><span class="sn">\${d.serial?('#'+d.serial):'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div></div>\`).join('');
+    return \`<div class="section-t clk" data-states="\${x.id}"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
+  }).join('');
+}
+// Wire up clickable stats / section headers (filter the board) and jump-chips.
+function wireDrawer(ctxKey, ctxName){
+  document.getElementById('drawerX').onclick = closeDrawer;
+  const back = document.getElementById('drawerBack'); if (back) back.onclick = () => (ctxKey==='owner'?openTeam():openClients());
+  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ [ctxKey]: ctxName, states: b.dataset.states.split(' ') }));
+  drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
+  drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
 }
 
 function openOwner(name){
   const s = ownerStats(name);
-  const stat = (num, lbl, color) => \`<div class="stat"><div class="num" style="color:\${color||'var(--txt)'}">\${num}</div><div class="lbl">\${lbl}</div></div>\`;
-  const segs = STATES.filter(x => s.c[x.id]).map(x => \`<i style="width:\${(s.c[x.id]/s.total*100)}%;background:\${x.color}" title="\${x.label}: \${s.c[x.id]}"></i>\`).join('');
-  const sections = STATES.filter(x => s.byState[x.id].length).map(x => {
-    const rows = s.byState[x.id].map(d => \`<div class="drow"><span class="sn">\${d.serial?('#'+d.serial):'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${esc(d.customers.join(', '))}\${d.status&&d.status!=='-'?' — '+esc(d.status):''}</div></div></div>\`).join('');
-    return \`<div class="section-t"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
-  }).join('');
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="backTeam">‹ Team view</button><h2>\${esc(name)}</h2>
+      <div><button class="back" id="drawerBack">‹ Team view</button><h2>\${esc(name)}</h2>
       <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.clients.length} client\${s.clients.length!==1?'s':''}</div></div>
       <button class="x" id="drawerX">×</button>
     </div>
     <div class="drawer-body">
-      <div class="stat-row">
-        \${stat(s.completed,'Completed','#16a34a')}\${stat(s.active,'Active','#f97316')}\${stat(s.pending,'Pending','#9ca3af')}\${stat(s.blocked,'Blocked','#ef4444')}
-      </div>
-      <div class="bar">\${segs}</div>
-      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>\`<span class="tag">\${esc(c)}</span>\`).join('')}</div>\`:''}
-      \${sections}
+      \${statRow(s)}
+      <div class="bar">\${stateBar(s.c,s.total)}</div>
+      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>\`<span class="tag owner-link" data-jump-customer="\${esc(c)}">\${esc(c)}</span>\`).join('')}</div>\`:''}
+      \${sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
-  document.getElementById('drawerX').onclick = closeDrawer;
-  document.getElementById('backTeam').onclick = openTeam;
+  wireDrawer('owner', name);
 }
 
-function openTeam(){
-  const cards = DATA.owners.map(name => {
-    const s = ownerStats(name);
-    const segs = STATES.filter(x => s.c[x.id]).map(x => \`<i style="width:\${(s.c[x.id]/s.total*100)}%;background:\${x.color}"></i>\`).join('');
-    return \`<div class="owner-card" data-owner="\${esc(name)}">
+function openClient(name){
+  const s = clientStats(name);
+  drawer.innerHTML = \`
+    <div class="drawer-head">
+      <div><button class="back" id="drawerBack">‹ Clients view</button><h2>\${esc(name)}</h2>
+      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.people.length} on the team</div></div>
+      <button class="x" id="drawerX">×</button>
+    </div>
+    <div class="drawer-body">
+      \${statRow(s)}
+      <div class="bar">\${stateBar(s.c,s.total)}</div>
+      \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="tag owner-link" data-jump-owner="\${esc(o)}">\${esc(o)}</span>\`).join('')}</div>\`:''}
+      \${sectionsHtml(s, d => esc(d.owner)+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
+    </div>\`;
+  overlay.classList.add('open');
+  wireDrawer('customer', name);
+}
+
+function overview(title, sub, items, jumpAttr, statsFn){
+  const cards = items.map(name => {
+    const s = statsFn(name);
+    return \`<div class="owner-card" \${jumpAttr}="\${esc(name)}">
       <div class="on">\${esc(name)}</div>
       <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.active} active · \${s.pending} pending\${s.blocked?' · '+s.blocked+' blocked':''}</div>
-      <div class="bar" style="margin:8px 0 0">\${segs}</div>
+      <div class="bar" style="margin:8px 0 0">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
   drawer.innerHTML = \`
-    <div class="drawer-head"><div><h2>Team</h2><div class="sub">\${DATA.owners.length} people · click anyone to see their full track</div></div><button class="x" id="drawerX">×</button></div>
+    <div class="drawer-head"><div><h2>\${title}</h2><div class="sub">\${sub}</div></div><button class="x" id="drawerX">×</button></div>
     <div class="drawer-body"><div class="owner-grid">\${cards}</div></div>\`;
   overlay.classList.add('open');
   document.getElementById('drawerX').onclick = closeDrawer;
-  drawer.querySelectorAll('[data-owner]').forEach(el => el.onclick = () => openOwner(el.dataset.owner));
+  drawer.querySelectorAll('[data-jump-owner]').forEach(el => el.onclick = () => openOwner(el.dataset.jumpOwner));
+  drawer.querySelectorAll('[data-jump-customer]').forEach(el => el.onclick = () => openClient(el.dataset.jumpCustomer));
+}
+function openTeam(){ overview('Team', DATA.owners.length+' people · click anyone for their full track', DATA.owners, 'data-jump-owner', ownerStats); }
+function openClients(){ overview('Clients', DATA.customers.length+' clients · click any to see their dashboards & team', DATA.customers, 'data-jump-customer', clientStats); }
+
+// Apply a profile click as a filter on the main board.
+function applyFilter({ owner='', customer='', states=null }){
+  closeDrawer();
+  document.getElementById('owner').value = owner;
+  document.getElementById('customer').value = customer;
+  document.getElementById('q').value = '';
+  document.getElementById('liveonly').checked = false;
+  hidden.clear();
+  if (states) STATES.forEach(s => { if (!states.includes(s.id)) hidden.add(s.id); });
+  renderLegend(); render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 document.getElementById('teamToggle').onclick = openTeam;
-// Click an owner chip on any card → open that person's profile
+document.getElementById('clientsToggle').onclick = openClients;
+// Click an owner or client chip on any card → open that profile
 document.getElementById('grid').addEventListener('click', (e) => {
-  const el = e.target.closest('[data-owner]');
-  if (el) openOwner(el.dataset.owner);
+  const o = e.target.closest('[data-owner]'); if (o){ openOwner(o.dataset.owner); return; }
+  const c = e.target.closest('[data-customer]'); if (c) openClient(c.dataset.customer);
 });
 
 // ── Export to Excel (multi-sheet .xlsx via SheetJS, loaded on first use) ────
@@ -526,6 +578,19 @@ function safeSheetName(wb, base){
 function addSheet(wb, base, rows){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), safeSheetName(wb, base));
 }
+// Summary-of-people / summary-of-clients rows (the "breakdown" sheets).
+function ownerSummaryRows(){
+  return DATA.owners.map(o => { const s = ownerStats(o); return {
+    Owner:o, Total:s.total, Completed:s.completed, Active:s.active, Pending:s.pending, Blocked:s.blocked,
+    Live:s.c.live, 'Done (not live)':s.c.done, 'In Review':s.c.review, 'In Progress':s.c.in_progress, 'Not Started':s.c.not_started, Clients:s.clients.length };
+  });
+}
+function clientSummaryRows(){
+  return DATA.customers.map(c => { const s = clientStats(c); return {
+    Client:c, Total:s.total, Completed:s.completed, Active:s.active, Pending:s.pending, Blocked:s.blocked,
+    Live:s.c.live, 'Done (not live)':s.c.done, 'In Review':s.c.review, 'In Progress':s.c.in_progress, 'Not Started':s.c.not_started, People:s.people.length };
+  });
+}
 async function doExport(kind){
   try {
     await loadXLSX();
@@ -533,6 +598,8 @@ async function doExport(kind){
     const all = DATA.dashboards;
     if (kind === 'all'){
       addSheet(wb, 'All Dashboards', exportRows(all));
+      addSheet(wb, 'Owner Summary', ownerSummaryRows());
+      addSheet(wb, 'Client Summary', clientSummaryRows());
       DATA.customers.forEach(c => addSheet(wb, 'Client - '+c, exportRows(all.filter(d => d.customers.includes(c)))));
       DATA.owners.forEach(o => addSheet(wb, 'Owner - '+o, exportRows(all.filter(d => d.owner === o))));
       XLSX.writeFile(wb, 'dashboard-tracker-all.xlsx');
