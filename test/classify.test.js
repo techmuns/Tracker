@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, rowToDashboard, buildDataset, isLiveValue } from '../src/classify.js';
+import { classify, rowToDashboard, buildDataset, manualToDashboard, isLiveValue } from '../src/classify.js';
 import { parseCsv } from '../src/csv.js';
 
 test('isLiveValue reads the Live column', () => {
@@ -68,4 +68,29 @@ test('buildDataset counts, sorts, and finds serial gaps', () => {
   assert.equal(data.counts.in_progress, 1);
   assert.equal(data.counts.live, 1);
   assert.deepEqual(data.owners, ['Naval', 'Neha', 'Vipul']);
+});
+
+test('manualToDashboard uses the same colour logic and is tagged manual', () => {
+  const d = manualToDashboard({ id: 'abc', name: 'Revenue Tracker', customer: 'Vimana', owner: 'Vipul', liveRaw: 'Live on Munshot', status: 'All changes done', meetingUrl: 'https://x.test/v' });
+  assert.equal(d.source, 'manual');
+  assert.equal(d.serial, null);
+  assert.equal(d.customer, 'Vimana Capital'); // alias applied to manual too
+  assert.equal(d.state, 'live');              // done + live => green
+  assert.equal(d.meetingUrl, 'https://x.test/v');
+});
+
+test('buildDataset merges manual entries after sheet rows and recounts', () => {
+  const csv = [
+    ',Dashboards,Name,Assigned,Live,Reqs,Imp,Fb,Status,Link,Updated,',
+    '1,A dash,Cust A,Naval,Not Live,Received,-,-,Not Started Yet,-,,',
+  ].join('\n');
+  const manual = [{ id: 'm1', name: 'Manual one', customer: 'Cust Z', owner: 'Neha', liveRaw: 'Not Live', status: 'In Making' }];
+  const data = buildDataset(parseCsv(csv), manual);
+  assert.equal(data.total, 2);
+  assert.equal(data.sheetCount, 1);
+  assert.equal(data.manualCount, 1);
+  assert.equal(data.dashboards[0].source, 'sheet');   // sheet first
+  assert.equal(data.dashboards[1].source, 'manual');  // manual after
+  assert.equal(data.counts.not_started, 1);
+  assert.equal(data.counts.in_progress, 1);
 });

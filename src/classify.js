@@ -129,6 +129,8 @@ export function rowToDashboard(cells) {
 
   return {
     serial,
+    source: 'sheet',
+    id: 'sheet-' + serial,
     name: clean(name),
     customer: canonicalCustomer(customer) || 'Unassigned',
     owner: clean(owner) || 'Unassigned',
@@ -146,20 +148,51 @@ export function rowToDashboard(cells) {
   };
 }
 
-// Build the full dataset + summary from parsed CSV rows.
-export function buildDataset(rows) {
-  const dashboards = [];
+// Map a manually-entered object (from the dashboard's Add form, stored in KV)
+// into the same dashboard shape, using the identical color logic.
+export function manualToDashboard(m) {
+  const liveRaw = m.liveRaw || (m.isLive ? 'Live on Munshot' : 'Not Live');
+  const { state, isLive } = classify({ status: m.status, liveRaw });
+  const url = String(m.meetingUrl ?? '').trim();
+  return {
+    serial: null,
+    source: 'manual',
+    id: m.id,
+    name: clean(m.name),
+    customer: canonicalCustomer(m.customer) || 'Unassigned',
+    owner: clean(m.owner) || 'Unassigned',
+    liveRaw: clean(liveRaw),
+    isLive,
+    requirements: clean(m.requirements),
+    improvement: clean(m.improvement),
+    feedback: clean(m.feedback),
+    status: clean(m.status),
+    state,
+    meetingUrl: /^https?:\/\//i.test(url) ? url : '',
+    meetingNote: '',
+    lastUpdated: clean(m.lastUpdated),
+    note: clean(m.note),
+  };
+}
+
+// Build the full dataset + summary from parsed CSV rows, merged with any
+// manually-entered records (KV).
+export function buildDataset(rows, manual = []) {
+  const sheet = [];
   for (const r of rows) {
     const d = rowToDashboard(r);
-    if (d) dashboards.push(d);
+    if (d) sheet.push(d);
   }
-  dashboards.sort((a, b) => a.serial - b.serial);
+  sheet.sort((a, b) => a.serial - b.serial);
+
+  const manualCards = manual.map(manualToDashboard).filter((d) => d.name);
+  const dashboards = [...sheet, ...manualCards]; // sheet first (by serial), manual after
 
   const counts = Object.fromEntries(STATES.map((s) => [s.id, 0]));
   for (const d of dashboards) counts[d.state]++;
 
-  // Detect gaps in the serial sequence (e.g. rows 34 & 36 missing).
-  const serials = dashboards.map((d) => d.serial);
+  // Detect gaps in the SHEET serial sequence (e.g. rows 34 & 36 missing).
+  const serials = sheet.map((d) => d.serial);
   const gaps = [];
   if (serials.length) {
     for (let n = serials[0]; n <= serials[serials.length - 1]; n++) {
@@ -170,6 +203,8 @@ export function buildDataset(rows) {
   return {
     generatedAt: new Date().toISOString(),
     total: dashboards.length,
+    sheetCount: sheet.length,
+    manualCount: manualCards.length,
     counts,
     gaps,
     customers: [...new Set(dashboards.map((d) => d.customer))].sort(),

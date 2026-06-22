@@ -7,6 +7,22 @@ compatibility_date = "2026-06-22"
 [vars]
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtnhH9a-ssSwVT-2xDcN2GtL6yJELJwzs1FYz9pRu4QRkEvSuqZ1WsviXSjowd2WF3vLHnbB0ZAuBH/pub?gid=461407941&single=true&output=csv"
 
+# ── Manual entries (shared) ───────────────────────────────────────────────
+# To enable the "+ Add dashboard" form, create a KV namespace and bind it here:
+#   1. Cloudflare dashboard → Storage & Databases → KV → Create namespace
+#      (name it e.g. "tracker-manual"). Copy the namespace ID.
+#   2. Uncomment the two lines below and paste the ID into `id`.
+#   3. Commit → the next build deploys with manual entries enabled.
+# Until then the board works read-only and the Add button is hidden.
+#
+# [[kv_namespaces]]
+# binding = "MANUAL"
+# id = "PASTE_YOUR_KV_NAMESPACE_ID_HERE"
+
+# Optional: protect the Add/Delete actions with a shared password. Set this as a
+# secret (Settings → Variables → Add → Encrypt), then the UI prompts for it once.
+#   EDIT_TOKEN = "..."   (prefer a Secret over a plain var)
+
 # Optional: keep the edge cache warm so the first visitor each window is fast.
 # [triggers]
 # crons = ["*/3 * * * *"]
