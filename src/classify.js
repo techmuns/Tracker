@@ -111,6 +111,17 @@ function canonicalCustomer(name) {
   return CUSTOMER_ALIASES[c.toLowerCase()] || c;
 }
 
+// A cell like "Arisag Partners & Beas Capital" is TWO clients sharing one
+// dashboard — split it so each is counted/filtered/grouped on its own.
+export function splitCustomers(raw) {
+  const cleaned = clean(raw);
+  if (!cleaned) return [];
+  return cleaned
+    .split(/\s*[&+/]\s*|\s*,\s*/)
+    .map((s) => canonicalCustomer(s))
+    .filter(Boolean);
+}
+
 // Map one raw CSV row (array of cells) to a dashboard object, or null if the
 // row is spreadsheet noise (no serial number / no name).
 export function rowToDashboard(cells) {
@@ -126,13 +137,16 @@ export function rowToDashboard(cells) {
   // actual URL spilled into a later column.
   const meetingNote = !blank(link) && !/^https?:\/\//i.test(link.trim()) ? clean(link) : '';
   const { state, isLive } = classify({ status, liveRaw });
+  const customers = splitCustomers(customer);
+  const customerList = customers.length ? customers : ['Unassigned'];
 
   return {
     serial,
     source: 'sheet',
     id: 'sheet-' + serial,
     name: clean(name),
-    customer: canonicalCustomer(customer) || 'Unassigned',
+    customers: customerList,
+    customer: customerList.join(' & '),
     owner: clean(owner) || 'Unassigned',
     liveRaw: clean(liveRaw),
     isLive,
@@ -154,12 +168,15 @@ export function manualToDashboard(m) {
   const liveRaw = m.liveRaw || (m.isLive ? 'Live on Munshot' : 'Not Live');
   const { state, isLive } = classify({ status: m.status, liveRaw });
   const url = String(m.meetingUrl ?? '').trim();
+  const customers = splitCustomers(m.customer);
+  const customerList = customers.length ? customers : ['Unassigned'];
   return {
     serial: null,
     source: 'manual',
     id: m.id,
     name: clean(m.name),
-    customer: canonicalCustomer(m.customer) || 'Unassigned',
+    customers: customerList,
+    customer: customerList.join(' & '),
     owner: clean(m.owner) || 'Unassigned',
     liveRaw: clean(liveRaw),
     isLive,
@@ -207,7 +224,7 @@ export function buildDataset(rows, manual = []) {
     manualCount: manualCards.length,
     counts,
     gaps,
-    customers: [...new Set(dashboards.map((d) => d.customer))].sort(),
+    customers: [...new Set(dashboards.flatMap((d) => d.customers))].sort(),
     owners: [...new Set(dashboards.map((d) => d.owner))].sort(),
     dashboards,
   };

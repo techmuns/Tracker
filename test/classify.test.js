@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, rowToDashboard, buildDataset, manualToDashboard, isLiveValue } from '../src/classify.js';
+import { classify, rowToDashboard, buildDataset, manualToDashboard, splitCustomers, isLiveValue } from '../src/classify.js';
 import { parseCsv } from '../src/csv.js';
 
 test('isLiveValue reads the Live column', () => {
@@ -68,6 +68,28 @@ test('buildDataset counts, sorts, and finds serial gaps', () => {
   assert.equal(data.counts.in_progress, 1);
   assert.equal(data.counts.live, 1);
   assert.deepEqual(data.owners, ['Naval', 'Neha', 'Vipul']);
+});
+
+test('splitCustomers separates shared dashboards into distinct clients', () => {
+  assert.deepEqual(splitCustomers('Arisag Partners & Beas Capital'), ['Arisag Partners', 'Beas Capital']);
+  assert.deepEqual(splitCustomers('Incred & Arisag Partners'), ['Incred', 'Arisag Partners']);
+  assert.deepEqual(splitCustomers('Vimana & Sage One'), ['Vimana Capital', 'Sage One']); // alias still applies
+  assert.deepEqual(splitCustomers('Beas Capital'), ['Beas Capital']);                     // single unchanged
+});
+
+test('a shared-dashboard row lands under each client', () => {
+  const d = rowToDashboard(['18', 'CG Checklist', 'Arisag Partners & Beas Capital', 'Nadam', 'Live on Munshot', 'Received', 'x', 'y', 'bug', '-', '']);
+  assert.deepEqual(d.customers, ['Arisag Partners', 'Beas Capital']);
+  assert.equal(d.customer, 'Arisag Partners & Beas Capital'); // display keeps the joined label
+});
+
+test('buildDataset customer list contains the split clients individually', () => {
+  const csv = [
+    ',Dashboards,Name,Assigned,Live,Reqs,Imp,Fb,Status,Link,Updated,',
+    '1,A,Arisag Partners & Beas Capital,Naval,Not Live,Received,-,-,Not Started Yet,-,,',
+  ].join('\n');
+  const data = buildDataset(parseCsv(csv));
+  assert.deepEqual(data.customers, ['Arisag Partners', 'Beas Capital']);
 });
 
 test('manualToDashboard uses the same colour logic and is tagged manual', () => {

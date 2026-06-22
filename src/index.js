@@ -152,6 +152,13 @@ function renderPage(data, opts) {
   .btn:hover { filter:brightness(1.05); }
   .btn.ghost { background:var(--surface); color:var(--txt); border-color:var(--line); }
   .btn.ghost:hover { background:var(--line2); }
+  .header-actions { display:flex; gap:10px; align-items:center; }
+  .dropdown { position:relative; }
+  .menu { display:none; position:absolute; right:0; top:calc(100% + 6px); background:var(--surface); border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px rgba(16,24,40,.12); min-width:300px; overflow:hidden; z-index:20; }
+  .menu.open { display:block; }
+  .menu button { display:block; width:100%; text-align:left; padding:10px 14px; border:0; background:none; font:inherit; font-size:13px; color:var(--txt); cursor:pointer; }
+  .menu button:hover { background:var(--accent-weak); }
+  .menu button + button { border-top:1px solid var(--line2); }
   .controls { display:flex; flex-wrap:wrap; gap:10px; padding:14px 28px; align-items:center; }
   select, input, textarea { font:inherit; background:var(--surface); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
   input:focus, select:focus, textarea:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
@@ -194,7 +201,17 @@ function renderPage(data, opts) {
       <h1>Dashboard Tracker</h1>
       <div class="sub">${data.total} dashboards · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''} · updated ${escapeHtml(fresh)}</div>
     </div>
-    ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
+    <div class="header-actions">
+      <div class="dropdown">
+        <button class="btn ghost" id="exportToggle">⬇ Export to Excel ▾</button>
+        <div class="menu" id="exportMenu">
+          <button data-export="all">All — full workbook (overview + per-client + per-owner sheets)</button>
+          <button data-export="client">Client-wise — one sheet per client</button>
+          <button data-export="owner">Owner-wise — one sheet per owner</button>
+        </div>
+      </div>
+      ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
+    </div>
   </div>
   <div class="legend" id="legend"></div>
 </header>
@@ -270,7 +287,7 @@ function card(d){
     <div class="meta">
       <span class="tag state" style="color:\${s.color}">\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
-      <span class="tag">\${esc(d.customer)}</span>
+      \${d.customers.map(c => \`<span class="tag">\${esc(c)}</span>\`).join('')}
       <span class="tag">\${esc(d.owner)}</span>
       \${d.source==='manual' ? '<span class="tag src">Manual</span>' : ''}
     </div>
@@ -289,7 +306,7 @@ function render(){
 
   let list = DATA.dashboards.filter(d => {
     if (hidden.has(d.state)) return false;
-    if (cust && d.customer !== cust) return false;
+    if (cust && !d.customers.includes(cust)) return false;
     if (own && d.owner !== own) return false;
     if (liveonly && !d.isLive) return false;
     if (q){
@@ -306,9 +323,12 @@ function render(){
   let groups;
   if (groupby === 'state'){
     groups = STATES.map(s => [s.label, list.filter(d => d.state === s.id)]).filter(([,a]) => a.length);
+  } else if (groupby === 'customer'){
+    const keys = [...new Set(list.flatMap(d => d.customers))].sort();
+    groups = keys.map(k => [k, list.filter(d => d.customers.includes(k))]); // a 2-client dash appears under both
   } else {
-    const keys = [...new Set(list.map(d => d[groupby]))].sort();
-    groups = keys.map(k => [k, list.filter(d => d[groupby] === k)]);
+    const keys = [...new Set(list.map(d => d.owner))].sort();
+    groups = keys.map(k => [k, list.filter(d => d.owner === k)]);
   }
   grid.innerHTML = groups.map(([t,items]) => \`<div class="group-h">\${esc(t)} · \${items.length}</div>\` + items.map(card).join('')).join('');
   bindDelete();
@@ -360,6 +380,68 @@ if (CFG.manualEnabled){
     else { const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); }
   };
 }
+
+// ── Export to Excel (multi-sheet .xlsx via SheetJS, loaded on first use) ────
+function loadXLSX(){
+  if (window.XLSX) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = resolve; s.onerror = () => reject(new Error('Could not load the Excel library.'));
+    document.head.appendChild(s);
+  });
+}
+function exportRows(list){
+  return list.map(d => ({
+    '#': d.serial ?? '',
+    Dashboard: d.name,
+    Customer: d.customer,
+    'Assigned To': d.owner,
+    State: SMAP[d.state].label,
+    Live: d.isLive ? 'Live on Munshot' : 'No',
+    Status: d.status,
+    'Client Requirements': d.requirements,
+    Improvements: d.improvement,
+    Feedback: d.feedback,
+    'Meeting Link': d.meetingUrl || d.meetingNote || '',
+    'Last Updated': d.lastUpdated,
+    Source: d.source,
+  }));
+}
+function safeSheetName(wb, base){
+  let name = String(base || 'Sheet');
+  ['\\\\', '/', '?', '*', '[', ']', ':'].forEach(ch => { name = name.split(ch).join(' '); });
+  name = name.replace(/\\s+/g, ' ').trim().slice(0, 31) || 'Sheet';
+  let n = name, i = 2;
+  while (wb.SheetNames.includes(n)){ const suf = ' ('+i+')'; n = name.slice(0, 31 - suf.length) + suf; i++; }
+  return n;
+}
+function addSheet(wb, base, rows){
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), safeSheetName(wb, base));
+}
+async function doExport(kind){
+  try {
+    await loadXLSX();
+    const wb = XLSX.utils.book_new();
+    const all = DATA.dashboards;
+    if (kind === 'all'){
+      addSheet(wb, 'All Dashboards', exportRows(all));
+      DATA.customers.forEach(c => addSheet(wb, 'Client - '+c, exportRows(all.filter(d => d.customers.includes(c)))));
+      DATA.owners.forEach(o => addSheet(wb, 'Owner - '+o, exportRows(all.filter(d => d.owner === o))));
+      XLSX.writeFile(wb, 'dashboard-tracker-all.xlsx');
+    } else if (kind === 'client'){
+      DATA.customers.forEach(c => addSheet(wb, c, exportRows(all.filter(d => d.customers.includes(c)))));
+      XLSX.writeFile(wb, 'dashboard-tracker-by-client.xlsx');
+    } else {
+      DATA.owners.forEach(o => addSheet(wb, o, exportRows(all.filter(d => d.owner === o))));
+      XLSX.writeFile(wb, 'dashboard-tracker-by-owner.xlsx');
+    }
+  } catch (e){ alert(e.message || 'Export failed.'); }
+}
+const exportMenu = document.getElementById('exportMenu');
+document.getElementById('exportToggle').onclick = (e) => { e.stopPropagation(); exportMenu.classList.toggle('open'); };
+document.addEventListener('click', () => exportMenu.classList.remove('open'));
+exportMenu.querySelectorAll('[data-export]').forEach(b => b.onclick = () => { exportMenu.classList.remove('open'); doExport(b.dataset.export); });
 
 ['q','customer','owner','groupby','liveonly'].forEach(id => {
   const el = document.getElementById(id);
