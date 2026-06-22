@@ -159,6 +159,36 @@ function renderPage(data, opts) {
   .menu button { display:block; width:100%; text-align:left; padding:10px 14px; border:0; background:none; font:inherit; font-size:13px; color:var(--txt); cursor:pointer; }
   .menu button:hover { background:var(--accent-weak); }
   .menu button + button { border-top:1px solid var(--line2); }
+  .tag.owner-link { cursor:pointer; }
+  .tag.owner-link:hover { background:var(--accent-weak); border-color:#cdddff; color:var(--accent); }
+  /* Slide-over drawer (owner profile + team) */
+  .overlay { position:fixed; inset:0; background:rgba(16,24,40,.4); display:none; z-index:50; }
+  .overlay.open { display:block; }
+  .drawer { position:absolute; top:0; right:0; height:100%; width:min(560px,100%); background:var(--bg); box-shadow:-8px 0 30px rgba(16,24,40,.18); overflow-y:auto; }
+  .drawer-head { position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--line); padding:18px 22px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+  .drawer-head h2 { margin:0; font-size:20px; font-weight:650; }
+  .drawer-head .sub { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .x { border:1px solid var(--line); background:var(--surface); width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:17px; color:var(--muted); flex:none; }
+  .x:hover { background:var(--line2); }
+  .drawer-body { padding:18px 22px 60px; }
+  .stat-row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
+  .stat { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; }
+  .stat .num { font-size:24px; font-weight:680; line-height:1; font-variant-numeric:tabular-nums; }
+  .stat .lbl { font-size:11px; color:var(--muted); margin-top:5px; }
+  .bar { display:flex; height:8px; border-radius:5px; overflow:hidden; margin:4px 0 16px; background:var(--line2); }
+  .bar i { display:block; height:100%; }
+  .section-t { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:650; margin:18px 0 8px; display:flex; align-items:center; gap:7px; }
+  .drow { display:flex; gap:10px; align-items:baseline; padding:9px 0; border-bottom:1px solid var(--line2); }
+  .drow .sn { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12px; min-width:26px; }
+  .drow .dn { font-weight:550; font-size:13.5px; }
+  .drow .dmeta { font-size:12px; color:var(--muted); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 6px; }
+  .owner-grid { display:grid; grid-template-columns:1fr; gap:10px; }
+  .owner-card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:13px 15px; cursor:pointer; }
+  .owner-card:hover { border-color:var(--accent); background:var(--accent-weak); }
+  .owner-card .on { font-weight:620; font-size:14.5px; }
+  .owner-card .os { font-size:12px; color:var(--muted); margin-top:3px; }
+  .back { background:none; border:0; color:var(--accent); cursor:pointer; font:inherit; font-size:12.5px; padding:0; margin-bottom:10px; }
   .controls { display:flex; flex-wrap:wrap; gap:10px; padding:14px 28px; align-items:center; }
   select, input, textarea { font:inherit; background:var(--surface); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
   input:focus, select:focus, textarea:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
@@ -202,6 +232,7 @@ function renderPage(data, opts) {
       <div class="sub">${data.total} dashboards · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''} · updated ${escapeHtml(fresh)}</div>
     </div>
     <div class="header-actions">
+      <button class="btn ghost" id="teamToggle">👤 Team view</button>
       <div class="dropdown">
         <button class="btn ghost" id="exportToggle">⬇ Export to Excel ▾</button>
         <div class="menu" id="exportMenu">
@@ -255,6 +286,8 @@ ${data.gaps.length ? `<div class="warn">Note: sheet serial numbers ${data.gaps.j
 </div>
 <div class="grid" id="grid"></div>
 
+<div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
+
 <script>
 const DATA = ${payload};
 const STATES = ${statesJson};
@@ -288,7 +321,7 @@ function card(d){
       <span class="tag state" style="color:\${s.color}">\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
       \${d.customers.map(c => \`<span class="tag">\${esc(c)}</span>\`).join('')}
-      <span class="tag">\${esc(d.owner)}</span>
+      <span class="tag owner-link" data-owner="\${esc(d.owner)}" title="View \${esc(d.owner)}'s full track">\${esc(d.owner)}</span>
       \${d.source==='manual' ? '<span class="tag src">Manual</span>' : ''}
     </div>
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Status</span><br>\${esc(d.status)}</div>\` : ''}
@@ -380,6 +413,80 @@ if (CFG.manualEnabled){
     else { const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); }
   };
 }
+
+// ── Owner profile drawer + team overview ───────────────────────────────────
+const overlay = document.getElementById('overlay');
+const drawer = document.getElementById('drawer');
+function closeDrawer(){ overlay.classList.remove('open'); }
+overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDrawer(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+
+function ownerStats(name){
+  const list = DATA.dashboards.filter(d => d.owner === name);
+  const byState = Object.fromEntries(STATES.map(s => [s.id, list.filter(d => d.state === s.id)]));
+  const c = Object.fromEntries(STATES.map(s => [s.id, byState[s.id].length]));
+  return {
+    list, byState, c,
+    total: list.length,
+    completed: c.live + c.done,                 // shipped or finished our side
+    active: c.review + c.in_progress,           // in flight
+    pending: c.not_started,                     // not started yet
+    blocked: c.blocked,                         // stuck / on hold
+    clients: [...new Set(list.flatMap(d => d.customers))].sort(),
+  };
+}
+
+function openOwner(name){
+  const s = ownerStats(name);
+  const stat = (num, lbl, color) => \`<div class="stat"><div class="num" style="color:\${color||'var(--txt)'}">\${num}</div><div class="lbl">\${lbl}</div></div>\`;
+  const segs = STATES.filter(x => s.c[x.id]).map(x => \`<i style="width:\${(s.c[x.id]/s.total*100)}%;background:\${x.color}" title="\${x.label}: \${s.c[x.id]}"></i>\`).join('');
+  const sections = STATES.filter(x => s.byState[x.id].length).map(x => {
+    const rows = s.byState[x.id].map(d => \`<div class="drow"><span class="sn">\${d.serial?('#'+d.serial):'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${esc(d.customers.join(', '))}\${d.status&&d.status!=='-'?' — '+esc(d.status):''}</div></div></div>\`).join('');
+    return \`<div class="section-t"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
+  }).join('');
+  drawer.innerHTML = \`
+    <div class="drawer-head">
+      <div><button class="back" id="backTeam">‹ Team view</button><h2>\${esc(name)}</h2>
+      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.clients.length} client\${s.clients.length!==1?'s':''}</div></div>
+      <button class="x" id="drawerX">×</button>
+    </div>
+    <div class="drawer-body">
+      <div class="stat-row">
+        \${stat(s.completed,'Completed','#16a34a')}\${stat(s.active,'Active','#f97316')}\${stat(s.pending,'Pending','#9ca3af')}\${stat(s.blocked,'Blocked','#ef4444')}
+      </div>
+      <div class="bar">\${segs}</div>
+      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>\`<span class="tag">\${esc(c)}</span>\`).join('')}</div>\`:''}
+      \${sections}
+    </div>\`;
+  overlay.classList.add('open');
+  document.getElementById('drawerX').onclick = closeDrawer;
+  document.getElementById('backTeam').onclick = openTeam;
+}
+
+function openTeam(){
+  const cards = DATA.owners.map(name => {
+    const s = ownerStats(name);
+    const segs = STATES.filter(x => s.c[x.id]).map(x => \`<i style="width:\${(s.c[x.id]/s.total*100)}%;background:\${x.color}"></i>\`).join('');
+    return \`<div class="owner-card" data-owner="\${esc(name)}">
+      <div class="on">\${esc(name)}</div>
+      <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.active} active · \${s.pending} pending\${s.blocked?' · '+s.blocked+' blocked':''}</div>
+      <div class="bar" style="margin:8px 0 0">\${segs}</div>
+    </div>\`;
+  }).join('');
+  drawer.innerHTML = \`
+    <div class="drawer-head"><div><h2>Team</h2><div class="sub">\${DATA.owners.length} people · click anyone to see their full track</div></div><button class="x" id="drawerX">×</button></div>
+    <div class="drawer-body"><div class="owner-grid">\${cards}</div></div>\`;
+  overlay.classList.add('open');
+  document.getElementById('drawerX').onclick = closeDrawer;
+  drawer.querySelectorAll('[data-owner]').forEach(el => el.onclick = () => openOwner(el.dataset.owner));
+}
+
+document.getElementById('teamToggle').onclick = openTeam;
+// Click an owner chip on any card → open that person's profile
+document.getElementById('grid').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-owner]');
+  if (el) openOwner(el.dataset.owner);
+});
 
 // ── Export to Excel (multi-sheet .xlsx via SheetJS, loaded on first use) ────
 function loadXLSX(){
