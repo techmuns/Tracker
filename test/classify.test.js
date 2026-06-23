@@ -127,14 +127,38 @@ test('daily-update overlay: latest update changes state and counts', () => {
   assert.equal(data.counts.not_started, 0);
 });
 
-test('priority overlay flags dashboards and counts them', () => {
+test('priority overlay sets levels and counts them', () => {
   const data = buildDataset([], [
     { id: 'a', name: 'A', owner: 'X', customer: 'C' },
     { id: 'b', name: 'B', owner: 'Y', customer: 'C' },
-  ], { standalone: true, priority: { a: true } });
-  assert.equal(data.dashboards.find((d) => d.id === 'a').priority, true);
-  assert.equal(data.dashboards.find((d) => d.id === 'b').priority, false);
-  assert.equal(data.priorityCount, 1);
+    { id: 'c', name: 'C', owner: 'Z', customer: 'C' },
+  ], { standalone: true, priority: { a: 2, b: true } });
+  assert.equal(data.dashboards.find((d) => d.id === 'a').priorityLevel, 2);
+  assert.equal(data.dashboards.find((d) => d.id === 'b').priorityLevel, 1); // legacy boolean → 1
+  assert.equal(data.dashboards.find((d) => d.id === 'c').priorityLevel, 0);
+  assert.equal(data.priorityCount, 2);
+});
+
+test('links normalize: array kept, legacy meetingUrl becomes first link, progress set', () => {
+  const d = manualToDashboard({ id: 'l', name: 'L', owner: 'X', customer: 'C', stage: 'data_integration',
+    links: [{ label: 'First client meeting', url: 'https://youtu.be/abc' }, { label: '', url: 'not-a-url' }] });
+  assert.equal(d.links.length, 1);
+  assert.equal(d.links[0].label, 'First client meeting');
+  assert.equal(d.meetingUrl, 'https://youtu.be/abc');
+  const d2 = manualToDashboard({ id: 'm', name: 'M', owner: 'X', customer: 'C', meetingUrl: 'https://x.test/v' });
+  assert.equal(d2.links[0].label, 'First client meeting');
+  assert.equal(d2.links[0].url, 'https://x.test/v');
+});
+
+test('progress reflects stage position (0% start → 100% completed)', () => {
+  const data = buildDataset([], [
+    { id: 'a', name: 'A', owner: 'X', customer: 'C', stage: 'not_started' },
+    { id: 'b', name: 'B', owner: 'X', customer: 'C', stage: 'completed' },
+    { id: 'c', name: 'C', owner: 'X', customer: 'C', stage: 'final_check' },
+  ], { standalone: true });
+  assert.equal(data.dashboards.find((d) => d.id === 'a').progress, 0);
+  assert.equal(data.dashboards.find((d) => d.id === 'b').progress, 1);
+  assert.equal(data.dashboards.find((d) => d.id === 'c').progress, 0.5); // stage 4 of 7 → 3/6
 });
 
 test('an explicit stage on a manual entry is used', () => {
