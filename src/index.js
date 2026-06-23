@@ -21,6 +21,8 @@ const KV_UPDATES = 'dashboard_updates';
 const KV_PEOPLE = 'people';
 const KV_CONFIG = 'config';
 const KV_PRIORITY = 'priority';
+const KV_CLIENTS = 'clients';
+const MAX_FILE_BYTES = 4 * 1024 * 1024; // 4MB cap per uploaded file
 
 async function kvGet(env, key, fallback) {
   if (!env.MANUAL) return fallback;
@@ -39,10 +41,12 @@ const readConfig = (env) => kvGet(env, KV_CONFIG, {});
 const writeConfig = (env, c) => env.MANUAL.put(KV_CONFIG, JSON.stringify(c));
 const readPriority = (env) => kvGet(env, KV_PRIORITY, {});
 const writePriority = (env, p) => env.MANUAL.put(KV_PRIORITY, JSON.stringify(p));
+const readClients = (env) => kvGet(env, KV_CLIENTS, {});
+const writeClients = (env, c) => env.MANUAL.put(KV_CLIENTS, JSON.stringify(c));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, config, priority] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env),
+  const [manual, roster, updates, people, config, priority, clients] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env), readClients(env),
   ]);
   // Standalone mode: serve purely from KV, never touch the Google Sheet.
   let rows = [];
@@ -52,7 +56,7 @@ async function getDataset(env) {
     if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
     rows = parseCsv(await res.text());
   }
-  return buildDataset(rows, manual, { roster, updates, people, priority, standalone: !!config.standalone });
+  return buildDataset(rows, manual, { roster, updates, people, priority, clients, standalone: !!config.standalone });
 }
 
 const json = (obj, status = 200) =>
@@ -97,6 +101,10 @@ export default {
             links: Array.isArray(body.links) ? body.links : [],
             lastUpdated: body.lastUpdated || new Date().toLocaleDateString('en-GB'),
             note: body.note || '',
+            dueDate: body.dueDate || '',
+            manualStatus: body.manualStatus || '',
+            requirementFiles: Array.isArray(body.requirementFiles) ? body.requirementFiles : [],
+            feedbacks: Array.isArray(body.feedbacks) ? body.feedbacks : [],
           };
           const list = await readManual(env);
           list.push(entry);
@@ -113,7 +121,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'links', 'lastUpdated', 'note'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -185,7 +193,79 @@ export default {
         return json({ ok: true, id, stage });
       }
 
-      // ── Person / employee terminal API ──────────────────────────────────
+      // ── Toggle a feedback's "implemented" flag (the yes/no slider) ───────
+      if (pathname === '/api/feedback') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const body = await request.json().catch(() => ({}));
+        const id = String(body.id || '').trim(), fbId = String(body.fbId || '');
+        if (!id || !fbId) return json({ error: 'id and fbId are required.' }, 400);
+        const list = await readManual(env);
+        const i = list.findIndex((e) => e.id === id);
+        if (i === -1) return json({ error: 'Only app-stored dashboards can be changed here.' }, 404);
+        const fbs = Array.isArray(list[i].feedbacks) ? list[i].feedbacks : [];
+        const fb = fbs.find((f) => f.id === fbId);
+        if (!fb) return json({ error: 'Feedback not found.' }, 404);
+        fb.implemented = !!body.implemented;
+        await writeManual(env, list);
+        return json({ ok: true, id, fbId, implemented: fb.implemented });
+      }
+
+      // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
+      if (pathname === '/api/file') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') {
+          const id = url.searchParams.get('id');
+          if (!id || !/^[\w-]+$/.test(id)) return new Response('Bad id', { status: 400 });
+          const raw = await env.MANUAL.get('file:' + id);
+          if (!raw) return new Response('Not found', { status: 404 });
+          const f = JSON.parse(raw);
+          const bytes = Uint8Array.from(atob(f.data), (c) => c.charCodeAt(0));
+          return new Response(bytes, { headers: {
+            'content-type': f.type || 'application/octet-stream',
+            'content-disposition': `inline; filename="${(f.name || 'file').replace(/"/g, '')}"`,
+            'cache-control': 'public, max-age=31536000, immutable',
+          } });
+        }
+        if (request.method === 'POST') {
+          if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+          const body = await request.json().catch(() => ({}));
+          const data = String(body.data || ''); // base64 (no data: prefix)
+          if (!data) return json({ error: 'No file data.' }, 400);
+          if (data.length * 0.75 > MAX_FILE_BYTES) return json({ error: 'File too large (max 4 MB).' }, 413);
+          const id = crypto.randomUUID();
+          await env.MANUAL.put('file:' + id, JSON.stringify({ name: String(body.name || 'file'), type: String(body.type || ''), data }));
+          return json({ ok: true, id, name: String(body.name || 'file'), type: String(body.type || ''), url: '/api/file?id=' + id }, 201);
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Client details API ──────────────────────────────────────────────
+      if (pathname === '/api/client') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const clients = await readClients(env);
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          const name = String(body.name || '').trim();
+          if (!name) return json({ error: 'Client name is required.' }, 400);
+          const c = clients[name] || {};
+          for (const f of ['poc', 'emails', 'meetingFreq', 'notes', 'website', 'logo']) if (f in body) c[f] = body[f];
+          clients[name] = c;
+          await writeClients(env, clients);
+          return json({ ok: true, name, client: c }, 201);
+        }
+        if (request.method === 'DELETE') {
+          const name = String(url.searchParams.get('name') || '');
+          delete clients[name];
+          await writeClients(env, clients);
+          return json({ ok: true });
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Person / employee profile + attendance API ──────────────────────
       if (pathname === '/api/person') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
         if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
@@ -195,8 +275,7 @@ export default {
         if (!name) return json({ error: 'name is required.' }, 400);
         const people = await readPeople(env);
         const p = people[name] || { joinDate: '', days: {} };
-        if ('joinDate' in body) p.joinDate = String(body.joinDate || '');
-        if ('role' in body) p.role = String(body.role || '');
+        for (const f of ['joinDate', 'role', 'qualification', 'phone', 'email', 'photo', 'calendarUrl']) if (f in body) p[f] = String(body[f] || '');
         // Mark/clear a single day's attendance: status 'present' | 'leave' | '' (clear)
         if (body.date) {
           const date = String(body.date);
@@ -617,6 +696,97 @@ function renderPage(data, opts) {
   .link-row { display:flex; gap:6px; margin-bottom:6px; }
   .link-row .f_llabel { flex:0 0 42%; min-width:0; }
   .link-row .f_lurl { flex:1; min-width:0; }
+  /* Tabs */
+  .tabs { display:flex; gap:4px; margin-top:14px; }
+  .tab { font:inherit; font-size:13px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 14px; cursor:pointer; }
+  .tab:hover { color:var(--txt); }
+  .tab.on { color:var(--accent); border-bottom-color:var(--accent); }
+  .tabview[hidden] { display:none; }
+  .tabhead { padding:18px 28px 4px; }
+  .tabhead h2 { margin:0; font-size:20px; font-weight:720; }
+  .tabhead .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  /* Profile / client cards */
+  .profile-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; padding:8px 28px 64px; }
+  .profile-card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--shadow); cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
+  .profile-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); border-color:var(--accent); }
+  .profile-card .pc-head { display:flex; align-items:center; gap:11px; }
+  .profile-card .pc-name { font-weight:680; font-size:15px; }
+  .profile-card .pc-role { font-size:12px; color:var(--muted); margin-top:1px; }
+  .profile-card .pc-stats { display:flex; flex-wrap:wrap; gap:10px; margin-top:11px; font-size:12px; color:var(--muted); }
+  .profile-card .pc-stats b { color:var(--txt); }
+  .profile-card .rm { position:absolute; top:10px; right:10px; }
+  .warnpill { color:#b45309; background:#fef3c7; border-radius:999px; padding:1px 8px; font-weight:600; }
+  [data-theme="dark"] .warnpill { color:#fcd34d; background:#2a2410; }
+  .clogo { width:44px; height:44px; border-radius:11px; object-fit:contain; background:#fff; border:1px solid var(--line); flex:none; }
+  .clogo.lg { width:48px; height:48px; }
+  /* Sub-tabs in profile drawer */
+  .subtabs { display:flex; gap:4px; padding:10px 22px 0; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:2; }
+  .subtab { font:inherit; font-size:12.5px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 10px; cursor:pointer; }
+  .subtab.on { color:var(--accent); border-bottom-color:var(--accent); }
+  /* Profile fields */
+  .pf-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:4px 0 12px; }
+  .pf { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .pf.wide { grid-column:1 / -1; }
+  .pf input { font:inherit; font-size:13px; }
+  .pf-actions { display:flex; gap:8px; }
+  /* Detail modal */
+  .modal-detail { width:min(760px,96vw); max-height:92vh; }
+  .dh { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:18px 22px; border-bottom:1px solid var(--line); border-top:4px solid var(--cardc,var(--accent)); border-radius:14px 14px 0 0; }
+  .dh-title { font-size:19px; font-weight:740; letter-spacing:-.01em; }
+  .dh-sub { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
+  .dh-actions { display:flex; gap:7px; align-items:center; flex:none; }
+  .dbody { max-height:calc(92vh - 90px); overflow-y:auto; }
+  .dprog { margin-bottom:16px; }
+  .dprog .prog-track { gap:3px; } .dprog .seg { height:10px; border-radius:3px; background:var(--line2); flex:1; }
+  .dgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:6px; }
+  @media (max-width:560px){ .dgrid { grid-template-columns:repeat(2,1fr); } }
+  .fact { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:9px 11px; }
+  .fact .fl { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
+  .fact .fv { font-size:13.5px; font-weight:600; margin-top:3px; }
+  .dsec { margin-top:16px; }
+  .dsec h4 { margin:0 0 7px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
+  .dnote { font-size:13.5px; color:var(--txt2); white-space:pre-wrap; }
+  .dnote.big { font-size:14.5px; color:var(--txt); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:10px; padding:11px 13px; }
+  .dnote.muted { color:var(--muted); }
+  .dlinks { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin-top:4px; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+  .thumb img { width:84px; height:84px; object-fit:cover; border-radius:9px; border:1px solid var(--line); }
+  /* Feedback view (detail) */
+  .fbv { border:1px solid var(--line); border-radius:11px; padding:11px 13px; margin-bottom:9px; background:var(--surface2); }
+  .fbv-top { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+  .fbv-top b { font-size:13.5px; }
+  .impl { font:inherit; font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px; border:1px solid transparent; cursor:pointer; margin-left:auto; }
+  .impl.yes { color:#15803d; background:#dcfce7; border-color:#86efac; }
+  .impl.no { color:#b42318; background:#fef3f2; border-color:#fda29b; }
+  [data-theme="dark"] .impl.yes { color:#7ef0ac; background:#0f2c1e; border-color:#1f6e46; }
+  [data-theme="dark"] .impl.no { color:#fcafa5; background:#2f1518; border-color:#7c2b30; }
+  .impl[disabled] { cursor:default; opacity:.85; }
+  /* To-do rows */
+  .todo { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-bottom:1px solid var(--line2); }
+  .todo .impl { margin:0; flex:none; width:30px; text-align:center; }
+  .todo-main { flex:1; }
+  .todo-top { font-size:13px; }
+  /* Feedback editor rows (form) */
+  .fb-row { border:1px solid var(--line); border-radius:11px; padding:10px; margin-bottom:9px; background:var(--surface2); }
+  .fb-top { display:flex; gap:8px; align-items:center; margin-bottom:7px; flex-wrap:wrap; }
+  .fb-top .fb-label { flex:1; min-width:120px; }
+  .fb-top .fb-date { width:140px; }
+  .fb-bot { display:flex; gap:8px; margin-top:7px; }
+  .fb-bot .fb-link { flex:1; }
+  .fb-row textarea { width:100%; }
+  /* Toggle switch */
+  .toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:var(--muted); }
+  .toggle input { display:none; }
+  .toggle .track { width:34px; height:19px; border-radius:999px; background:var(--line); position:relative; transition:background .15s; flex:none; }
+  .toggle .track::after { content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff; transition:transform .15s; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+  .toggle input:checked + .track { background:#22c55e; }
+  .toggle input:checked + .track::after { transform:translateX(15px); }
+  /* File chips + thumbnails */
+  .filebox { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .fchip { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; background:var(--line2); border:1px solid var(--line); border-radius:8px; padding:3px 8px; }
+  .fchip .fx { border:0; background:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0 0 0 2px; }
+  .fchip .fx:hover { color:var(--danger); }
+  .card.clickable { cursor:pointer; }
 </style>
 </head>
 <body>
@@ -632,8 +802,6 @@ function renderPage(data, opts) {
     <div class="header-actions">
       <button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button>
       <button class="btn ghost prio-btn" id="prioToggle" title="Show only priority dashboards">⭐ Priority</button>
-      <button class="btn ghost" id="teamToggle">👤 Team</button>
-      <button class="btn ghost" id="clientsToggle">🏢 Clients</button>
       <div class="dropdown">
         <button class="btn ghost" id="exportToggle">⬇ Export ▾</button>
         <div class="menu" id="exportMenu">
@@ -646,8 +814,15 @@ function renderPage(data, opts) {
       ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
     </div>
   </div>
-  <div class="legend" id="legend"></div>
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-tab="overview">📊 Overview</button>
+    <button class="tab" data-tab="team">👤 Team</button>
+    <button class="tab" data-tab="clients">🏢 Clients</button>
+  </nav>
 </header>
+
+<section class="tabview" id="tab-overview">
+<div class="legend" id="legend"></div>
 <div class="kpis" id="kpis"></div>
 <div class="insights" id="insights"></div>
 
@@ -670,10 +845,19 @@ ${opts.manualEnabled ? `
         <div id="linkRows"></div>
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
       </label>
-      <label class="wide">Current status <span class="hint">(supplementary)</span><input id="f_status" placeholder="optional, e.g. needs QA"></label>
-      <label>Client requirements<input id="f_req" placeholder="optional"></label>
+      <label>Due date<input type="date" id="f_due"></label>
+      <label class="wide">Manual status <span class="hint">(handwritten — where it really stands)</span><textarea id="f_manual" rows="2" placeholder="e.g. UI 80% done, waiting on Chiraag's data file"></textarea></label>
+      <label class="wide">Original client requirement <span class="hint">(summary + upload PDF / photo)</span>
+        <input id="f_req" placeholder="short requirement summary">
+        <div class="filebox" id="reqFiles"></div>
+        <button class="btn ghost sm" id="addReqFile" type="button">📎 Upload requirement file</button>
+      </label>
+      <label class="wide">Feedbacks <span class="hint">(one per client call — message/link/file + an "implemented" toggle)</span>
+        <div id="fbRows"></div>
+        <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
+      </label>
       <label>Improvements<input id="f_imp" placeholder="optional"></label>
-      <label>Feedback<input id="f_feedback" placeholder="optional"></label>
+      <label>Current status note<input id="f_status" placeholder="optional, e.g. needs QA"></label>
       <label class="wide">Notes<input id="f_note" placeholder="optional"></label>
       <input type="hidden" id="f_meeting">
     </div>
@@ -703,9 +887,15 @@ ${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial n
   <label style="font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px"><input type="checkbox" id="liveonly"> Live only</label>
 </div>
 <div class="grid" id="grid"></div>
+</section>
+
+<section class="tabview" id="tab-team" hidden></section>
+<section class="tabview" id="tab-clients" hidden></section>
 
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
+<div class="modal-bg" id="detailBg"><div class="modal modal-detail" id="detailModal"></div></div>
+<input type="file" id="filePick" hidden>
 
 <script>
 const DATA = ${payload};
@@ -785,7 +975,7 @@ function card(d, n){
     ? \`<button class="star \${d.priorityLevel?'on':''}" title="\${d.priorityLevel?'Priority '+d.priorityLevel+' — click to clear':'Mark priority 1'}" data-prio="\${esc(d.id)}">\${d.priorityLevel?'★':'☆'}</button>\`
     : '';
   const cardBtns = (star || editable) ? \`<div class="cardbtns">\${star}\${editable?\`<button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button>\`:''}</div>\` : '';
-  return \`<div class="card \${showManualTag?'manual':''} \${d.priorityLevel?'prio':''}" style="--cardc:\${s.color}">
+  return \`<div class="card clickable \${showManualTag?'manual':''} \${d.priorityLevel?'prio':''}" data-card="\${esc(d.id)}" style="--cardc:\${s.color}">
     \${cardBtns}
     <h3>\${prioBadge}\${title}</h3>
     \${progressBar(d)}
@@ -954,7 +1144,7 @@ function bindCards(){
     const res = await api('DELETE', '/api/manual?id='+encodeURIComponent(b.dataset.del));
     if (res.ok) location.reload(); else alert('Delete failed: '+(await res.json()).error);
   });
-  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openEdit(b.dataset.edit));
+  // (edit is handled by the grid click delegation)
   // Click a progress segment → set that stage on the dashboard.
   document.querySelectorAll('[data-setstage]').forEach(b => b.onclick = async (e) => {
     e.stopPropagation();
@@ -994,6 +1184,59 @@ function getLinks(){
     url: r.querySelector('.f_lurl').value.trim(),
   })).filter(l => l.url);
 }
+// ── File upload (PDF / image) → base64 in KV ───────────────────────────────
+function pickFile(){
+  return new Promise((resolve) => { const inp = G('filePick'); inp.value=''; inp.onchange = () => resolve(inp.files[0] || null); inp.click(); });
+}
+function fileToB64(file){ return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(file); }); }
+async function uploadFile(){
+  const file = await pickFile(); if (!file) return null;
+  if (file.size > 4*1024*1024){ alert('File too large (max 4 MB).'); return null; }
+  const data = await fileToB64(file);
+  const res = await api('POST', '/api/file', { name:file.name, type:file.type, data });
+  if (!res.ok){ alert('Upload failed.'); return null; }
+  const j = await res.json(); return { id:j.id, name:j.name, type:j.type, url:j.url };
+}
+function fileChip(f, removable){
+  const img = (f.type||'').startsWith('image/');
+  return \`<span class="fchip"><a href="\${esc(f.url||('/api/file?id='+f.id))}" target="_blank" rel="noopener">\${img?'🖼':'📄'} \${esc(f.name||'file')}</a>\${removable?\`<button type="button" class="fx" data-fx="\${esc(f.id)}">×</button>\`:''}</span>\`;
+}
+
+// Requirement files + feedbacks: edited via in-memory state, saved on submit.
+let reqFilesState = [], fbState = [];
+function renderReqFiles(){
+  const box = G('reqFiles'); box.innerHTML = reqFilesState.map(f => fileChip(f,true)).join('');
+  box.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { reqFilesState = reqFilesState.filter(x => x.id !== b.dataset.fx); renderReqFiles(); });
+}
+function fbRowHtml(f, i){
+  return \`<div class="fb-row">
+    <div class="fb-top"><input class="fb-label" placeholder="Feedback \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
+      <label class="toggle"><input type="checkbox" class="fb-done" \${f.implemented?'checked':''}><span class="track"></span><span class="tlabel">implemented</span></label>
+      <button type="button" class="rm-client fb-rm" title="Remove">×</button></div>
+    <textarea class="fb-text" rows="2" placeholder="what the client said / changes asked">\${esc(f.text||'')}</textarea>
+    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 attach</button></div>
+    <div class="filebox fb-files"></div>
+  </div>\`;
+}
+function syncFbFromDom(){
+  [...G('fbRows').children].forEach((row,i) => { const f = fbState[i]; if(!f) return;
+    f.label = row.querySelector('.fb-label').value; f.date = row.querySelector('.fb-date').value;
+    f.text = row.querySelector('.fb-text').value; f.link = row.querySelector('.fb-link').value;
+    f.implemented = row.querySelector('.fb-done').checked;
+  });
+}
+function renderFbRows(){
+  const box = G('fbRows'); box.innerHTML = fbState.map((f,i) => fbRowHtml(f,i)).join('');
+  [...box.children].forEach((row,i) => {
+    const f = fbState[i];
+    const fb = row.querySelector('.fb-files'); fb.innerHTML = (f.files||[]).map(x => fileChip(x,true)).join('');
+    fb.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { f.files = f.files.filter(x => x.id !== b.dataset.fx); renderFbRows(); });
+    row.querySelector('.fb-rm').onclick = () => { syncFbFromDom(); fbState.splice(i,1); renderFbRows(); };
+    row.querySelector('.fb-file').onclick = async () => { syncFbFromDom(); const up = await uploadFile(); if (up){ fbState[i].files = (fbState[i].files||[]).concat(up); renderFbRows(); } };
+  });
+}
+function getFeedbacks(){ syncFbFromDom(); return fbState.filter(f => f.label || f.text || f.link || (f.files && f.files.length)); }
+
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
@@ -1003,15 +1246,19 @@ function setForm(d){
   G('f_stage').value = d ? d.state : 'not_started';
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
+  G('f_due').value = d ? (d.dueDate || '') : '';
+  G('f_manual').value = d ? (d.manualStatus || '') : '';
   G('f_status').value = d ? d.status : '';
   G('f_req').value = d ? d.requirements : '';
   G('f_imp').value = d ? d.improvement : '';
-  G('f_feedback').value = d ? d.feedback : '';
   G('f_note').value = d ? (d.note || '') : '';
+  reqFilesState = d && Array.isArray(d.requirementFiles) ? d.requirementFiles.slice() : [];
+  fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
+  renderReqFiles(); renderFbRows();
   G('formMsg').textContent = '';
 }
-function openForm(){ G('formModalBg').classList.add('open'); }
-function closeForm(){ G('formModalBg').classList.remove('open'); }
+function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); }
+function closeForm(){ const b = G('formModalBg'); if (b) b.classList.remove('open'); }
 function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; openForm(); G('f_name').focus(); }
 function openEdit(id){
   const d = DATA.dashboards.find(x => x.id === id);
@@ -1034,6 +1281,8 @@ if (CFG.manualEnabled){
     setLinks(cur.concat({ label: nextLabel, url:'' }));
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
+  G('addReqFile').onclick = async () => { const up = await uploadFile(); if (up){ reqFilesState.push(up); renderReqFiles(); } };
+  G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
     const msg = G('formMsg');
@@ -1050,8 +1299,11 @@ if (CFG.manualEnabled){
       status: G('f_status').value,
       requirements: G('f_req').value,
       improvement: G('f_imp').value,
-      feedback: G('f_feedback').value,
       note: G('f_note').value,
+      dueDate: G('f_due').value,
+      manualStatus: G('f_manual').value,
+      requirementFiles: reqFilesState,
+      feedbacks: getFeedbacks(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
     msg.className='msg'; msg.textContent='Saving…';
@@ -1107,38 +1359,83 @@ function statRow(s){
 }
 function sectionsHtml(s, metaFn){
   return STATES.filter(x => s.byState[x.id].length).map(x => {
-    const rows = s.byState[x.id].map(d => \`<div class="drow"><span class="sn">\${d.serial?('#'+d.serial):'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div></div>\`).join('');
+    const rows = s.byState[x.id].map(d => \`<div class="drow clickable" data-open="\${esc(d.id)}"><span class="sn">\${d.priorityLevel?'★':'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div></div>\`).join('');
     return \`<div class="section-t clk" data-states="\${x.id}"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
   }).join('');
 }
-// Wire up clickable stats / section headers (filter the board) and jump-chips.
-function wireDrawer(ctxKey, ctxName){
-  document.getElementById('drawerX').onclick = closeDrawer;
-  const back = document.getElementById('drawerBack'); if (back) back.onclick = () => (ctxKey==='owner'?openTeam():openClients());
-  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ [ctxKey]: ctxName, states: b.dataset.states.split(' ') }));
-  drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
-  drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
+let ownerSub = 'attendance';
+function ownerTodos(name){
+  const out = [];
+  DATA.dashboards.filter(d => d.owner === name).forEach(d => (d.feedbacks||[]).forEach(f => out.push({ d, f })));
+  return out;
 }
-
-function openOwner(name){
-  const s = ownerStats(name);
+function val(id){ const e = document.getElementById(id); return e ? e.value : ''; }
+function employeeProfileHtml(name){
+  const p = personData(name), ed = CFG.manualEnabled;
+  const f = (id,label,v,type) => \`<label class="pf"><span>\${label}</span><input id="\${id}" type="\${type||'text'}" value="\${esc(v||'')}" \${ed?'':'disabled'}></label>\`;
+  return \`<div class="emp"><div class="section-t">Profile</div>
+    <div class="pf-grid">
+      \${f('pf_role','Role at Munshot', p.role)}
+      \${f('pf_qual','Qualification', p.qualification)}
+      \${f('pf_phone','Phone', p.phone, 'tel')}
+      \${f('pf_email','Email', p.email, 'email')}
+      \${f('pf_cal','Google Calendar link', p.calendarUrl)}
+    </div>
+    \${ed?'<button class="btn sm" id="pfSave">Save profile</button>':''}
+    \${p.calendarUrl?\`<a class="lnk" style="margin-top:8px;display:inline-block" href="\${esc(p.calendarUrl)}" target="_blank">🗓 Open calendar</a>\`:''}
+  </div>\`;
+}
+function wireEmployeeProfile(name){
+  const btn = document.getElementById('pfSave'); if (!btn) return;
+  btn.onclick = async () => {
+    const res = await api('POST', '/api/person', { name, role:val('pf_role'), qualification:val('pf_qual'), phone:val('pf_phone'), email:val('pf_email'), calendarUrl:val('pf_cal') });
+    if (res.ok){ DATA.people[name] = (await res.json()).person; btn.textContent = 'Saved ✓'; setTimeout(()=>btn.textContent='Save profile',1500); } else alert('Save failed.');
+  };
+}
+function ownerBodyHtml(name, s){
+  if (ownerSub === 'work'){
+    return statRow(s) + \`<div class="bar">\${stateBar(s.c,s.total)}</div>\`
+      + (s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:'')
+      + sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''));
+  }
+  if (ownerSub === 'todo'){
+    const todos = ownerTodos(name);
+    if (!todos.length) return '<div class="empty">No feedbacks on this person\\'s dashboards yet.</div>';
+    const pending = todos.filter(t=>!t.f.implemented), done = todos.filter(t=>t.f.implemented);
+    const row = t => \`<div class="todo">\${CFG.manualEnabled?\`<button class="impl \${t.f.implemented?'yes':'no'}" data-fbtoggle="\${esc(t.d.id)}" data-fbid="\${esc(t.f.id)}">\${t.f.implemented?'✓':'✗'}</button>\`:\`<span class="impl \${t.f.implemented?'yes':'no'}">\${t.f.implemented?'✓':'✗'}</span>\`}<div class="todo-main"><div class="todo-top"><b>\${esc(t.f.label||'Feedback')}</b> <span class="muted">· \${esc(t.d.name)}</span>\${t.f.date?\`<span class="muted"> · \${esc(t.f.date)}</span>\`:''}</div>\${t.f.text?\`<div class="dnote">\${esc(t.f.text)}</div>\`:''}\${t.f.link?\`<a href="\${esc(t.f.link)}" target="_blank" class="lnk">▶ link</a>\`:''}</div><button class="btn ghost sm" data-open="\${esc(t.d.id)}">open</button></div>\`;
+    return \`<div class="section-t">Pending (\${pending.length})</div>\${pending.map(row).join('')||'<div class="dnote muted">All caught up 🎉</div>'}\${done.length?\`<div class="section-t">Implemented (\${done.length})</div>\${done.map(row).join('')}\`:''}\`;
+  }
+  return employeeProfileHtml(name) + employeeTerminalHtml(name);
+}
+function openOwner(name){ ownerSub = 'attendance'; renderOwner(name); overlay.classList.add('open'); }
+function renderOwner(name){
+  const s = ownerStats(name), p = personData(name);
+  const pending = ownerTodos(name).filter(t=>!t.f.implemented).length;
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="drawerBack">‹ Team view</button>
+      <div><button class="back" id="drawerBack">‹ Team</button>
       <div class="av-head">\${avatar(name,'lg')}<div><h2>\${esc(name)}</h2>
-      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.clients.length} client\${s.clients.length!==1?'s':''}</div></div></div></div>
+      <div class="sub">\${esc(p.role||'Team member')} · \${s.total} dashboard\${s.total!==1?'s':''}</div></div></div></div>
       <button class="x" id="drawerX">×</button>
     </div>
-    <div class="drawer-body">
-      \${statRow(s)}
-      <div class="bar">\${stateBar(s.c,s.total)}</div>
-      \${employeeTerminalHtml(name)}
-      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:''}
-      \${sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
-    </div>\`;
-  overlay.classList.add('open');
-  wireDrawer('owner', name);
-  wireEmployee(name);
+    <nav class="subtabs">
+      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance & profile</button>
+      <button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Work (\${s.total})</button>
+      <button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button>
+    </nav>
+    <div class="drawer-body">\${ownerBodyHtml(name, s)}</div>\`;
+  document.getElementById('drawerX').onclick = closeDrawer;
+  document.getElementById('drawerBack').onclick = () => { closeDrawer(); switchTab('team'); };
+  drawer.querySelectorAll('.subtab').forEach(b => b.onclick = () => { ownerSub = b.dataset.sub; renderOwner(name); });
+  drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
+  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ owner:name, states:b.dataset.states.split(' ') }));
+  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { closeDrawer(); openDetail(b.dataset.open); });
+  drawer.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
+    const d = DATA.dashboards.find(x=>x.id===el.dataset.fbtoggle), f = (d.feedbacks||[]).find(x=>x.id===el.dataset.fbid); if(!f) return;
+    const res = await api('POST','/api/feedback',{ id:el.dataset.fbtoggle, fbId:el.dataset.fbid, implemented:!f.implemented });
+    if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else alert('Failed.');
+  });
+  if (ownerSub === 'attendance'){ wireEmployee(name); wireEmployeeProfile(name); }
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────
@@ -1177,8 +1474,8 @@ function calendarHtml(name){
 function employeeTerminalHtml(name){
   const es = employeeStats(name);
   const editable = CFG.manualEnabled;
-  return \`<div class="emp">
-    <div class="section-t">Employee terminal</div>
+  return \`<div class="emp emp-term">
+    <div class="section-t">Attendance</div>
     <div class="emp-stats">
       <div class="emp-stat"><div class="n">\${es.tenure!==''?es.tenure:'—'}</div><div class="l">days since joining</div></div>
       <div class="emp-stat"><div class="n">\${es.present}</div><div class="l">working days logged</div></div>
@@ -1188,7 +1485,7 @@ function employeeTerminalHtml(name){
     <div class="cal" id="empCal">\${calendarHtml(name)}</div>
   </div>\`;
 }
-function renderEmp(name){ const el = drawer.querySelector('.emp'); if (el){ el.outerHTML = employeeTerminalHtml(name); wireEmployee(name); } }
+function renderEmp(name){ const el = drawer.querySelector('.emp-term'); if (el){ el.outerHTML = employeeTerminalHtml(name); wireEmployee(name); } }
 function wireEmployee(name){
   if (!CFG.manualEnabled) return;
   const save = document.getElementById('empJoinSave');
@@ -1216,65 +1513,173 @@ function wireEmployee(name){
 
 function openClient(name){
   const s = clientStats(name);
+  const det = (DATA.clientDetails && DATA.clientDetails[name]) || {};
+  const ed = CFG.manualEnabled;
+  const logo = det.logo ? \`<img class="clogo lg" src="/api/file?id=\${esc(det.logo)}" alt="">\` : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span>\`;
+  const pf = (id,label,v,ph) => \`<label class="pf"><span>\${label}</span><input id="\${id}" value="\${esc(v||'')}" placeholder="\${ph||''}" \${ed?'':'disabled'}></label>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="drawerBack">‹ Clients view</button>
-      <div class="av-head"><span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span><div><h2>\${esc(name)}</h2>
+      <div><button class="back" id="drawerBack">‹ Clients</button>
+      <div class="av-head">\${logo}<div><h2>\${esc(name)}</h2>
       <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.people.length} on the team</div></div></div></div>
       <button class="x" id="drawerX">×</button>
     </div>
     <div class="drawer-body">
+      <div class="emp"><div class="section-t">Client details</div>
+        <div class="pf-grid">
+          \${pf('cl_poc','Point of contact', det.poc)}
+          \${pf('cl_emails','Emails', Array.isArray(det.emails)?det.emails.join(', '):det.emails, 'comma separated')}
+          \${pf('cl_freq','Meeting frequency', det.meetingFreq, 'e.g. Every Thursday 4pm')}
+          \${pf('cl_web','Website', det.website)}
+          <label class="pf wide"><span>Notes</span><input id="cl_notes" value="\${esc(det.notes||'')}" \${ed?'':'disabled'}></label>
+        </div>
+        \${ed?'<div class="pf-actions"><button class="btn ghost sm" id="clLogo" type="button">🖼 Upload logo</button><button class="btn sm" id="clSave">Save details</button></div>':''}
+      </div>
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
       \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="av-tag owner-link" data-jump-owner="\${esc(o)}">\${avatar(o)}\${esc(o)}</span>\`).join('')}</div>\`:''}
       \${sectionsHtml(s, d => esc(d.owner)+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
-  wireDrawer('customer', name);
-}
-
-function overview(title, sub, items, jumpAttr, statsFn, rosterType){
-  const isOwner = rosterType === 'owner';
-  const cards = items.map(name => {
-    const s = statsFn(name);
-    const rm = CFG.manualEnabled ? \`<button class="rm" data-rm="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\` : '';
-    const mark = isOwner ? avatar(name,'lg') : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)};border-radius:13px">🏢</span>\`;
-    return \`<div class="owner-card" \${jumpAttr}="\${esc(name)}">
-      \${rm}<div class="av-head" style="margin-bottom:4px">\${mark}<div class="on">\${esc(name)}</div></div>
-      <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.inprogress} in progress · \${s.notstarted} not started\${s.live?' · '+s.live+' live':''}</div>
-      <div class="bar" style="margin:8px 0 0">\${stateBar(s.c,s.total)}</div>
-    </div>\`;
-  }).join('');
-  const addRow = (CFG.manualEnabled && rosterType) ? \`<div class="roster-add"><input id="rosterInput" placeholder="Add \${rosterType==='owner'?'team member':'client'} name…"><button class="btn" id="rosterAdd">Add</button></div>\` : '';
-  drawer.innerHTML = \`
-    <div class="drawer-head"><div><h2>\${title}</h2><div class="sub">\${sub}</div></div><button class="x" id="drawerX">×</button></div>
-    <div class="drawer-body">\${addRow}<div class="owner-grid">\${cards}</div></div>\`;
-  overlay.classList.add('open');
   document.getElementById('drawerX').onclick = closeDrawer;
-  drawer.querySelectorAll('[data-jump-owner]').forEach(el => el.onclick = () => openOwner(el.dataset.jumpOwner));
-  drawer.querySelectorAll('[data-jump-customer]').forEach(el => el.onclick = () => openClient(el.dataset.jumpCustomer));
-  if (CFG.manualEnabled && rosterType){
-    document.getElementById('rosterAdd').onclick = async () => {
-      const name = document.getElementById('rosterInput').value.trim();
-      if (!name) return;
-      const res = await api('POST', '/api/roster', { type: rosterType, name });
-      if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+  document.getElementById('drawerBack').onclick = () => { closeDrawer(); switchTab('clients'); };
+  drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
+  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ customer:name, states:b.dataset.states.split(' ') }));
+  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { closeDrawer(); openDetail(b.dataset.open); });
+  if (ed){
+    document.getElementById('clSave').onclick = async () => {
+      const emails = val('cl_emails').split(',').map(x=>x.trim()).filter(Boolean);
+      const res = await api('POST','/api/client',{ name, poc:val('cl_poc'), emails, meetingFreq:val('cl_freq'), website:val('cl_web'), notes:val('cl_notes') });
+      if (res.ok){ DATA.clientDetails[name] = (await res.json()).client; const b=document.getElementById('clSave'); b.textContent='Saved ✓'; setTimeout(()=>b.textContent='Save details',1500); } else alert('Save failed.');
     };
-    drawer.querySelectorAll('[data-rm]').forEach(b => b.onclick = async (e) => {
-      e.stopPropagation();
-      const total = +b.dataset.total;
-      const what = rosterType === 'owner' ? 'team member' : 'client';
-      const warn = total > 0
-        ? \`Delete \${what} "\${b.dataset.rm}"?\\n\\nThey are on \${total} dashboard\${total!==1?'s':''}. \${rosterType==='owner'?'Those dashboards will become Unassigned.':'They will be removed from those dashboards.'}\`
-        : \`Delete \${what} "\${b.dataset.rm}"?\`;
-      if (!confirm(warn)) return;
-      const res = await api('DELETE', \`/api/roster?type=\${rosterType}&name=\${encodeURIComponent(b.dataset.rm)}\`);
-      if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
-    });
+    document.getElementById('clLogo').onclick = async () => {
+      const up = await uploadFile(); if (!up) return;
+      const res = await api('POST','/api/client',{ name, logo:up.id });
+      if (res.ok){ DATA.clientDetails[name] = (await res.json()).client; openClient(name); }
+    };
   }
 }
-function openTeam(){ overview('Team', DATA.owners.length+' people · click anyone for their full track', DATA.owners, 'data-jump-owner', ownerStats, 'owner'); }
-function openClients(){ overview('Clients', DATA.customers.length+' clients · click any to see their dashboards & team', DATA.customers, 'data-jump-customer', clientStats, 'customer'); }
+
+// ── Team & Clients tabs ────────────────────────────────────────────────────
+function rosterDelete(type, name, total){
+  return async (e) => {
+    e.stopPropagation();
+    const what = type === 'owner' ? 'team member' : 'client';
+    const warn = total > 0
+      ? \`Delete \${what} "\${name}"?\\n\\nOn \${total} dashboard\${total!==1?'s':''}. \${type==='owner'?'Those become Unassigned.':'Removed from those dashboards.'}\`
+      : \`Delete \${what} "\${name}"?\`;
+    if (!confirm(warn)) return;
+    const res = await api('DELETE', \`/api/roster?type=\${type}&name=\${encodeURIComponent(name)}\`);
+    if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+  };
+}
+function renderTeamTab(){
+  const el = G('tab-team');
+  const add = CFG.manualEnabled ? \`<div class="roster-add"><input id="memInput" placeholder="New team member name…"><button class="btn" id="memAdd">+ Add member</button></div>\` : '';
+  const cards = DATA.owners.map(name => {
+    const s = ownerStats(name), p = (DATA.people&&DATA.people[name])||{};
+    const pend = ownerTodos(name).filter(t=>!t.f.implemented).length;
+    return \`<div class="profile-card" data-member="\${esc(name)}">
+      \${CFG.manualEnabled?\`<button class="rm" data-rmown="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
+      <div class="pc-head">\${avatar(name,'lg')}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${esc(p.role||'Team member')}</div></div></div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboards</span><span><b>\${s.completed}</b> done</span>\${pend?\`<span class="warnpill">\${pend} to-do</span>\`:''}</div>
+      <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
+    </div>\`;
+  }).join('');
+  el.innerHTML = \`<div class="tabhead"><h2>👤 Team</h2><div class="sub">\${DATA.owners.length} members · open anyone for profile, attendance & to-dos</div></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No team members yet.</div>'}</div>\`;
+  if (CFG.manualEnabled){
+    G('memAdd').onclick = async () => { const n = G('memInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'owner',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
+    el.querySelectorAll('[data-rmown]').forEach(b => b.onclick = rosterDelete('owner', b.dataset.rmown, +b.dataset.total));
+  }
+  el.querySelectorAll('[data-member]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openOwner(c.dataset.member); });
+}
+function renderClientsTab(){
+  const el = G('tab-clients');
+  const add = CFG.manualEnabled ? \`<div class="roster-add"><input id="cliInput" placeholder="New client name…"><button class="btn" id="cliAdd">+ Add client</button></div>\` : '';
+  const cards = DATA.customers.map(name => {
+    const s = clientStats(name), det = (DATA.clientDetails&&DATA.clientDetails[name])||{};
+    const logo = det.logo ? \`<img class="clogo" src="/api/file?id=\${esc(det.logo)}" alt="">\` : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span>\`;
+    return \`<div class="profile-card" data-client="\${esc(name)}">
+      \${CFG.manualEnabled?\`<button class="rm" data-rmcli="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
+      <div class="pc-head">\${logo}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${det.poc?('POC: '+esc(det.poc)):(s.people.length+' on team')}</div></div></div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboards</span><span><b>\${s.completed}</b> done</span>\${det.meetingFreq?\`<span>🗓 \${esc(det.meetingFreq)}</span>\`:''}</div>
+      <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
+    </div>\`;
+  }).join('');
+  el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
+  if (CFG.manualEnabled){
+    G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
+    el.querySelectorAll('[data-rmcli]').forEach(b => b.onclick = rosterDelete('customer', b.dataset.rmcli, +b.dataset.total));
+  }
+  el.querySelectorAll('[data-client]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openClient(c.dataset.client); });
+}
+
+// ── Dashboard detail modal (the rich, click-to-open view) ──────────────────
+const detailBg = G('detailBg'), detailModal = G('detailModal');
+function closeDetail(){ detailBg.classList.remove('open'); }
+detailBg.addEventListener('click', (e) => { if (e.target === detailBg) closeDetail(); });
+function fileGrid(files){
+  return (files||[]).map(f => {
+    const u = f.url || ('/api/file?id='+f.id);
+    return (f.type||'').startsWith('image/')
+      ? \`<a href="\${esc(u)}" target="_blank" rel="noopener" class="thumb"><img src="\${esc(u)}" alt="\${esc(f.name||'')}"></a>\`
+      : \`<a href="\${esc(u)}" target="_blank" rel="noopener" class="fchip">📄 \${esc(f.name||'file')}</a>\`;
+  }).join('');
+}
+function factCell(label, val){ return \`<div class="fact"><div class="fl">\${label}</div><div class="fv">\${val}</div></div>\`; }
+function fbView(did, f, editable){
+  const u = f.link;
+  return \`<div class="fbv">
+    <div class="fbv-top"><b>\${esc(f.label||'Feedback')}</b>\${f.date?\`<span class="muted"> · \${esc(f.date)}</span>\`:''}
+      <button class="impl \${f.implemented?'yes':'no'}" \${editable?\`data-fbtoggle="\${esc(did)}" data-fbid="\${esc(f.id)}"\`:'disabled'}>\${f.implemented?'✓ implemented':'✗ pending'}</button></div>
+    \${f.text?\`<div class="dnote">\${esc(f.text)}</div>\`:''}
+    \${(u||(f.files&&f.files.length))?\`<div class="dlinks">\${u?\`<a href="\${esc(u)}" target="_blank" rel="noopener" class="lnk">▶ recording / message</a>\`:''}\${fileGrid(f.files)}</div>\`:''}
+  </div>\`;
+}
+function openDetail(id){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const s = SMAP[d.state], cur = STATES.findIndex(x => x.id === d.state);
+  const pct = Math.round((cur<=0?0:cur/(STATES.length-1))*100);
+  const editable = d.source==='manual' && CFG.manualEnabled;
+  const links = d.links || [], fbs = d.feedbacks || [];
+  detailModal.innerHTML = \`
+    <div class="dh" style="--cardc:\${s.color}">
+      <div class="dh-main">
+        <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
+        <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
+      </div>
+      <div class="dh-actions">\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+    </div>
+    <div class="modal-body dbody">
+      <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
+      <div class="dgrid">
+        \${factCell('Owner', esc(d.owner))}
+        \${factCell('Client(s)', esc(d.customer))}
+        \${factCell('Due date', d.dueDate?esc(d.dueDate):'—')}
+        \${factCell('Priority', d.priorityLevel?('P'+d.priorityLevel):'—')}
+        \${factCell('Live on Munshot', d.isLive?'Yes':'No')}
+        \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
+      </div>
+      \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
+      \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
+      \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
+      \${links.length?\`<div class="dsec"><h4>Meetings & links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
+      <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
+      \${d.improvement&&d.improvement!=='-'?\`<div class="dsec"><h4>Improvements</h4><div class="dnote">\${esc(d.improvement)}</div></div>\`:''}
+      \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
+    </div>\`;
+  detailBg.classList.add('open');
+  G('dX').onclick = closeDetail;
+  if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
+  const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
+  detailModal.querySelectorAll('[data-owner]').forEach(b => b.onclick = () => { closeDetail(); openOwner(b.dataset.owner); });
+  detailModal.querySelectorAll('[data-customer]').forEach(b => b.onclick = () => { closeDetail(); openClient(b.dataset.customer); });
+  detailModal.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
+    const f = (d.feedbacks||[]).find(x => x.id === el.dataset.fbid); if (!f) return;
+    const res = await api('POST','/api/feedback',{ id, fbId:el.dataset.fbid, implemented:!f.implemented });
+    if (res.ok){ f.implemented = !f.implemented; openDetail(id); } else alert('Failed.');
+  });
+}
 
 // ── Daily status update modal ──────────────────────────────────────────────
 const updModalBg = document.getElementById('updModalBg');
@@ -1333,14 +1738,27 @@ function applyFilter({ owner='', customer='', states=null }){
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-document.getElementById('teamToggle').onclick = openTeam;
-document.getElementById('clientsToggle').onclick = openClients;
-// Click an owner/client chip, or the Update button, on any card
+// ── Tabs (Overview / Team / Clients) ───────────────────────────────────────
+let activeTab = 'overview';
+function switchTab(tab){
+  activeTab = tab;
+  document.querySelectorAll('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  ['overview','team','clients'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  if (tab === 'team') renderTeamTab();
+  if (tab === 'clients') renderClientsTab();
+}
+document.querySelectorAll('#tabs .tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+
+// Click a card → open its detail modal (buttons/chips handled first).
 document.getElementById('grid').addEventListener('click', (e) => {
   const p = e.target.closest('[data-prio]'); if (p){ togglePriority(p.dataset.prio); return; }
   const u = e.target.closest('[data-update]'); if (u){ openUpdate(u.dataset.update, u.dataset.name); return; }
+  const ed = e.target.closest('[data-edit]'); if (ed){ openEdit(ed.dataset.edit); return; }
+  if (e.target.closest('[data-setstage]') || e.target.closest('[data-del]')) return;
   const o = e.target.closest('[data-owner]'); if (o){ openOwner(o.dataset.owner); return; }
-  const c = e.target.closest('[data-customer]'); if (c) openClient(c.dataset.customer);
+  const c = e.target.closest('[data-customer]'); if (c){ openClient(c.dataset.customer); return; }
+  const a = e.target.closest('a'); if (a) return; // let links work
+  const card = e.target.closest('[data-card]'); if (card){ openDetail(card.dataset.card); }
 });
 async function setPriority(id, level){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
@@ -1353,7 +1771,7 @@ function togglePriority(id){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   setPriority(id, d.priorityLevel ? 0 : 1);
 }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUpd(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ closeUpd(); closeDetail(); if (typeof closeForm==='function') closeForm(); } });
 
 // ── Export to Excel (styled, multi-sheet .xlsx via ExcelJS) ────────────────
 function loadScript(src){
@@ -1393,7 +1811,7 @@ function uniqueName(wb, base){
 // Add a styled worksheet. cols: [{header,key,width,wrap}]; stateKey marks the
 // column whose cell should be tinted with the dashboard's state colour.
 function styledSheet(wb, base, cols, rows, stateKey){
-  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1 }] });
+  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1, showGridLines:false }] });
   ws.columns = cols.map(c => ({ header:c.header, key:c.key, width:c.width || 16 }));
   rows.forEach(r => ws.addRow(r));
   const head = ws.getRow(1);
@@ -1466,7 +1884,7 @@ function detailRows(ws, list){
 }
 // Build a detail sheet with per-sheet sequential numbering (1,2,3…).
 function detailSheet(wb, base, list){
-  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1 }] });
+  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1, showGridLines:false }] });
   ws.columns = DETAIL_COLS.map(c => ({ header:c.header, key:c.key, width:c.width }));
   detailRows(ws, list);
   styleExisting(ws, DETAIL_COLS, 'state');
@@ -1606,6 +2024,71 @@ async function saveWb(wb, filename){
   a.href = URL.createObjectURL(blob); a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+// All feedbacks across dashboards — with the implemented status.
+function feedbacksSheet(wb){
+  const cols = [
+    { header:'Dashboard', key:'dash', width:28, wrap:true },
+    { header:'Owner', key:'owner', width:14 },
+    { header:'Client', key:'client', width:20, wrap:true },
+    { header:'Feedback', key:'label', width:18, wrap:true },
+    { header:'Date', key:'date', width:12 },
+    { header:'What the client said', key:'text', width:46, wrap:true },
+    { header:'Link', key:'link', width:26, wrap:true },
+    { header:'Implemented', key:'impl', width:13 },
+  ];
+  const rows = [];
+  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => rows.push({
+    dash:d.name, owner:d.owner, client:d.customer, label:f.label, date:f.date, text:f.text, link:f.link, impl: f.implemented ? 'Yes' : 'No',
+  })));
+  if (!rows.length) return;
+  const ws = styledSheet(wb, 'Feedbacks', cols, rows);
+  // Colour the Implemented cell (col 8) green/red.
+  ws.eachRow((row, rn) => { if (rn===1) return; const c = row.getCell(8);
+    const yes = String(c.value).toLowerCase()==='yes';
+    c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb: yes ? 'FFE7F8EE' : 'FFFDE8E8' } };
+    c.font = { bold:true, color:{ argb: yes ? 'FF15803D' : 'FFB91C1C' } };
+    c.alignment = { horizontal:'center', vertical:'top' };
+  });
+}
+function teamSheet(wb){
+  const cols = [
+    { header:'Team Member', key:'name', width:18, wrap:true },
+    { header:'Role', key:'role', width:18, wrap:true },
+    { header:'Qualification', key:'qual', width:16, wrap:true },
+    { header:'Email', key:'email', width:24 },
+    { header:'Phone', key:'phone', width:14 },
+    { header:'Joined', key:'joined', width:13 },
+    { header:'Dashboards', key:'total', width:12, num:true },
+    { header:'Completed', key:'done', width:11, num:true },
+    { header:'Live', key:'live', width:8, num:true },
+    { header:'Open feedbacks', key:'todo', width:14, num:true },
+  ];
+  const rows = DATA.owners.map(name => {
+    const s = ownerStats(name), p = (DATA.people&&DATA.people[name])||{};
+    const todo = DATA.dashboards.filter(d=>d.owner===name).reduce((n,d)=>n+(d.feedbacks||[]).filter(f=>!f.implemented).length,0);
+    return { name, role:p.role||'', qual:p.qualification||'', email:p.email||'', phone:p.phone||'', joined:p.joinDate||'', total:s.total, done:s.completed, live:s.live, todo };
+  });
+  if (rows.length) styledSheet(wb, 'Team', cols, rows);
+}
+function clientsSheet(wb){
+  const cols = [
+    { header:'Client', key:'name', width:22, wrap:true },
+    { header:'Point of contact', key:'poc', width:18, wrap:true },
+    { header:'Emails', key:'emails', width:28, wrap:true },
+    { header:'Meeting frequency', key:'freq', width:20, wrap:true },
+    { header:'Website', key:'web', width:22, wrap:true },
+    { header:'Dashboards', key:'total', width:12, num:true },
+    { header:'Completed', key:'done', width:11, num:true },
+    { header:'Live', key:'live', width:8, num:true },
+    { header:'Team', key:'people', width:9, num:true },
+  ];
+  const rows = DATA.customers.map(name => {
+    const s = clientStats(name), det = (DATA.clientDetails&&DATA.clientDetails[name])||{};
+    return { name, poc:det.poc||'', emails:Array.isArray(det.emails)?det.emails.join(', '):(det.emails||''), freq:det.meetingFreq||'', web:det.website||'', total:s.total, done:s.completed, live:s.live, people:s.people.length };
+  });
+  if (rows.length) styledSheet(wb, 'Clients', cols, rows);
+}
+
 async function doExport(kind){
   try {
     await loadExcelJS();
@@ -1616,6 +2099,9 @@ async function doExport(kind){
       detailSheet(wb, 'All Dashboards', all);
       ownerSummary(wb);
       clientSummary(wb);
+      feedbacksSheet(wb);
+      teamSheet(wb);
+      clientsSheet(wb);
       DATA.customers.forEach(c => detailSheet(wb, 'Client - '+c, all.filter(d => d.customers.includes(c))));
       DATA.owners.forEach(o => detailSheet(wb, 'Owner - '+o, all.filter(d => d.owner === o)));
       await saveWb(wb, 'dashboard-tracker-all.xlsx');
