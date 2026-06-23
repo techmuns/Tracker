@@ -1,33 +1,38 @@
 // classify.js — turns a messy spreadsheet row into a clean dashboard object
-// with one of 6 work-states. Pure functions: no Worker/Node APIs, so this is
-// runnable + testable anywhere.
+// with one of 7 pipeline STAGES. Pure functions: no Worker/Node APIs, so this
+// is runnable + testable anywhere.
 //
-// ── The 6-state waterfall (most complete → least) ──────────────────────────
-// The COLOR comes from the free-text "Status" column. "Live or Not" is a
-// SEPARATE signal shown as a badge, but it also promotes a finished/empty
-// status to green (a card that's live with no outstanding work).
+// ── The 7-stage pipeline (start → finish) ──────────────────────────────────
+//   not_started      grey    Not started yet / not assigned
+//   ui_ux            violet  UI/UX creation
+//   data_integration blue    Data integration (wiring live data in)
+//   final_check      cyan    Final check / internal QA
+//   feedback_open    amber   Open for feedback (shared with client)
+//   feedback_incorp  orange  Incorporating client feedback
+//   completed        green   Completed
 //
-//   live        green   Live on Munshot, nothing outstanding
-//   done        blue    Work complete on our side, not yet live
-//   review      yellow  Almost done — sanity check / client feedback / QA
-//   in_progress orange  Actively being built, wired, or fixed
-//   blocked     red     Waiting on client, on hold, or unresolved
-//   not_started grey    Not started or not assigned
+// "Live on Munshot" is a SEPARATE flag (a badge), independent of the stage —
+// a dashboard can go live anytime from stage 2 onwards.
 //
-// Tune the keyword lists below to change how Status text maps to a state.
+// New/edited dashboards carry an EXPLICIT stage (picked from a dropdown). For
+// legacy sheet rows that only have free-text status, we map the status text to
+// the closest stage with the keyword lists below.
 
 export const STATES = [
-  { id: 'live',        label: 'Live',              color: '#22c55e', desc: 'Live on Munshot, nothing outstanding' },
-  { id: 'done',        label: 'Done — not live',   color: '#3b82f6', desc: 'Work complete on our side, not yet live' },
-  { id: 'review',      label: 'In Review / QA',    color: '#eab308', desc: 'Almost done — sanity check / client feedback' },
-  { id: 'in_progress', label: 'In Progress',       color: '#f97316', desc: 'Actively being built / wired / fixed' },
-  { id: 'blocked',     label: 'Blocked / On Hold', color: '#ef4444', desc: 'Waiting on client or unresolved' },
-  { id: 'not_started', label: 'Not Started',       color: '#9ca3af', desc: 'Not started or not assigned' },
+  { id: 'not_started',      label: 'Not Started Yet',        color: '#9ca3af', desc: 'Not started yet / not assigned' },
+  { id: 'ui_ux',            label: 'UI/UX Creation',         color: '#8b5cf6', desc: 'Designing the dashboard UI/UX' },
+  { id: 'data_integration', label: 'Data Integration',       color: '#3b82f6', desc: 'Wiring live data into the dashboard' },
+  { id: 'final_check',      label: 'Final Check',            color: '#06b6d4', desc: 'Internal QA / final verification' },
+  { id: 'feedback_open',    label: 'Open for Feedbacks',     color: '#f59e0b', desc: 'Shared with the client, awaiting feedback' },
+  { id: 'feedback_incorp',  label: 'Feedback Incorporation', color: '#f97316', desc: 'Incorporating client feedback' },
+  { id: 'completed',        label: 'Completed',              color: '#22c55e', desc: 'Finished' },
 ];
 
 export const STATE_BY_ID = Object.fromEntries(STATES.map((s) => [s.id, s]));
+const STAGE_IDS = new Set(STATES.map((s) => s.id));
 
-// Keyword buckets, checked in this order — first match wins.
+// Legacy free-text → stage. We reuse the keyword lists that were tuned for the
+// real sheet to derive an old "work-state", then map that to the new stage.
 const KEYWORDS = {
   review: [
     'almost complet', 'almost everything', 'sanity', 'cross verify', 'cross-verify',
@@ -47,9 +52,18 @@ const KEYWORDS = {
   done: [
     'all things fixed', 'all changes done', 'made a agent', 'made an agent',
     'completed and live', 'dashboard is completed', 'done history', 'all good',
-    'dashboard is live', 'dashboard live', 'all done',
+    'dashboard is live', 'dashboard live', 'all done', 'completed',
   ],
   not_started: ['not started', 'not assigned'],
+};
+// Map the legacy work-state to the closest new pipeline stage.
+const LEGACY_TO_STAGE = {
+  live: 'completed',
+  done: 'completed',
+  review: 'final_check',
+  in_progress: 'data_integration',
+  blocked: 'not_started',
+  not_started: 'not_started',
 };
 
 const has = (text, list) => list.some((k) => text.includes(k));
@@ -83,20 +97,28 @@ export function isLiveValue(liveRaw) {
   return t.includes('munshot') || t.includes('live');
 }
 
-// Core: decide the state id for a row.
-export function classify({ status, liveRaw }) {
-  const isLive = isLiveValue(liveRaw);
+// Legacy free-text → old work-state (kept for sheet rows without an explicit stage).
+function legacyState(status) {
   const t = clean(status).toLowerCase();
-
   if (!blank(status)) {
-    if (has(t, KEYWORDS.review))      return { state: 'review',      isLive };
-    if (has(t, KEYWORDS.blocked))     return { state: 'blocked',     isLive };
-    if (has(t, KEYWORDS.in_progress)) return { state: 'in_progress', isLive };
-    if (has(t, KEYWORDS.done))        return { state: isLive ? 'live' : 'done', isLive };
-    if (has(t, KEYWORDS.not_started)) return { state: 'not_started', isLive };
+    if (has(t, KEYWORDS.review))      return 'review';
+    if (has(t, KEYWORDS.blocked))     return 'blocked';
+    if (has(t, KEYWORDS.in_progress)) return 'in_progress';
+    if (has(t, KEYWORDS.done))        return 'done';
+    if (has(t, KEYWORDS.not_started)) return 'not_started';
   }
-  // No decisive keyword: live wins green, otherwise it hasn't started.
-  return { state: isLive ? 'live' : 'not_started', isLive };
+  return null;
+}
+
+// Core: decide the pipeline stage for a row. An explicit `stage` (from the
+// add/edit form) always wins; otherwise we infer it from the status text.
+export function classify({ status, liveRaw, stage }) {
+  const isLive = isLiveValue(liveRaw);
+  if (stage && STAGE_IDS.has(stage)) return { state: stage, isLive };
+  const legacy = legacyState(status);
+  if (legacy) return { state: LEGACY_TO_STAGE[legacy], isLive };
+  // No decisive keyword: a live dashboard is at least integrated; else not started.
+  return { state: isLive ? 'data_integration' : 'not_started', isLive };
 }
 
 const firstUrl = (...vals) => vals.map((v) => String(v ?? '').trim()).find((v) => /^https?:\/\//i.test(v)) || '';
@@ -166,7 +188,7 @@ export function rowToDashboard(cells) {
 // into the same dashboard shape, using the identical color logic.
 export function manualToDashboard(m) {
   const liveRaw = m.liveRaw || (m.isLive ? 'Live on Munshot' : 'Not Live');
-  const { state, isLive } = classify({ status: m.status, liveRaw });
+  const { state, isLive } = classify({ status: m.status, liveRaw, stage: m.stage });
   const url = String(m.meetingUrl ?? '').trim();
   const customers = splitCustomers(m.customer);
   const customerList = customers.length ? customers : ['Unassigned'];
@@ -208,6 +230,7 @@ export function rowsToEntries(rows) {
       customer: d.customer,
       owner: d.owner,
       liveRaw: d.liveRaw,
+      stage: d.state,
       status: d.status,
       requirements: d.requirements,
       improvement: d.improvement,
@@ -255,8 +278,14 @@ export function buildDataset(rows, manual = [], opts = {}) {
     }
   }
 
+  // Priority flag overlay (set of dashboard ids marked as priority).
+  const priority = opts.priority || {};
+  for (const d of dashboards) d.priority = !!priority[d.id];
+
   const counts = Object.fromEntries(STATES.map((s) => [s.id, 0]));
   for (const d of dashboards) counts[d.state]++;
+  const liveCount = dashboards.filter((d) => d.isLive).length;
+  const priorityCount = dashboards.filter((d) => d.priority).length;
 
   // Detect gaps in the serial sequence (e.g. #34 & #36 missing).
   const serials = dashboards.map((d) => d.serial).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
@@ -276,6 +305,8 @@ export function buildDataset(rows, manual = [], opts = {}) {
     sheetCount: sheet.length,
     manualCount: manualCards.length,
     counts,
+    liveCount,
+    priorityCount,
     gaps,
     customers: [...new Set([...dashboards.flatMap((d) => d.customers), ...(roster.customers || [])])].filter(Boolean).sort(),
     owners: [...new Set([...dashboards.map((d) => d.owner), ...(roster.owners || [])])].filter(Boolean).sort(),

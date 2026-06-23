@@ -20,6 +20,7 @@ const KV_ROSTER = 'roster';
 const KV_UPDATES = 'dashboard_updates';
 const KV_PEOPLE = 'people';
 const KV_CONFIG = 'config';
+const KV_PRIORITY = 'priority';
 
 async function kvGet(env, key, fallback) {
   if (!env.MANUAL) return fallback;
@@ -36,10 +37,12 @@ const readPeople = (env) => kvGet(env, KV_PEOPLE, {});
 const writePeople = (env, p) => env.MANUAL.put(KV_PEOPLE, JSON.stringify(p));
 const readConfig = (env) => kvGet(env, KV_CONFIG, {});
 const writeConfig = (env, c) => env.MANUAL.put(KV_CONFIG, JSON.stringify(c));
+const readPriority = (env) => kvGet(env, KV_PRIORITY, {});
+const writePriority = (env, p) => env.MANUAL.put(KV_PRIORITY, JSON.stringify(p));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, config] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env),
+  const [manual, roster, updates, people, config, priority] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env),
   ]);
   // Standalone mode: serve purely from KV, never touch the Google Sheet.
   let rows = [];
@@ -49,7 +52,7 @@ async function getDataset(env) {
     if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
     rows = parseCsv(await res.text());
   }
-  return buildDataset(rows, manual, { roster, updates, people, standalone: !!config.standalone });
+  return buildDataset(rows, manual, { roster, updates, people, priority, standalone: !!config.standalone });
 }
 
 const json = (obj, status = 200) =>
@@ -85,6 +88,7 @@ export default {
             customer: body.customer || '',
             owner: body.owner || '',
             liveRaw: body.liveRaw || (body.isLive ? 'Live on Munshot' : 'Not Live'),
+            stage: body.stage || '',
             status: body.status || '',
             requirements: body.requirements || '',
             improvement: body.improvement || '',
@@ -108,7 +112,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'lastUpdated', 'note'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'lastUpdated', 'note'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -143,6 +147,20 @@ export default {
         await writeManual(env, [...list, ...added]);
         await writeConfig(env, { ...config, standalone: true, importedAt: new Date().toISOString() });
         return json({ ok: true, imported: added.length, standalone: true }, 201);
+      }
+
+      // ── Priority flag API ───────────────────────────────────────────────
+      if (pathname === '/api/priority') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const body = await request.json().catch(() => ({}));
+        const id = String(body.id || '').trim();
+        if (!id) return json({ error: 'id is required.' }, 400);
+        const priority = await readPriority(env);
+        if (body.on) priority[id] = true; else delete priority[id];
+        await writePriority(env, priority);
+        return json({ ok: true, id, on: !!body.on });
       }
 
       // ── Person / employee terminal API ──────────────────────────────────
@@ -469,7 +487,8 @@ function renderPage(data, opts) {
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:18px 28px 4px; }
   .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
   .kpi:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--kc,var(--accent)); }
-  .kpi.off { opacity:.5; }
+  .kpi.off { opacity:.45; }
+  .kpi.on { border-color:var(--kc,var(--accent)); box-shadow:0 0 0 2px color-mix(in srgb, var(--kc,var(--accent)) 35%, transparent), var(--shadow-md); }
   .kpi .ic { position:absolute; right:12px; top:12px; width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-size:17px; background:color-mix(in srgb, var(--kc,var(--accent)) 16%, transparent); }
   .kpi .n { font-size:30px; font-weight:760; line-height:1; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
   .kpi .l { font-size:12px; color:var(--muted); margin-top:5px; font-weight:550; }
@@ -508,6 +527,34 @@ function renderPage(data, opts) {
   .av-head { display:flex; align-items:center; gap:12px; }
   .ctag { font-size:11px; padding:2px 9px; border-radius:999px; white-space:nowrap; cursor:pointer; border:1px solid transparent; font-weight:550; }
   .ctag:hover { filter:brightness(.97); border-color:rgba(0,0,0,.06); }
+  /* Active legend pill + stage number */
+  .pill.on { border-color:var(--accent); background:var(--accent-weak); color:var(--accent); font-weight:600; box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+  .pill.off { opacity:.4; }
+  .pill .stage-no, .tag.state b { display:inline-grid; place-items:center; min-width:15px; height:15px; padding:0 3px; border-radius:5px; background:color-mix(in srgb, var(--accent) 14%, transparent); color:var(--accent); font-size:10px; font-weight:700; }
+  .tag.state b { background:color-mix(in srgb, currentColor 16%, transparent); color:inherit; }
+  /* Priority star + highlighted card */
+  .star { width:22px; height:22px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:#f59e0b; cursor:pointer; line-height:1; font-size:13px; }
+  .star:hover { border-color:#fcd34d; background:#fffbeb; }
+  .star.on { color:#f59e0b; border-color:#fcd34d; background:#fffbeb; }
+  [data-theme="dark"] .star.on, [data-theme="dark"] .star:hover { background:#2a2410; border-color:#5a4a15; }
+  .card.prio { border-color:#fcd34d; box-shadow:0 0 0 1px #fcd34d, var(--shadow); }
+  .card.prio::after { content:"★ PRIORITY"; position:absolute; top:0; right:0; font-size:8.5px; font-weight:800; letter-spacing:.06em; color:#92670b; background:#fef3c7; padding:2px 7px; border-bottom-left-radius:8px; }
+  [data-theme="dark"] .card.prio::after { color:#fcd34d; background:#2a2410; }
+  /* Add/Edit modal form */
+  .modal-form { width:min(680px,95vw); }
+  .modal-form .form-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+  .modal-form .form-grid label.wide { grid-column:1 / -1; }
+  .modal-form .form-grid label { margin:0; }
+  .modal-form .form-grid input, .modal-form .form-grid select { width:100%; margin:0; }
+  .form-grid .hint { color:var(--muted); font-weight:400; font-size:10.5px; }
+  .client-row { display:flex; gap:6px; margin-bottom:6px; }
+  .client-row input { flex:1; }
+  .rm-client { width:34px; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:8px; cursor:pointer; font-size:15px; }
+  .rm-client:hover { color:var(--danger); border-color:var(--danger-line); }
+  #addClientRow { padding:5px 10px; font-size:11.5px; }
+  .modal-form .panel-actions { margin-top:16px; }
+  /* Priority filter button */
+  .btn.prio-btn.on { background:linear-gradient(135deg,#f59e0b,#f97316); box-shadow:0 2px 10px rgba(245,158,11,.35); }
 </style>
 </head>
 <body>
@@ -522,6 +569,7 @@ function renderPage(data, opts) {
     </div>
     <div class="header-actions">
       <button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button>
+      <button class="btn ghost prio-btn" id="prioToggle" title="Show only priority dashboards">⭐ Priority</button>
       <button class="btn ghost" id="teamToggle">👤 Team</button>
       <button class="btn ghost" id="clientsToggle">🏢 Clients</button>
       <div class="dropdown">
@@ -542,27 +590,33 @@ function renderPage(data, opts) {
 <div class="insights" id="insights"></div>
 
 ${opts.manualEnabled ? `
-<div class="panel" id="panel">
-  <div class="panel-title" id="panelTitle">Add dashboard</div>
-  <input type="hidden" id="f_id">
-  <div class="form-grid">
-    <label>Dashboard name *<input id="f_name" placeholder="e.g. Revenue Tracker"></label>
-    <label>Customer<input id="f_customer" list="customers" placeholder="e.g. Beas Capital"></label>
-    <label>Assigned to<input id="f_owner" list="owners" placeholder="e.g. Vipul"></label>
-    <label>Live status<select id="f_live"><option value="Not Live">Not Live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
-    <label>Status (drives the colour)<input id="f_status" placeholder="e.g. Almost completed, needs QA"></label>
-    <label>Meeting link (URL)<input id="f_meeting" placeholder="https://…"></label>
-    <label>Client requirements<input id="f_req" placeholder="optional"></label>
-    <label>Improvements<input id="f_imp" placeholder="optional"></label>
-    <label>Feedback<input id="f_feedback" placeholder="optional"></label>
-    <label>Notes<input id="f_note" placeholder="optional"></label>
+<div class="modal-bg" id="formModalBg"><div class="modal modal-form" id="formModal">
+  <div class="modal-head"><div><h3 id="panelTitle">Add dashboard</h3></div><button class="x" id="formX">×</button></div>
+  <div class="modal-body">
+    <input type="hidden" id="f_id">
+    <div class="form-grid">
+      <label class="wide">Dashboard name *<input id="f_name" placeholder="e.g. Revenue Tracker"></label>
+      <label class="wide">Clients <span class="hint">(add one or more)</span>
+        <div id="clientRows"></div>
+        <button class="btn ghost sm" id="addClientRow" type="button">+ another client</button>
+      </label>
+      <label>Assigned to<input id="f_owner" list="owners" placeholder="e.g. Vipul"></label>
+      <label>Stage<select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
+      <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
+      <label>Meeting link (URL)<input id="f_meeting" placeholder="https://…"></label>
+      <label>Status note<input id="f_status" placeholder="optional, e.g. needs QA"></label>
+      <label>Client requirements<input id="f_req" placeholder="optional"></label>
+      <label>Improvements<input id="f_imp" placeholder="optional"></label>
+      <label>Feedback<input id="f_feedback" placeholder="optional"></label>
+      <label class="wide">Notes<input id="f_note" placeholder="optional"></label>
+    </div>
+    <div class="panel-actions">
+      <button class="btn" id="saveBtn">Save dashboard</button>
+      <button class="btn ghost" id="cancelBtn">Cancel</button>
+      <span class="msg" id="formMsg"></span>
+    </div>
   </div>
-  <div class="panel-actions">
-    <button class="btn" id="saveBtn">Save dashboard</button>
-    <button class="btn ghost" id="cancelBtn">Cancel</button>
-    <span class="msg" id="formMsg"></span>
-  </div>
-</div>
+</div></div>
 <datalist id="customers">${data.customers.map((c) => `<option value="${escapeHtml(c)}">`).join('')}</datalist>
 <datalist id="owners">${data.owners.map((o) => `<option value="${escapeHtml(o)}">`).join('')}</datalist>
 ` : ''}
@@ -591,7 +645,15 @@ const DATA = ${payload};
 const STATES = ${statesJson};
 const CFG = ${cfg};
 const SMAP = Object.fromEntries(STATES.map(s => [s.id, s]));
-const hidden = new Set();
+let stateFilter = new Set();   // active stage filter — empty = show all
+let prioOnly = false;          // show only priority dashboards
+function isolateState(id){
+  if (stateFilter.size === 1 && stateFilter.has(id)) stateFilter.clear();
+  else stateFilter = new Set([id]);
+  prioOnly = false;
+  render();
+}
+function liveOnlyEl(){ return document.getElementById('liveonly'); }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -625,12 +687,11 @@ function clientTag(name){
 
 function renderLegend(){
   const el = document.getElementById('legend');
-  el.innerHTML = STATES.map(s =>
-    \`<span class="pill \${hidden.has(s.id)?'off':''}" data-id="\${s.id}"><span class="dot" style="background:\${s.color}"></span>\${s.label} <span class="n">\${DATA.counts[s.id]||0}</span></span>\`
+  const active = stateFilter.size > 0;
+  el.innerHTML = STATES.map((s,i) =>
+    \`<span class="pill \${stateFilter.has(s.id)?'on':(active?'off':'')}" data-id="\${s.id}"><span class="dot" style="background:\${s.color}"></span><span class="stage-no">\${i+1}</span> \${s.label} <span class="n">\${DATA.counts[s.id]||0}</span></span>\`
   ).join('');
-  el.querySelectorAll('.pill').forEach(p => p.onclick = () => {
-    const id = p.dataset.id; hidden.has(id) ? hidden.delete(id) : hidden.add(id); render();
-  });
+  el.querySelectorAll('.pill').forEach(p => p.onclick = () => isolateState(p.dataset.id));
 }
 
 function card(d){
@@ -641,12 +702,14 @@ function card(d){
   const title = d.serial ? '#'+d.serial+' · '+esc(d.name) : esc(d.name);
   const editable = d.source==='manual' && CFG.manualEnabled;
   const showManualTag = d.source==='manual' && !CFG.standalone; // once standalone, every card is "manual" — no point flagging it
-  const cardBtns = editable ? \`<div class="cardbtns"><button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button></div>\` : '';
-  return \`<div class="card \${showManualTag?'manual':''}" style="--cardc:\${s.color}">
+  const star = CFG.manualEnabled ? \`<button class="star \${d.priority?'on':''}" title="\${d.priority?'Remove priority':'Mark as priority'}" data-prio="\${esc(d.id)}">\${d.priority?'★':'☆'}</button>\` : (d.priority?'<span class="star on" style="cursor:default">★</span>':'');
+  const cardBtns = (star || editable) ? \`<div class="cardbtns">\${star}\${editable?\`<button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button>\`:''}</div>\` : '';
+  const stageNo = STATES.findIndex(x => x.id === d.state) + 1;
+  return \`<div class="card \${showManualTag?'manual':''} \${d.priority?'prio':''}" style="--cardc:\${s.color}">
     \${cardBtns}
     <h3>\${title}</h3>
     <div class="meta">
-      <span class="tag state" style="color:\${s.color};background:color-mix(in srgb, \${s.color} 13%, transparent);border-color:color-mix(in srgb, \${s.color} 28%, transparent)">\${s.label}</span>
+      <span class="tag state" style="color:\${s.color};background:color-mix(in srgb, \${s.color} 13%, transparent);border-color:color-mix(in srgb, \${s.color} 28%, transparent)">\${stageNo?'<b>'+stageNo+'</b> ':''}\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
       \${d.customers.map(c => clientTag(c)).join('')}
       \${ownerTag(d.owner)}
@@ -663,7 +726,7 @@ function card(d){
 }
 
 // ── KPI hero ───────────────────────────────────────────────────────────────
-const KPI_ICONS = { live:'🚀', done:'✅', review:'🔍', in_progress:'⚙️', blocked:'⛔', not_started:'⏳' };
+const KPI_ICONS = { not_started:'⏳', ui_ux:'🎨', data_integration:'🔌', final_check:'🔎', feedback_open:'💬', feedback_incorp:'🔧', completed:'✅' };
 let kpiAnimated = false;
 function animateCounts(el){
   el.querySelectorAll('[data-count]').forEach(n => {
@@ -674,18 +737,31 @@ function animateCounts(el){
   });
   kpiAnimated = true;
 }
+function clearAllFilters(){
+  stateFilter.clear(); prioOnly = false;
+  ['q','customer','owner'].forEach(id => document.getElementById(id).value = '');
+  liveOnlyEl().checked = false;
+}
 function renderKpis(){
   const el = document.getElementById('kpis'); if (!el) return;
-  const tiles = [{ id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊' }]
-    .concat(STATES.map(s => ({ id:s.id, label:s.label, n:DATA.counts[s.id]||0, color:s.color, icon:KPI_ICONS[s.id]||'•' })));
-  el.innerHTML = tiles.map(t => \`<div class="kpi \${t.id!=='__all'&&hidden.has(t.id)?'off':''}" data-kpi="\${t.id}" style="--kc:\${t.color}">
+  const liveOn = liveOnlyEl() ? liveOnlyEl().checked : false;
+  const anyFilter = stateFilter.size > 0 || prioOnly || liveOn;
+  const tiles = [{ id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter }]
+    .concat(STATES.map(s => ({ id:s.id, label:s.label, n:DATA.counts[s.id]||0, color:s.color, icon:KPI_ICONS[s.id]||'•', on:stateFilter.has(s.id) })))
+    .concat([
+      { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
+      { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
+    ]);
+  el.innerHTML = tiles.map(t => \`<div class="kpi \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
       <div class="ic">\${t.icon}</div><div class="n" data-count="\${t.n}">0</div><div class="l">\${esc(t.label)}</div><div class="spark"></div>
     </div>\`).join('');
   el.querySelectorAll('[data-kpi]').forEach(k => k.onclick = () => {
     const id = k.dataset.kpi;
-    if (id === '__all'){ hidden.clear(); document.getElementById('q').value=''; document.getElementById('customer').value=''; document.getElementById('owner').value=''; document.getElementById('liveonly').checked=false; }
-    else { hidden.has(id) ? hidden.delete(id) : hidden.add(id); }
-    renderLegend(); render();
+    if (id === '__all'){ clearAllFilters(); }
+    else if (id === '__live'){ const on = !liveOnlyEl().checked; clearAllFilters(); liveOnlyEl().checked = on; }
+    else if (id === '__prio'){ const on = !prioOnly; clearAllFilters(); prioOnly = on; }
+    else { isolateState(id); return; }
+    render();
   });
   animateCounts(el);
 }
@@ -724,14 +800,15 @@ function renderInsights(){
   el.innerHTML = \`<button class="ins-toggle" id="insToggle">📊 Insights \${insightsOpen?'▾':'▸'}</button>\${body}\`;
   document.getElementById('insToggle').onclick = () => { insightsOpen = !insightsOpen; renderInsights(); };
   if (insightsOpen){
-    el.querySelectorAll('[data-leg]').forEach(li => li.onclick = () => { const id = li.dataset.leg; hidden.has(id)?hidden.delete(id):hidden.add(id); renderLegend(); render(); });
+    el.querySelectorAll('[data-leg]').forEach(li => li.onclick = () => { isolateState(li.dataset.leg); window.scrollTo({top:0,behavior:'smooth'}); });
     el.querySelectorAll('[data-bc-owner]').forEach(b => b.onclick = () => openOwner(b.getAttribute('data-bc-owner')));
     el.querySelectorAll('[data-bc-customer]').forEach(b => b.onclick = () => openClient(b.getAttribute('data-bc-customer')));
   }
 }
 
 function render(){
-  renderKpis();
+  renderKpis(); renderLegend();
+  { const b = document.getElementById('prioToggle'); if (b) b.classList.toggle('on', prioOnly); }
   const q = document.getElementById('q').value.trim().toLowerCase();
   const cust = document.getElementById('customer').value;
   const own = document.getElementById('owner').value;
@@ -739,7 +816,8 @@ function render(){
   const liveonly = document.getElementById('liveonly').checked;
 
   let list = DATA.dashboards.filter(d => {
-    if (hidden.has(d.state)) return false;
+    if (stateFilter.size && !stateFilter.has(d.state)) return false;
+    if (prioOnly && !d.priority) return false;
     if (cust && !d.customers.includes(cust)) return false;
     if (own && d.owner !== own) return false;
     if (liveonly && !d.isLive) return false;
@@ -749,6 +827,8 @@ function render(){
     }
     return true;
   });
+  // Priority dashboards float to the top (stable within the rest).
+  list = list.slice().sort((a,b) => (b.priority?1:0) - (a.priority?1:0));
 
   const grid = document.getElementById('grid');
   if (!list.length){ grid.innerHTML = '<div class="empty">No dashboards match these filters.</div>'; bindDelete(); return; }
@@ -793,11 +873,20 @@ function bindCardButtons(){
 const bindDelete = bindCardButtons; // back-compat for render()
 
 const G = (id) => document.getElementById(id);
+function clientRowHtml(val){ return \`<div class="client-row"><input class="f_client" list="customers" placeholder="e.g. Beas Capital" value="\${esc(val||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`; }
+function setClients(arr){
+  const box = G('clientRows');
+  const list = (arr && arr.length) ? arr : [''];
+  box.innerHTML = list.map(clientRowHtml).join('');
+  box.querySelectorAll('.rm-client').forEach(b => b.onclick = () => { if (box.children.length > 1) b.parentElement.remove(); else b.previousElementSibling.value=''; });
+}
+function getClients(){ return [...G('clientRows').querySelectorAll('.f_client')].map(i => i.value.trim()).filter(Boolean); }
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
-  G('f_customer').value = d ? d.customer : '';
+  setClients(d ? (d.customers || []) : []);
   G('f_owner').value = d ? d.owner : '';
+  G('f_stage').value = d ? d.state : 'not_started';
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_status').value = d ? d.status : '';
   G('f_meeting').value = d ? (d.meetingUrl || '') : '';
@@ -807,7 +896,9 @@ function setForm(d){
   G('f_note').value = d ? (d.note || '') : '';
   G('formMsg').textContent = '';
 }
-function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; G('panel').classList.add('open'); window.scrollTo({top:0,behavior:'smooth'}); }
+function openForm(){ G('formModalBg').classList.add('open'); }
+function closeForm(){ G('formModalBg').classList.remove('open'); }
+function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; openForm(); G('f_name').focus(); }
 function openEdit(id){
   const d = DATA.dashboards.find(x => x.id === id);
   if (!d) return;
@@ -815,21 +906,23 @@ function openEdit(id){
   setForm(d);
   G('panelTitle').textContent = 'Edit · ' + (d.serial ? '#'+d.serial+' ' : '') + d.name;
   G('saveBtn').textContent = 'Save changes';
-  G('panel').classList.add('open');
-  window.scrollTo({top:0,behavior:'smooth'});
+  openForm();
 }
 
 if (CFG.manualEnabled){
-  const panel = G('panel');
-  G('addToggle').onclick = () => { if (panel.classList.contains('open')) panel.classList.remove('open'); else openAdd(); };
-  G('cancelBtn').onclick = () => panel.classList.remove('open');
+  G('addToggle').onclick = openAdd;
+  G('cancelBtn').onclick = closeForm;
+  G('formX').onclick = closeForm;
+  G('addClientRow').onclick = () => { setClients(getClients().concat('')); G('clientRows').lastElementChild.querySelector('.f_client').focus(); };
+  G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
     const msg = G('formMsg');
     const id = G('f_id').value;
     const body = {
       name: G('f_name').value,
-      customer: G('f_customer').value,
+      customer: getClients().join(' & '),
       owner: G('f_owner').value,
+      stage: G('f_stage').value,
       liveRaw: G('f_live').value,
       status: G('f_status').value,
       meetingUrl: G('f_meeting').value,
@@ -863,15 +956,17 @@ overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDrawer
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
 // Roll up a list of dashboards into the headline buckets used everywhere.
+const MID_STAGES = ['ui_ux','data_integration','final_check','feedback_open','feedback_incorp'];
 function rollup(list){
   const byState = Object.fromEntries(STATES.map(s => [s.id, list.filter(d => d.state === s.id)]));
   const c = Object.fromEntries(STATES.map(s => [s.id, byState[s.id].length]));
   return {
     list, byState, c, total: list.length,
-    completed: c.live + c.done,        // shipped or finished our side
-    active: c.review + c.in_progress,  // in flight
-    pending: c.not_started,            // not started yet
-    blocked: c.blocked,                // stuck / on hold
+    completed: c.completed,                                  // finished
+    inprogress: MID_STAGES.reduce((n,k) => n + c[k], 0),     // stages 2–6
+    notstarted: c.not_started,                               // not started yet
+    live: list.filter(d => d.isLive).length,                 // live flag
+    priority: list.filter(d => d.priority).length,
   };
 }
 function ownerStats(name){ const s = rollup(DATA.dashboards.filter(d => d.owner === name)); s.clients = [...new Set(s.list.flatMap(d => d.customers))].sort(); return s; }
@@ -882,7 +977,7 @@ function statCard(num, lbl, color, states){
   return \`<div class="stat" \${num?\`data-states="\${states}"\`:''}><div class="num" style="color:\${num?color:'var(--muted)'}">\${num}</div><div class="lbl">\${lbl}</div></div>\`;
 }
 function statRow(s){
-  return \`<div class="stat-row">\${statCard(s.completed,'Completed','#16a34a','live done')}\${statCard(s.active,'Active','#f97316','review in_progress')}\${statCard(s.pending,'Pending','#9ca3af','not_started')}\${statCard(s.blocked,'Blocked','#ef4444','blocked')}</div>\`;
+  return \`<div class="stat-row">\${statCard(s.completed,'Completed','#22c55e','completed')}\${statCard(s.inprogress,'In progress','#f97316',MID_STAGES.join(' '))}\${statCard(s.notstarted,'Not started','#9ca3af','not_started')}\${statCard(s.live,'Live','#16a34a','__live')}</div>\`;
 }
 function sectionsHtml(s, metaFn){
   return STATES.filter(x => s.byState[x.id].length).map(x => {
@@ -1020,7 +1115,7 @@ function overview(title, sub, items, jumpAttr, statsFn, rosterType){
     const mark = isOwner ? avatar(name,'lg') : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)};border-radius:13px">🏢</span>\`;
     return \`<div class="owner-card" \${jumpAttr}="\${esc(name)}">
       \${rm}<div class="av-head" style="margin-bottom:4px">\${mark}<div class="on">\${esc(name)}</div></div>
-      <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.active} active · \${s.pending} pending\${s.blocked?' · '+s.blocked+' blocked':''}</div>
+      <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.inprogress} in progress · \${s.notstarted} not started\${s.live?' · '+s.live+' live':''}</div>
       <div class="bar" style="margin:8px 0 0">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
@@ -1056,7 +1151,7 @@ const updModal = document.getElementById('updModal');
 function closeUpd(){ updModalBg.classList.remove('open'); }
 updModalBg.addEventListener('click', (e) => { if (e.target === updModalBg) closeUpd(); });
 function openUpdate(id, name){
-  const d = DATA.dashboards.find(x => x.id === id) || { updates: [], state: 'in_progress', name };
+  const d = DATA.dashboards.find(x => x.id === id) || { updates: [], state: 'not_started', name };
   const log = d.updates || [];
   const opts = STATES.map(x => \`<option value="\${x.id}">\${x.label}</option>\`).join('');
   const tl = log.slice().reverse().map(e => {
@@ -1073,7 +1168,7 @@ function openUpdate(id, name){
       <button class="btn" id="u_save">Post update</button>
       <div class="timeline"><div class="label" style="margin-bottom:6px">History (\${log.length})</div>\${tl}</div>
     </div>\`;
-  document.getElementById('u_state').value = d.state || 'in_progress';
+  document.getElementById('u_state').value = d.state || 'not_started';
   updModalBg.classList.add('open');
   document.getElementById('updX').onclick = closeUpd;
   document.getElementById('u_save').onclick = async () => {
@@ -1095,10 +1190,15 @@ function applyFilter({ owner='', customer='', states=null }){
   document.getElementById('owner').value = owner;
   document.getElementById('customer').value = customer;
   document.getElementById('q').value = '';
-  document.getElementById('liveonly').checked = false;
-  hidden.clear();
-  if (states) STATES.forEach(s => { if (!states.includes(s.id)) hidden.add(s.id); });
-  renderLegend(); render();
+  prioOnly = false;
+  stateFilter = new Set();
+  let live = false;
+  if (states){
+    live = states.includes('__live');
+    stateFilter = new Set(states.filter(x => x !== '__live'));
+  }
+  document.getElementById('liveonly').checked = live;
+  render();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -1106,10 +1206,18 @@ document.getElementById('teamToggle').onclick = openTeam;
 document.getElementById('clientsToggle').onclick = openClients;
 // Click an owner/client chip, or the Update button, on any card
 document.getElementById('grid').addEventListener('click', (e) => {
+  const p = e.target.closest('[data-prio]'); if (p){ togglePriority(p.dataset.prio); return; }
   const u = e.target.closest('[data-update]'); if (u){ openUpdate(u.dataset.update, u.dataset.name); return; }
   const o = e.target.closest('[data-owner]'); if (o){ openOwner(o.dataset.owner); return; }
   const c = e.target.closest('[data-customer]'); if (c) openClient(c.dataset.customer);
 });
+async function togglePriority(id){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const on = !d.priority;
+  const res = await api('POST', '/api/priority', { id, on });
+  if (res.ok){ d.priority = on; DATA.priorityCount = DATA.dashboards.filter(x => x.priority).length; render(); }
+  else alert('Could not update priority (need edit access?).');
+}
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUpd(); });
 
 // ── Export to Excel (styled, multi-sheet .xlsx via ExcelJS) ────────────────
@@ -1129,9 +1237,9 @@ async function loadExcelJS(){
   for (const url of cdns){ try { await loadScript(url); if (window.ExcelJS) return; } catch(e){} }
   throw new Error('Could not load the Excel library (network blocked?).');
 }
-const ARGB = { live:'FF22C55E', done:'FF3B82F6', review:'FFEAB308', in_progress:'FFF97316', blocked:'FFEF4444', not_started:'FF9CA3AF' };
-const ARGB_SOFT = { live:'FFE7F8EE', done:'FFE8F0FE', review:'FFFEF7E0', in_progress:'FFFDEEE3', blocked:'FFFDE8E8', not_started:'FFF0F1F4' };
-const ARGB_TEXT = { live:'FF15803D', done:'FF1D4ED8', review:'FF92670B', in_progress:'FFC2410C', blocked:'FFB91C1C', not_started:'FF4B5563' };
+const ARGB = { not_started:'FF9CA3AF', ui_ux:'FF8B5CF6', data_integration:'FF3B82F6', final_check:'FF06B6D4', feedback_open:'FFF59E0B', feedback_incorp:'FFF97316', completed:'FF22C55E' };
+const ARGB_SOFT = { not_started:'FFF0F1F4', ui_ux:'FFF1ECFE', data_integration:'FFE8F0FE', final_check:'FFE3F8FB', feedback_open:'FFFEF3DC', feedback_incorp:'FFFDEEE3', completed:'FFE7F8EE' };
+const ARGB_TEXT = { not_started:'FF4B5563', ui_ux:'FF6D28D9', data_integration:'FF1D4ED8', final_check:'FF0E7490', feedback_open:'FFB45309', feedback_incorp:'FFC2410C', completed:'FF15803D' };
 const THIN = { style:'thin', color:{ argb:'FFE2E6EE' } };
 const BORDER = { top:THIN, left:THIN, bottom:THIN, right:THIN };
 function applyDataBar(ws, col, n, argb){
@@ -1185,8 +1293,9 @@ const DETAIL_COLS = [
   { header:'Dashboard', key:'name', width:30, wrap:true },
   { header:'Customer', key:'customer', width:22, wrap:true },
   { header:'Assigned To', key:'owner', width:14 },
-  { header:'State', key:'state', width:15 },
+  { header:'Stage', key:'state', width:18 },
   { header:'Live', key:'live', width:14 },
+  { header:'Priority', key:'prio', width:9 },
   { header:'Status', key:'status', width:34, wrap:true },
   { header:'Client Requirements', key:'req', width:26, wrap:true },
   { header:'Improvements', key:'imp', width:26, wrap:true },
@@ -1205,8 +1314,9 @@ function detailRows(ws, list){
       name: d.name,
       customer: d.customer,
       owner: d.owner,
-      state: SMAP[d.state].label,
+      state: (STATES.findIndex(x => x.id === d.state)+1) + '. ' + SMAP[d.state].label,
       live: d.isLive ? 'Live on Munshot' : 'No',
+      prio: d.priority ? '★ Yes' : '',
       status: d.status,
       req: d.requirements,
       imp: d.improvement,
@@ -1260,36 +1370,31 @@ const SUMMARY_COLS = (firstHeader, firstKey, lastHeader, lastKey) => [
   { header:firstHeader, key:firstKey, width:22, wrap:true },
   { header:'Total', key:'total', width:8, num:true },
   { header:'Completed', key:'completed', width:11, num:true },
-  { header:'Active', key:'active', width:9, num:true },
-  { header:'Pending', key:'pending', width:9, num:true },
-  { header:'Blocked', key:'blocked', width:9, num:true },
-  { header:'Live', key:'live', width:7, num:true },
-  { header:'Done', key:'done', width:7, num:true },
-  { header:'In Review', key:'review', width:10, num:true },
-  { header:'In Progress', key:'inprog', width:11, num:true },
+  { header:'In Progress', key:'inprogress', width:11, num:true },
   { header:'Not Started', key:'notstarted', width:11, num:true },
+  { header:'Live', key:'live', width:7, num:true },
+  ...STATES.map(s => ({ header:s.label, key:'st_'+s.id, width:13, num:true, wrap:true })),
   { header:lastHeader, key:lastKey, width:9, num:true },
 ];
-// Data bars on the count columns: B Total, C Completed, D Active, F Blocked.
+function summaryRow(name, s, lastVal){
+  const row = { name, total:s.total, completed:s.completed, inprogress:s.inprogress, notstarted:s.notstarted, live:s.live, last:lastVal };
+  STATES.forEach(x => { row['st_'+x.id] = s.c[x.id]; });
+  return row;
+}
+// Data bars: B Total, C Completed, D In Progress, F Live.
 function summaryDataBars(ws, n){
   applyDataBar(ws, 'B', n, 'FF4F46E5');
   applyDataBar(ws, 'C', n, 'FF22C55E');
   applyDataBar(ws, 'D', n, 'FFF97316');
-  applyDataBar(ws, 'F', n, 'FFEF4444');
+  applyDataBar(ws, 'F', n, 'FF06B6D4');
 }
 function ownerSummary(wb){
-  const rows = DATA.owners.map(o => { const s = ownerStats(o); return {
-    name:o, total:s.total, completed:s.completed, active:s.active, pending:s.pending, blocked:s.blocked,
-    live:s.c.live, done:s.c.done, review:s.c.review, inprog:s.c.in_progress, notstarted:s.c.not_started, last:s.clients.length };
-  });
+  const rows = DATA.owners.map(o => { const s = ownerStats(o); return summaryRow(o, s, s.clients.length); });
   const ws = styledSheet(wb, 'Owner Summary', SUMMARY_COLS('Owner','name','Clients','last'), rows);
   summaryDataBars(ws, rows.length);
 }
 function clientSummary(wb){
-  const rows = DATA.customers.map(c => { const s = clientStats(c); return {
-    name:c, total:s.total, completed:s.completed, active:s.active, pending:s.pending, blocked:s.blocked,
-    live:s.c.live, done:s.c.done, review:s.c.review, inprog:s.c.in_progress, notstarted:s.c.not_started, last:s.people.length };
-  });
+  const rows = DATA.customers.map(c => { const s = clientStats(c); return summaryRow(c, s, s.people.length); });
   const ws = styledSheet(wb, 'Client Summary', SUMMARY_COLS('Client','name','People','last'), rows);
   summaryDataBars(ws, rows.length);
 }
@@ -1307,12 +1412,13 @@ function coverSheet(wb){
   ws.mergeCells('B3:F3'); set('B3', 'Status report · generated ' + new Date().toLocaleString('en-GB', { hour12:false }) + (CFG.standalone ? '  ·  standalone' : ''), { size:11, color:{ argb:'FF6B7280' } });
 
   // KPI band (B5:F6) — big number + label, each a coloured tile.
+  const inProgress = MID_STAGES.reduce((n,k) => n + (DATA.counts[k]||0), 0);
   const kpis = [
     ['Total', DATA.total, 'FF4F46E5'],
-    ['Live', DATA.counts.live||0, 'FF22C55E'],
-    ['Completed', (DATA.counts.live||0)+(DATA.counts.done||0), 'FF3B82F6'],
-    ['In Progress', DATA.counts.in_progress||0, 'FFF97316'],
-    ['Blocked', DATA.counts.blocked||0, 'FFEF4444'],
+    ['Live', DATA.liveCount||0, 'FF16A34A'],
+    ['Completed', DATA.counts.completed||0, 'FF22C55E'],
+    ['In Progress', inProgress, 'FFF97316'],
+    ['Not Started', DATA.counts.not_started||0, 'FF9CA3AF'],
   ];
   ws.getRow(5).height = 30;
   kpis.forEach(([label, val, argb], i) => {
@@ -1400,7 +1506,11 @@ document.getElementById('themeToggle').onclick = () => {
   const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
   localStorage.setItem('theme', next); applyTheme(next);
 };
-renderLegend();
+document.getElementById('prioToggle').onclick = () => {
+  prioOnly = !prioOnly;
+  if (prioOnly){ stateFilter.clear(); liveOnlyEl().checked = false; }
+  render();
+};
 renderInsights();
 render();
 </script>
