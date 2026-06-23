@@ -123,6 +123,31 @@ export function classify({ status, liveRaw, stage }) {
 
 const firstUrl = (...vals) => vals.map((v) => String(v ?? '').trim()).find((v) => /^https?:\/\//i.test(v)) || '';
 
+// Normalize a dashboard's links into [{label, url}]. Accepts a modern array of
+// {label,url}, and falls back to a single legacy meetingUrl as the first link.
+export function normalizeLinks(links, legacyUrl, legacyLabel = 'First client meeting') {
+  const out = [];
+  if (Array.isArray(links)) {
+    for (const l of links) {
+      const url = String((l && l.url) ?? '').trim();
+      if (!/^https?:\/\//i.test(url)) continue;
+      out.push({ label: clean((l && l.label) || '') || 'Link', url });
+    }
+  }
+  if (!out.length) {
+    const u = String(legacyUrl ?? '').trim();
+    if (/^https?:\/\//i.test(u)) out.push({ label: legacyLabel, url: u });
+  }
+  return out;
+}
+
+// Progress 0..1 along the 7-stage pipeline (stage 1 = 0%, stage 7 = 100%).
+export function progressOf(stateId) {
+  const i = STATES.findIndex((s) => s.id === stateId);
+  if (i < 0) return 0;
+  return STATES.length > 1 ? i / (STATES.length - 1) : 0;
+}
+
 // Canonical customer names — collapse obvious duplicates so counts/grouping are
 // correct. Add aliases here as the sheet grows. (Keys matched case-insensitively.)
 const CUSTOMER_ALIASES = {
@@ -179,6 +204,7 @@ export function rowToDashboard(cells) {
     state,
     meetingUrl,
     meetingNote,
+    links: normalizeLinks(null, meetingUrl, meetingNote || 'Recording / link'),
     lastUpdated: clean(lastUpdated),
     note: !blank(extra) && !/^https?:\/\//i.test(String(extra).trim()) ? clean(extra) : '',
   };
@@ -208,7 +234,8 @@ export function manualToDashboard(m) {
     feedback: clean(m.feedback),
     status: clean(m.status),
     state,
-    meetingUrl: /^https?:\/\//i.test(url) ? url : '',
+    links: normalizeLinks(m.links, url),
+    meetingUrl: (normalizeLinks(m.links, url)[0] || {}).url || '',
     meetingNote: '',
     lastUpdated: clean(m.lastUpdated),
     note: clean(m.note),
@@ -236,6 +263,7 @@ export function rowsToEntries(rows) {
       improvement: d.improvement,
       feedback: d.feedback,
       meetingUrl: d.meetingUrl,
+      links: d.links,
       lastUpdated: d.lastUpdated,
       note: d.note || d.meetingNote || '',
     });
@@ -265,22 +293,31 @@ export function buildDataset(rows, manual = [], opts = {}) {
     return as - bs;
   });
 
-  // Apply the daily-update history: the latest update wins for state + note.
+  // Daily-update history. For app-stored entries the stage lives on the entry
+  // itself (canonical); for read-only SHEET rows the latest update's stage can
+  // override it (so you can advance a sheet card without touching the sheet).
+  // The latest update always supplies the display note + date.
   const updates = opts.updates || {};
   for (const d of dashboards) {
     const log = Array.isArray(updates[d.id]) ? updates[d.id] : [];
     d.updates = log;
     if (log.length) {
       const latest = log[log.length - 1];
-      if (latest.state && STATE_IDS.has(latest.state)) d.state = latest.state;
+      if (d.source === 'sheet' && latest.state && STATE_IDS.has(latest.state)) d.state = latest.state;
       if (latest.note) d.latestNote = clean(latest.note);
       if (latest.date) d.lastUpdated = clean(latest.date);
     }
+    d.progress = progressOf(d.state);
   }
 
-  // Priority flag overlay (set of dashboard ids marked as priority).
+  // Priority overlay — a map of { dashboardId: level } (1 = highest). 0/absent = none.
   const priority = opts.priority || {};
-  for (const d of dashboards) d.priority = !!priority[d.id];
+  for (const d of dashboards) {
+    const raw = priority[d.id];
+    const lvl = raw === true ? 1 : Number.parseInt(raw, 10); // tolerate legacy boolean
+    d.priorityLevel = Number.isFinite(lvl) && lvl > 0 ? lvl : 0;
+    d.priority = d.priorityLevel > 0;
+  }
 
   const counts = Object.fromEntries(STATES.map((s) => [s.id, 0]));
   for (const d of dashboards) counts[d.state]++;
