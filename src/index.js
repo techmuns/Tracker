@@ -484,7 +484,9 @@ function renderPage(data, opts) {
   .msg { font-size:12.5px; }
   .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
   /* KPI hero */
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:18px 28px 4px; }
+  .kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; padding:18px 28px 4px; }
+  @media (max-width:1100px){ .kpis { grid-template-columns:repeat(3,1fr); } }
+  @media (max-width:680px){ .kpis { grid-template-columns:repeat(2,1fr); } }
   .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
   .kpi:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--kc,var(--accent)); }
   .kpi.off { opacity:.45; }
