@@ -170,8 +170,9 @@ export function manualToDashboard(m) {
   const url = String(m.meetingUrl ?? '').trim();
   const customers = splitCustomers(m.customer);
   const customerList = customers.length ? customers : ['Unassigned'];
+  const serial = Number.parseInt(m.serial, 10);
   return {
-    serial: null,
+    serial: Number.isFinite(serial) ? serial : null,
     source: 'manual',
     id: m.id,
     name: clean(m.name),
@@ -192,6 +193,33 @@ export function manualToDashboard(m) {
   };
 }
 
+// Convert raw CSV rows into standalone editable entries (the shape stored in
+// KV as manual entries) — used by the one-time "import & go standalone" step.
+export function rowsToEntries(rows) {
+  const out = [];
+  for (const cells of rows) {
+    const d = rowToDashboard(cells);
+    if (!d) continue;
+    out.push({
+      id: 'sheet-' + d.serial,
+      createdAt: new Date().toISOString(),
+      serial: d.serial,
+      name: d.name,
+      customer: d.customer,
+      owner: d.owner,
+      liveRaw: d.liveRaw,
+      status: d.status,
+      requirements: d.requirements,
+      improvement: d.improvement,
+      feedback: d.feedback,
+      meetingUrl: d.meetingUrl,
+      lastUpdated: d.lastUpdated,
+      note: d.note || d.meetingNote || '',
+    });
+  }
+  return out;
+}
+
 const STATE_IDS = new Set(STATES.map((s) => s.id));
 
 // Build the full dataset + summary from parsed CSV rows, merged with any
@@ -207,7 +235,12 @@ export function buildDataset(rows, manual = [], opts = {}) {
   sheet.sort((a, b) => a.serial - b.serial);
 
   const manualCards = manual.map(manualToDashboard).filter((d) => d.name);
-  const dashboards = [...sheet, ...manualCards]; // sheet first (by serial), manual after
+  // Order by serial when present (imported / numbered cards), unnumbered last.
+  const dashboards = [...sheet, ...manualCards].sort((a, b) => {
+    const as = Number.isFinite(a.serial) ? a.serial : Infinity;
+    const bs = Number.isFinite(b.serial) ? b.serial : Infinity;
+    return as - bs;
+  });
 
   // Apply the daily-update history: the latest update wins for state + note.
   const updates = opts.updates || {};
@@ -225,18 +258,20 @@ export function buildDataset(rows, manual = [], opts = {}) {
   const counts = Object.fromEntries(STATES.map((s) => [s.id, 0]));
   for (const d of dashboards) counts[d.state]++;
 
-  // Detect gaps in the SHEET serial sequence (e.g. rows 34 & 36 missing).
-  const serials = sheet.map((d) => d.serial);
+  // Detect gaps in the serial sequence (e.g. #34 & #36 missing).
+  const serials = dashboards.map((d) => d.serial).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
   const gaps = [];
   if (serials.length) {
+    const have = new Set(serials);
     for (let n = serials[0]; n <= serials[serials.length - 1]; n++) {
-      if (!serials.includes(n)) gaps.push(n);
+      if (!have.has(n)) gaps.push(n);
     }
   }
 
   const roster = opts.roster || {};
   return {
     generatedAt: new Date().toISOString(),
+    standalone: !!opts.standalone,
     total: dashboards.length,
     sheetCount: sheet.length,
     manualCount: manualCards.length,
@@ -244,6 +279,7 @@ export function buildDataset(rows, manual = [], opts = {}) {
     gaps,
     customers: [...new Set([...dashboards.flatMap((d) => d.customers), ...(roster.customers || [])])].filter(Boolean).sort(),
     owners: [...new Set([...dashboards.map((d) => d.owner), ...(roster.owners || [])])].filter(Boolean).sort(),
+    people: opts.people || {},
     dashboards,
   };
 }

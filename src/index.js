@@ -1,19 +1,25 @@
 // index.js — Cloudflare Worker entry point.
 //   GET  /             → server-rendered dashboard (clean light theme)
 //   GET  /api/data     → parsed + classified dataset (sheet + manual) as JSON
-//   POST /api/manual   → add a manual entry (stored in KV)
-//   DELETE /api/manual?id=…  → remove a manual entry
+//   POST/PUT/DELETE /api/manual  → add / edit / remove a dashboard entry
+//   POST/DELETE     /api/roster  → add / remove a team member or client
+//   POST/DELETE     /api/update  → post / remove a dated status update
+//   POST            /api/person  → set an employee's join date / attendance day
+//   POST            /api/import  → one-time: import the sheet into KV, then run
+//                                  standalone (the Google Sheet is no longer read)
 //
-// Sheet data comes from the published CSV (CSV_URL). Manual entries are stored
-// in the KV namespace bound as MANUAL and merged in. If MANUAL isn't bound yet,
-// the board still works read-only and the Add form is hidden.
+// Sheet data comes from the published CSV (CSV_URL) until you "go standalone",
+// after which everything lives in the KV namespace bound as MANUAL. If MANUAL
+// isn't bound, the board works read-only and editing controls are hidden.
 import { parseCsv } from './csv.js';
-import { buildDataset, manualToDashboard, STATES } from './classify.js';
+import { buildDataset, manualToDashboard, rowsToEntries, STATES } from './classify.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
 const KV_ROSTER = 'roster';
 const KV_UPDATES = 'dashboard_updates';
+const KV_PEOPLE = 'people';
+const KV_CONFIG = 'config';
 
 async function kvGet(env, key, fallback) {
   if (!env.MANUAL) return fallback;
@@ -26,14 +32,24 @@ const readRoster = (env) => kvGet(env, KV_ROSTER, { owners: [], customers: [] })
 const writeRoster = (env, r) => env.MANUAL.put(KV_ROSTER, JSON.stringify(r));
 const readUpdates = (env) => kvGet(env, KV_UPDATES, {});
 const writeUpdates = (env, u) => env.MANUAL.put(KV_UPDATES, JSON.stringify(u));
+const readPeople = (env) => kvGet(env, KV_PEOPLE, {});
+const writePeople = (env, p) => env.MANUAL.put(KV_PEOPLE, JSON.stringify(p));
+const readConfig = (env) => kvGet(env, KV_CONFIG, {});
+const writeConfig = (env, c) => env.MANUAL.put(KV_CONFIG, JSON.stringify(c));
 
 async function getDataset(env) {
-  if (!env.CSV_URL) throw new Error('CSV_URL is not configured');
-  const res = await fetch(env.CSV_URL, { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } });
-  if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
-  const text = await res.text();
-  const [manual, roster, updates] = await Promise.all([readManual(env), readRoster(env), readUpdates(env)]);
-  return buildDataset(parseCsv(text), manual, { roster, updates });
+  const [manual, roster, updates, people, config] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env),
+  ]);
+  // Standalone mode: serve purely from KV, never touch the Google Sheet.
+  let rows = [];
+  if (!config.standalone) {
+    if (!env.CSV_URL) throw new Error('CSV_URL is not configured');
+    const res = await fetch(env.CSV_URL, { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } });
+    if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
+    rows = parseCsv(await res.text());
+  }
+  return buildDataset(rows, manual, { roster, updates, people, standalone: !!config.standalone });
 }
 
 const json = (obj, status = 200) =>
@@ -83,6 +99,22 @@ export default {
           return json({ ok: true, dashboard: manualToDashboard(entry) }, 201);
         }
 
+        // Edit an existing entry in place (only KV-backed entries are editable).
+        if (request.method === 'PUT') {
+          const body = await request.json().catch(() => ({}));
+          const id = String(body.id || '').trim();
+          if (!id) return json({ error: 'id is required.' }, 400);
+          if (!body.name || !String(body.name).trim()) return json({ error: 'Name is required.' }, 400);
+          const list = await readManual(env);
+          const i = list.findIndex((e) => e.id === id);
+          if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'lastUpdated', 'note'];
+          for (const f of FIELDS) if (f in body) list[i][f] = body[f];
+          list[i].updatedAt = new Date().toISOString();
+          await writeManual(env, list);
+          return json({ ok: true, dashboard: manualToDashboard(list[i]) });
+        }
+
         if (request.method === 'DELETE') {
           const id = url.searchParams.get('id');
           if (!id) return json({ error: 'id is required.' }, 400);
@@ -92,6 +124,51 @@ export default {
           return json({ ok: true, removed: list.length - next.length });
         }
         return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Import sheet → standalone (one-time migration) ───────────────────
+      if (pathname === '/api/import') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const config = await readConfig(env);
+        if (config.standalone) return json({ error: 'Already standalone — the sheet has already been imported.' }, 409);
+        if (!env.CSV_URL) return json({ error: 'CSV_URL is not configured, nothing to import.' }, 400);
+        const res = await fetch(env.CSV_URL, { cf: { cacheTtl: 0 } });
+        if (!res.ok) return json({ error: `Sheet fetch failed: ${res.status}` }, 502);
+        const imported = rowsToEntries(parseCsv(await res.text()));
+        const list = await readManual(env);
+        const existing = new Set(list.map((e) => e.id));
+        const added = imported.filter((e) => !existing.has(e.id));
+        await writeManual(env, [...list, ...added]);
+        await writeConfig(env, { ...config, standalone: true, importedAt: new Date().toISOString() });
+        return json({ ok: true, imported: added.length, standalone: true }, 201);
+      }
+
+      // ── Person / employee terminal API ──────────────────────────────────
+      if (pathname === '/api/person') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const body = await request.json().catch(() => ({}));
+        const name = String(body.name || '').trim();
+        if (!name) return json({ error: 'name is required.' }, 400);
+        const people = await readPeople(env);
+        const p = people[name] || { joinDate: '', days: {} };
+        if ('joinDate' in body) p.joinDate = String(body.joinDate || '');
+        if ('role' in body) p.role = String(body.role || '');
+        // Mark/clear a single day's attendance: status 'present' | 'leave' | '' (clear)
+        if (body.date) {
+          const date = String(body.date);
+          if (body.status === 'present' || body.status === 'leave') {
+            p.days[date] = body.reason ? { s: body.status, r: String(body.reason) } : body.status;
+          } else {
+            delete p.days[date];
+          }
+        }
+        people[name] = p;
+        await writePeople(env, people);
+        return json({ ok: true, person: p });
       }
 
       // ── Roster API (extra team members / clients) ───────────────────────
@@ -171,7 +248,7 @@ export default {
         });
       }
 
-      return new Response(renderPage(data, { manualEnabled: !!env.MANUAL, editProtected: !!env.EDIT_TOKEN }), {
+      return new Response(renderPage(data, { manualEnabled: !!env.MANUAL, editProtected: !!env.EDIT_TOKEN, standalone: !!data.standalone, hasSheet: !!env.CSV_URL }), {
         headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
       });
     } catch (err) {
@@ -256,6 +333,29 @@ function renderPage(data, opts) {
   .drow .dn { font-weight:550; font-size:13.5px; }
   .drow .dmeta { font-size:12px; color:var(--muted); }
   .chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 6px; }
+  /* Employee terminal */
+  .emp { margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
+  .emp .section-t { margin-top:0; }
+  .emp-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:12px; }
+  .emp-stat { background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:10px; text-align:center; }
+  .emp-stat .n { font-size:20px; font-weight:700; }
+  .emp-stat .l { font-size:10.5px; color:var(--muted); margin-top:2px; }
+  .emp-join { display:flex; align-items:center; gap:8px; margin-bottom:12px; font-size:12.5px; color:var(--muted); }
+  .emp-join input { padding:6px 8px; border:1px solid var(--line); border-radius:7px; font:inherit; }
+  .btn.sm { padding:6px 11px; font-size:12px; }
+  .cal-head { display:flex; align-items:center; justify-content:space-between; font-weight:650; font-size:13px; margin-bottom:6px; }
+  .cal-nav { border:1px solid var(--line); background:var(--surface); border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:15px; line-height:1; }
+  .cal-dow { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; font-size:10px; color:var(--muted); text-align:center; margin-bottom:4px; }
+  .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+  .cal-cell { aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface); cursor:pointer; user-select:none; }
+  .cal-cell.empty { border:0; background:transparent; cursor:default; }
+  .cal-cell.today { outline:2px solid var(--accent); outline-offset:-2px; font-weight:700; }
+  .cal-cell.present { background:#dcfce7; border-color:#86efac; color:#166534; }
+  .cal-cell.leave { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+  .cal-legend { margin-top:9px; font-size:11px; color:#374151; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .cal-legend .k { width:11px; height:11px; border-radius:3px; display:inline-block; }
+  .cal-legend .k.present { background:#86efac; } .cal-legend .k.leave { background:#fca5a5; }
+  .cal-legend .muted { color:var(--muted); }
   .owner-grid { display:grid; grid-template-columns:1fr; gap:10px; }
   .owner-card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:13px 15px; cursor:pointer; }
   .owner-card:hover { border-color:var(--accent); background:var(--accent-weak); }
@@ -310,13 +410,17 @@ function renderPage(data, opts) {
   .roster-add input { flex:1; margin:0; }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
   .owner-card .rm:hover { color:#b42318; border-color:#fda29b; }
-  .del { position:absolute; top:10px; right:10px; width:22px; height:22px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--muted); cursor:pointer; line-height:1; font-size:14px; }
+  .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
+  .del, .edit { width:22px; height:22px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--muted); cursor:pointer; line-height:1; font-size:13px; }
+  .del:hover { color:#b42318; border-color:#fda29b; }
+  .edit:hover { color:var(--accent); border-color:#cdddff; }
   .del:hover { color:#b42318; border-color:#fda29b; background:#fef3f2; }
   .group-h { grid-column:1/-1; margin:16px 0 2px; font-size:12.5px; font-weight:600; color:var(--muted); }
   .warn { padding:9px 28px; background:#fffaeb; color:#93620a; font-size:12px; border-bottom:1px solid #fef0c7; }
   .empty { padding:48px 28px; color:var(--muted); }
   /* Add-entry panel */
   .panel { display:none; padding:16px 28px; background:var(--surface); border-bottom:1px solid var(--line); }
+  .panel-title { font-weight:650; font-size:14px; margin-bottom:12px; }
   .panel.open { display:block; }
   .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
   .form-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
@@ -330,7 +434,7 @@ function renderPage(data, opts) {
   <div class="row">
     <div>
       <h1>Dashboard Tracker</h1>
-      <div class="sub">${data.total} dashboards · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''} · updated ${escapeHtml(fresh)}</div>
+      <div class="sub">${data.total} dashboards${opts.standalone ? ` · standalone (sheet disconnected)` : ` · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''}`} · updated ${escapeHtml(fresh)}</div>
     </div>
     <div class="header-actions">
       <button class="btn ghost" id="teamToggle">👤 Team view</button>
@@ -343,6 +447,7 @@ function renderPage(data, opts) {
           <button data-export="owner">Owner-wise — one sheet per owner</button>
         </div>
       </div>
+      ${opts.manualEnabled && opts.hasSheet && !opts.standalone ? `<button class="btn ghost" id="standaloneBtn" title="Import the sheet's dashboards into the app and stop reading the Google Sheet">⤓ Go standalone</button>` : ''}
       ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
     </div>
   </div>
@@ -351,6 +456,8 @@ function renderPage(data, opts) {
 
 ${opts.manualEnabled ? `
 <div class="panel" id="panel">
+  <div class="panel-title" id="panelTitle">Add dashboard</div>
+  <input type="hidden" id="f_id">
   <div class="form-grid">
     <label>Dashboard name *<input id="f_name" placeholder="e.g. Revenue Tracker"></label>
     <label>Customer<input id="f_customer" list="customers" placeholder="e.g. Beas Capital"></label>
@@ -361,6 +468,7 @@ ${opts.manualEnabled ? `
     <label>Client requirements<input id="f_req" placeholder="optional"></label>
     <label>Improvements<input id="f_imp" placeholder="optional"></label>
     <label>Feedback<input id="f_feedback" placeholder="optional"></label>
+    <label>Notes<input id="f_note" placeholder="optional"></label>
   </div>
   <div class="panel-actions">
     <button class="btn" id="saveBtn">Save dashboard</button>
@@ -372,7 +480,7 @@ ${opts.manualEnabled ? `
 <datalist id="owners">${data.owners.map((o) => `<option value="${escapeHtml(o)}">`).join('')}</datalist>
 ` : ''}
 
-${data.gaps.length ? `<div class="warn">Note: sheet serial numbers ${data.gaps.join(', ')} are missing (likely deleted rows). ${data.sheetCount} sheet entries counted.</div>` : ''}
+${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial numbers ${data.gaps.join(', ')} are missing (likely deleted rows). ${data.sheetCount} sheet entries counted.</div>` : ''}
 
 <div class="controls">
   <input type="search" id="q" placeholder="Search name, status, requirements…">
@@ -416,16 +524,18 @@ function card(d){
   const meeting = d.meetingUrl ? \`<a href="\${esc(d.meetingUrl)}" target="_blank" rel="noopener">▶ Recording / link</a>\`
                 : d.meetingNote ? \`<span>\${esc(d.meetingNote)}</span>\` : '';
   const title = d.serial ? '#'+d.serial+' · '+esc(d.name) : esc(d.name);
-  const delBtn = (d.source==='manual' && CFG.manualEnabled) ? \`<button class="del" title="Delete" data-del="\${esc(d.id)}">×</button>\` : '';
-  return \`<div class="card \${d.source==='manual'?'manual':''}" style="border-top:3px solid \${s.color}">
-    \${delBtn}
+  const editable = d.source==='manual' && CFG.manualEnabled;
+  const showManualTag = d.source==='manual' && !CFG.standalone; // once standalone, every card is "manual" — no point flagging it
+  const cardBtns = editable ? \`<div class="cardbtns"><button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button></div>\` : '';
+  return \`<div class="card \${showManualTag?'manual':''}" style="border-top:3px solid \${s.color}">
+    \${cardBtns}
     <h3>\${title}</h3>
     <div class="meta">
       <span class="tag state" style="color:\${s.color}">\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
       \${d.customers.map(c => \`<span class="tag owner-link" data-customer="\${esc(c)}" title="View \${esc(c)}">\${esc(c)}</span>\`).join('')}
       <span class="tag owner-link" data-owner="\${esc(d.owner)}" title="View \${esc(d.owner)}'s full track">\${esc(d.owner)}</span>
-      \${d.source==='manual' ? '<span class="tag src">Manual</span>' : ''}
+      \${showManualTag ? '<span class="tag src">Manual</span>' : ''}
     </div>
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Status</span><br>\${esc(d.status)}</div>\` : ''}
     \${fields.map(([k,v]) => \`<div class="field"><span class="label">\${k}</span><div class="val">\${esc(v)}</div></div>\`).join('')}
@@ -488,36 +598,76 @@ async function api(method, path, body){
   if (res.status === 401){ localStorage.removeItem('editToken'); }
   return res;
 }
-function bindDelete(){
+function bindCardButtons(){
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this manual entry?')) return;
+    if (!confirm('Delete this dashboard?')) return;
     const res = await api('DELETE', '/api/manual?id='+encodeURIComponent(b.dataset.del));
     if (res.ok) location.reload(); else alert('Delete failed: '+(await res.json()).error);
   });
+  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openEdit(b.dataset.edit));
+}
+const bindDelete = bindCardButtons; // back-compat for render()
+
+const G = (id) => document.getElementById(id);
+function setForm(d){
+  G('f_id').value = d ? d.id : '';
+  G('f_name').value = d ? d.name : '';
+  G('f_customer').value = d ? d.customer : '';
+  G('f_owner').value = d ? d.owner : '';
+  G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
+  G('f_status').value = d ? d.status : '';
+  G('f_meeting').value = d ? (d.meetingUrl || '') : '';
+  G('f_req').value = d ? d.requirements : '';
+  G('f_imp').value = d ? d.improvement : '';
+  G('f_feedback').value = d ? d.feedback : '';
+  G('f_note').value = d ? (d.note || '') : '';
+  G('formMsg').textContent = '';
+}
+function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; G('panel').classList.add('open'); window.scrollTo({top:0,behavior:'smooth'}); }
+function openEdit(id){
+  const d = DATA.dashboards.find(x => x.id === id);
+  if (!d) return;
+  closeDrawer();
+  setForm(d);
+  G('panelTitle').textContent = 'Edit · ' + (d.serial ? '#'+d.serial+' ' : '') + d.name;
+  G('saveBtn').textContent = 'Save changes';
+  G('panel').classList.add('open');
+  window.scrollTo({top:0,behavior:'smooth'});
 }
 
 if (CFG.manualEnabled){
-  const panel = document.getElementById('panel');
-  document.getElementById('addToggle').onclick = () => panel.classList.toggle('open');
-  document.getElementById('cancelBtn').onclick = () => panel.classList.remove('open');
-  document.getElementById('saveBtn').onclick = async () => {
-    const msg = document.getElementById('formMsg');
+  const panel = G('panel');
+  G('addToggle').onclick = () => { if (panel.classList.contains('open')) panel.classList.remove('open'); else openAdd(); };
+  G('cancelBtn').onclick = () => panel.classList.remove('open');
+  G('saveBtn').onclick = async () => {
+    const msg = G('formMsg');
+    const id = G('f_id').value;
     const body = {
-      name: document.getElementById('f_name').value,
-      customer: document.getElementById('f_customer').value,
-      owner: document.getElementById('f_owner').value,
-      liveRaw: document.getElementById('f_live').value,
-      status: document.getElementById('f_status').value,
-      meetingUrl: document.getElementById('f_meeting').value,
-      requirements: document.getElementById('f_req').value,
-      improvement: document.getElementById('f_imp').value,
-      feedback: document.getElementById('f_feedback').value,
+      name: G('f_name').value,
+      customer: G('f_customer').value,
+      owner: G('f_owner').value,
+      liveRaw: G('f_live').value,
+      status: G('f_status').value,
+      meetingUrl: G('f_meeting').value,
+      requirements: G('f_req').value,
+      improvement: G('f_imp').value,
+      feedback: G('f_feedback').value,
+      note: G('f_note').value,
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
     msg.className='msg'; msg.textContent='Saving…';
-    const res = await api('POST', '/api/manual', body);
+    const res = id ? await api('PUT', '/api/manual', { id, ...body }) : await api('POST', '/api/manual', body);
     if (res.ok){ msg.className='msg ok'; msg.textContent='Saved.'; location.reload(); }
     else { const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); }
+  };
+  const sa = G('standaloneBtn');
+  if (sa) sa.onclick = async () => {
+    if (!confirm('Import all dashboards from the Google Sheet into the app and stop reading the sheet?\\n\\nAfter this, every card is editable here and the sheet is no longer used. (You can still keep the sheet as a backup.)')) return;
+    sa.disabled = true; sa.textContent = 'Importing…';
+    const res = await api('POST', '/api/import');
+    const e = await res.json().catch(()=>({}));
+    if (res.ok){ alert('Imported '+e.imported+' dashboards. You are now standalone — the Google Sheet is no longer read.'); location.reload(); }
+    else { sa.disabled = false; sa.textContent = '⤓ Go standalone'; alert('Import failed: '+(e.error||res.status)); }
   };
 }
 
@@ -576,11 +726,86 @@ function openOwner(name){
     <div class="drawer-body">
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
+      \${employeeTerminalHtml(name)}
       \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>\`<span class="tag owner-link" data-jump-customer="\${esc(c)}">\${esc(c)}</span>\`).join('')}</div>\`:''}
       \${sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
   wireDrawer('owner', name);
+  wireEmployee(name);
+}
+
+// ── Employee terminal: join date + attendance calendar (manual day log) ─────
+let empView = { name:'', y:0, m:0 };
+function personData(name){ return (DATA.people && DATA.people[name]) || { joinDate:'', days:{} }; }
+function dayStatus(rec, key){ const v = rec.days ? rec.days[key] : undefined; return v && typeof v === 'object' ? v.s : v; }
+function employeeStats(name){
+  const rec = personData(name);
+  let present = 0, leave = 0;
+  for (const k in (rec.days||{})){ const st = dayStatus(rec, k); if (st==='present') present++; else if (st==='leave') leave++; }
+  let tenure = '';
+  if (rec.joinDate){ const j = new Date(rec.joinDate); if (!isNaN(j)) tenure = Math.max(0, Math.floor((Date.now()-j.getTime())/86400000)); }
+  return { rec, present, leave, tenure };
+}
+function calendarHtml(name){
+  const rec = personData(name);
+  const today = new Date();
+  if (empView.name !== name){ empView = { name, y: today.getFullYear(), m: today.getMonth() }; }
+  const y = empView.y, m = empView.m;
+  const startDow = (new Date(y, m, 1).getDay() + 6) % 7; // Mon=0
+  const dim = new Date(y, m+1, 0).getDate();
+  const monthName = new Date(y, m, 1).toLocaleString('en-GB', { month:'long', year:'numeric' });
+  let cells = '';
+  for (let i=0;i<startDow;i++) cells += '<div class="cal-cell empty"></div>';
+  for (let d=1; d<=dim; d++){
+    const key = y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    const st = dayStatus(rec, key) || '';
+    const isToday = (y===today.getFullYear() && m===today.getMonth() && d===today.getDate());
+    cells += \`<div class="cal-cell \${st} \${isToday?'today':''}" data-day="\${key}">\${d}</div>\`;
+  }
+  return \`<div class="cal-head"><button class="cal-nav" data-cal="-1">‹</button><span>\${monthName}</span><button class="cal-nav" data-cal="1">›</button></div>
+    <div class="cal-dow">\${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>\`<span>\${x}</span>\`).join('')}</div>
+    <div class="cal-grid">\${cells}</div>
+    <div class="cal-legend"><span class="k present"></span> Present <span class="k leave"></span> Leave <span class="muted">· click a day: present → leave → clear</span></div>\`;
+}
+function employeeTerminalHtml(name){
+  const es = employeeStats(name);
+  const editable = CFG.manualEnabled;
+  return \`<div class="emp">
+    <div class="section-t">Employee terminal</div>
+    <div class="emp-stats">
+      <div class="emp-stat"><div class="n">\${es.tenure!==''?es.tenure:'—'}</div><div class="l">days since joining</div></div>
+      <div class="emp-stat"><div class="n">\${es.present}</div><div class="l">working days logged</div></div>
+      <div class="emp-stat"><div class="n">\${es.leave}</div><div class="l">leave days</div></div>
+    </div>
+    <div class="emp-join"><label>Joined</label><input type="date" id="empJoin" value="\${esc(es.rec.joinDate||'')}" \${editable?'':'disabled'}>\${editable?'<button class="btn sm" id="empJoinSave">Save</button>':''}</div>
+    <div class="cal" id="empCal">\${calendarHtml(name)}</div>
+  </div>\`;
+}
+function renderEmp(name){ const el = drawer.querySelector('.emp'); if (el){ el.outerHTML = employeeTerminalHtml(name); wireEmployee(name); } }
+function wireEmployee(name){
+  if (!CFG.manualEnabled) return;
+  const save = document.getElementById('empJoinSave');
+  if (save) save.onclick = async () => {
+    const res = await api('POST', '/api/person', { name, joinDate: document.getElementById('empJoin').value });
+    if (res.ok){ DATA.people[name] = (await res.json()).person; renderEmp(name); } else alert('Save failed.');
+  };
+  const cal = document.getElementById('empCal');
+  if (!cal) return;
+  cal.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => {
+    empView.m += Number(b.dataset.cal);
+    if (empView.m < 0){ empView.m = 11; empView.y--; }
+    if (empView.m > 11){ empView.m = 0; empView.y++; }
+    renderEmp(name);
+  });
+  cal.querySelectorAll('[data-day]').forEach(c => c.onclick = async () => {
+    const key = c.dataset.day;
+    const cur = dayStatus(personData(name), key);
+    const next = cur === undefined || cur === '' ? 'present' : cur === 'present' ? 'leave' : '';
+    const res = await api('POST', '/api/person', { name, date: key, status: next });
+    if (res.ok){ if (!DATA.people) DATA.people = {}; DATA.people[name] = (await res.json()).person; renderEmp(name); }
+    else alert('Could not save (need edit access?).');
+  });
 }
 
 function openClient(name){

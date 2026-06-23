@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, rowToDashboard, buildDataset, manualToDashboard, splitCustomers, isLiveValue } from '../src/classify.js';
+import { classify, rowToDashboard, buildDataset, manualToDashboard, rowsToEntries, splitCustomers, isLiveValue } from '../src/classify.js';
 import { parseCsv } from '../src/csv.js';
 
 test('isLiveValue reads the Live column', () => {
@@ -118,6 +118,37 @@ test('daily-update overlay: latest update changes state and counts', () => {
   assert.equal(d.lastUpdated, '05/06/2026');
   assert.equal(data.counts.review, 1);       // counts reflect the override
   assert.equal(data.counts.not_started, 0);
+});
+
+test('rowsToEntries converts sheet rows into editable entries keeping serials', () => {
+  const csv = [
+    ',Dashboards,Name,Assigned,Live,Reqs,Imp,Fb,Status,Link,Updated,',
+    '1,A,Beas Capital,Naval,Not Live,Received,-,-,Not Started Yet,-,,',
+    '2,B,Arisaig,Vipul,Live on Munshot,-,-,-,Live,-,,',
+  ].join('\n');
+  const entries = rowsToEntries(parseCsv(csv));
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].id, 'sheet-1');
+  assert.equal(entries[0].serial, 1);
+  assert.equal(entries[1].name, 'B');
+});
+
+test('standalone build: no sheet rows, entries carry serials and sort by them', () => {
+  const manual = [
+    { id: 'sheet-2', serial: 2, name: 'Two', owner: 'Vipul', customer: 'Arisaig', status: 'Live' },
+    { id: 'x', name: 'No Serial', owner: 'Naval', customer: 'Beas', status: '' },
+    { id: 'sheet-1', serial: 1, name: 'One', owner: 'Naval', customer: 'Beas', status: '' },
+  ];
+  const data = buildDataset([], manual, { standalone: true });
+  assert.equal(data.standalone, true);
+  assert.equal(data.sheetCount, 0);
+  assert.deepEqual(data.dashboards.map((d) => d.name), ['One', 'Two', 'No Serial']); // serial asc, unnumbered last
+});
+
+test('people are passed through to the dataset for the employee terminal', () => {
+  const people = { Naval: { joinDate: '2025-01-15', days: { '2026-06-23': 'present' } } };
+  const data = buildDataset([], [{ id: 'a', name: 'D', owner: 'Naval', customer: 'Beas' }], { people, standalone: true });
+  assert.equal(data.people.Naval.joinDate, '2025-01-15');
 });
 
 test('manualToDashboard uses the same colour logic and is tagged manual', () => {
