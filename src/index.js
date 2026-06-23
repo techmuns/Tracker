@@ -278,26 +278,62 @@ function renderPage(data, opts) {
 <title>Dashboard Tracker</title>
 <style>
   :root {
-    --bg:#f6f7f9; --surface:#ffffff; --line:#e6e8ec; --line2:#eef0f3;
-    --txt:#1d2330; --muted:#6b7280; --accent:#2563eb; --accent-weak:#eff4ff;
+    --bg:#f3f5fb; --surface:#ffffff; --surface2:#fafbff;
+    --line:#e5e8ef; --line2:#eef1f6;
+    --txt:#141925; --txt2:#48505f; --muted:#727a8a;
+    --accent:#4f46e5; --accent2:#9333ea; --accent-weak:#eef0ff;
+    --good:#067647; --good-bg:#ecfdf3; --good-line:#abefc6;
+    --warn-bg:#fffaeb; --warn-txt:#93620a; --warn-line:#fef0c7;
+    --present-bg:#dcfce7; --present-line:#86efac; --present-txt:#166534;
+    --leave-bg:#fee2e2; --leave-line:#fca5a5; --leave-txt:#991b1b;
+    --accent-line:var(--accent-line); --danger:#b42318; --danger-bg:#fef3f2; --danger-line:#fda29b;
+    --overlay:rgba(16,24,40,.45);
     --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
+    --shadow-md:0 4px 14px rgba(16,24,40,.08);
+    --shadow-lg:0 14px 40px rgba(16,24,40,.14);
+    --grad:linear-gradient(135deg,#4f46e5 0%,#9333ea 100%);
+    --grad-soft:linear-gradient(135deg,#eef0ff 0%,#f6eefe 100%);
+    --radius:14px;
   }
+  [data-theme="dark"] {
+    --bg:#0b0f1d; --surface:#151b2e; --surface2:#1a2138;
+    --line:#28314c; --line2:#222a44;
+    --txt:#e9edf7; --txt2:#aeb6c9; --muted:#7d879f;
+    --accent:#8593ff; --accent2:#c084fc; --accent-weak:#1d2440;
+    --good:#34d399; --good-bg:#0e2a22; --good-line:#1f6048;
+    --warn-bg:#2a2410; --warn-txt:#e8c468; --warn-line:#4a3f15;
+    --present-bg:#0f2c1e; --present-line:#1f6e46; --present-txt:#7ef0ac;
+    --leave-bg:#2f1518; --leave-line:#7c2b30; --leave-txt:#fcafa5;
+    --accent-line:#36406a; --danger:#f97066; --danger-bg:#2a1412; --danger-line:#7a2b27;
+    --overlay:rgba(0,0,0,.6);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 2px 8px rgba(0,0,0,.3);
+    --shadow-md:0 6px 20px rgba(0,0,0,.4);
+    --shadow-lg:0 18px 46px rgba(0,0,0,.55);
+    --grad:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);
+    --grad-soft:linear-gradient(135deg,#1b2240 0%,#241c40 100%);
+  }
+  html { color-scheme:light dark; }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
-  header { padding:18px 28px 14px; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; -webkit-font-smoothing:antialiased; transition:background .25s,color .25s; }
+  header { padding:16px 28px 14px; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; box-shadow:var(--shadow); }
   .row { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
-  h1 { margin:0; font-size:19px; font-weight:650; letter-spacing:-.01em; }
-  .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .logo { width:40px; height:40px; border-radius:11px; background:var(--grad); display:grid; place-items:center; color:#fff; font-size:20px; flex:none; box-shadow:0 4px 12px rgba(79,70,229,.35); }
+  h1 { margin:0; font-size:20px; font-weight:720; letter-spacing:-.02em; background:var(--grad); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .sub { color:var(--muted); font-size:12.5px; margin-top:1px; }
+  .theme-toggle { width:38px; height:38px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--txt); cursor:pointer; font-size:16px; display:grid; place-items:center; }
+  .theme-toggle:hover { background:var(--line2); }
   .legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
-  .pill { display:inline-flex; align-items:center; gap:7px; padding:5px 11px; border:1px solid var(--line); border-radius:8px; background:var(--surface); cursor:pointer; user-select:none; font-size:12.5px; transition:background .12s; }
-  .pill:hover { background:var(--line2); }
-  .pill.off { opacity:.45; }
+  .pill { display:inline-flex; align-items:center; gap:7px; padding:5px 12px; border:1px solid var(--line); border-radius:999px; background:var(--surface); cursor:pointer; user-select:none; font-size:12.5px; transition:background .12s,border-color .12s,transform .1s; }
+  .pill:hover { background:var(--line2); transform:translateY(-1px); }
+  .pill.off { opacity:.4; }
   .dot { width:9px; height:9px; border-radius:50%; flex:none; }
   .pill .n { color:var(--muted); font-variant-numeric:tabular-nums; font-weight:600; }
-  .btn { font:inherit; font-size:13px; font-weight:550; padding:8px 14px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
-  .btn:hover { filter:brightness(1.05); }
-  .btn.ghost { background:var(--surface); color:var(--txt); border-color:var(--line); }
-  .btn.ghost:hover { background:var(--line2); }
+  .btn { font:inherit; font-size:13px; font-weight:600; padding:9px 15px; border-radius:10px; border:0; background:var(--grad); color:#fff; cursor:pointer; box-shadow:0 2px 10px rgba(79,70,229,.28); transition:transform .12s,box-shadow .12s,filter .12s; }
+  .btn:hover { transform:translateY(-1px); box-shadow:0 5px 16px rgba(79,70,229,.36); }
+  .btn:active { transform:translateY(0); }
+  .btn.ghost { background:var(--surface); color:var(--txt); border:1px solid var(--line); box-shadow:none; }
+  .btn.ghost:hover { background:var(--line2); transform:translateY(-1px); }
   .header-actions { display:flex; gap:10px; align-items:center; }
   .dropdown { position:relative; }
   .menu { display:none; position:absolute; right:0; top:calc(100% + 6px); background:var(--surface); border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px rgba(16,24,40,.12); min-width:300px; overflow:hidden; z-index:20; }
@@ -306,9 +342,9 @@ function renderPage(data, opts) {
   .menu button:hover { background:var(--accent-weak); }
   .menu button + button { border-top:1px solid var(--line2); }
   .tag.owner-link { cursor:pointer; }
-  .tag.owner-link:hover { background:var(--accent-weak); border-color:#cdddff; color:var(--accent); }
+  .tag.owner-link:hover { background:var(--accent-weak); border-color:var(--accent-line); color:var(--accent); }
   /* Slide-over drawer (owner profile + team) */
-  .overlay { position:fixed; inset:0; background:rgba(16,24,40,.4); display:none; z-index:50; }
+  .overlay { position:fixed; inset:0; background:var(--overlay); display:none; z-index:50; }
   .overlay.open { display:block; }
   .drawer { position:absolute; top:0; right:0; height:100%; width:min(560px,100%); background:var(--bg); box-shadow:-8px 0 30px rgba(16,24,40,.18); overflow-y:auto; }
   .drawer-head { position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--line); padding:18px 22px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
@@ -350,11 +386,11 @@ function renderPage(data, opts) {
   .cal-cell { aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface); cursor:pointer; user-select:none; }
   .cal-cell.empty { border:0; background:transparent; cursor:default; }
   .cal-cell.today { outline:2px solid var(--accent); outline-offset:-2px; font-weight:700; }
-  .cal-cell.present { background:#dcfce7; border-color:#86efac; color:#166534; }
-  .cal-cell.leave { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
-  .cal-legend { margin-top:9px; font-size:11px; color:#374151; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .cal-cell.present { background:var(--present-bg); border-color:var(--present-line); color:var(--present-txt); }
+  .cal-cell.leave { background:var(--leave-bg); border-color:var(--leave-line); color:var(--leave-txt); }
+  .cal-legend { margin-top:9px; font-size:11px; color:var(--txt2); display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .cal-legend .k { width:11px; height:11px; border-radius:3px; display:inline-block; }
-  .cal-legend .k.present { background:#86efac; } .cal-legend .k.leave { background:#fca5a5; }
+  .cal-legend .k.present { background:var(--present-line); } .cal-legend .k.leave { background:var(--leave-line); }
   .cal-legend .muted { color:var(--muted); }
   .owner-grid { display:grid; grid-template-columns:1fr; gap:10px; }
   .owner-card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:13px 15px; cursor:pointer; }
@@ -367,28 +403,30 @@ function renderPage(data, opts) {
   input:focus, select:focus, textarea:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
   input[type=search] { min-width:240px; flex:1; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; padding:8px 28px 64px; }
-  .card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:15px 16px; box-shadow:var(--shadow); }
+  .card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--shadow); transition:transform .14s,box-shadow .14s,border-color .14s; overflow:hidden; }
+  .card::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--cardc,var(--accent)); }
+  .card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); }
   .card.manual { border-style:dashed; }
-  .card h3 { margin:0 0 8px; font-size:14.5px; font-weight:620; padding-right:22px; }
+  .card h3 { margin:0 0 8px; font-size:14.5px; font-weight:660; padding-right:44px; letter-spacing:-.01em; }
   .meta { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
-  .tag { font-size:11px; padding:2px 8px; border-radius:6px; background:var(--line2); color:#4b5563; border:1px solid var(--line); white-space:nowrap; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:6px; background:var(--line2); color:var(--txt2); border:1px solid var(--line); white-space:nowrap; }
   .tag.state { font-weight:600; }
-  .tag.live { color:#067647; background:#ecfdf3; border-color:#abefc6; }
-  .tag.src { color:var(--accent); background:var(--accent-weak); border-color:#cdddff; }
-  .status { font-size:13px; margin:9px 0 4px; color:#374151; }
+  .tag.live { color:var(--good); background:var(--good-bg); border-color:var(--good-line); }
+  .tag.src { color:var(--accent); background:var(--accent-weak); border-color:var(--accent-line); }
+  .status { font-size:13px; margin:9px 0 4px; color:var(--txt2); }
   .label { color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
   .field { margin-top:7px; }
-  .field .val { font-size:12.5px; color:#4b5563; }
+  .field .val { font-size:12.5px; color:var(--txt2); }
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
   .foot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:11px; padding-top:9px; border-top:1px solid var(--line2); font-size:11.5px; color:var(--muted); }
-  .upd { margin-top:9px; padding:8px 10px; background:var(--accent-weak); border:1px solid #dbe6ff; border-radius:8px; }
+  .upd { margin-top:9px; padding:8px 10px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:8px; }
   .upd .label { color:var(--accent); }
-  .upd .val { font-size:12.5px; color:#374151; margin-top:2px; }
-  .upd-btn { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--surface); border:1px solid #cdddff; border-radius:7px; padding:4px 9px; cursor:pointer; }
+  .upd .val { font-size:12.5px; color:var(--txt2); margin-top:2px; }
+  .upd-btn { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--surface); border:1px solid var(--accent-line); border-radius:7px; padding:4px 9px; cursor:pointer; }
   .upd-btn:hover { background:var(--accent-weak); }
   /* Update modal */
-  .modal-bg { position:fixed; inset:0; background:rgba(16,24,40,.4); display:none; z-index:60; align-items:center; justify-content:center; }
+  .modal-bg { position:fixed; inset:0; background:var(--overlay); display:none; z-index:60; align-items:center; justify-content:center; }
   .modal-bg.open { display:flex; }
   .modal { background:var(--surface); border-radius:14px; width:min(460px,94vw); max-height:88vh; overflow-y:auto; box-shadow:0 20px 50px rgba(16,24,40,.25); }
   .modal-head { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
@@ -405,18 +443,18 @@ function renderPage(data, opts) {
   .tl-item .tl-date { font-size:11px; color:var(--muted); }
   .tl-item .tl-note { font-size:13px; }
   .tl-item .tl-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; }
-  .tl-item .tl-del:hover { color:#b42318; }
+  .tl-item .tl-del:hover { color:var(--danger); }
   .roster-add { display:flex; gap:8px; margin-bottom:14px; }
   .roster-add input { flex:1; margin:0; }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
-  .owner-card .rm:hover { color:#b42318; border-color:#fda29b; }
+  .owner-card .rm:hover { color:var(--danger); border-color:var(--danger-line); }
   .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
   .del, .edit { width:22px; height:22px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--muted); cursor:pointer; line-height:1; font-size:13px; }
-  .del:hover { color:#b42318; border-color:#fda29b; }
-  .edit:hover { color:var(--accent); border-color:#cdddff; }
-  .del:hover { color:#b42318; border-color:#fda29b; background:#fef3f2; }
+  .del:hover { color:var(--danger); border-color:var(--danger-line); }
+  .edit:hover { color:var(--accent); border-color:var(--accent-line); }
+  .del:hover { color:var(--danger); border-color:var(--danger-line); background:var(--danger-bg); }
   .group-h { grid-column:1/-1; margin:16px 0 2px; font-size:12.5px; font-weight:600; color:var(--muted); }
-  .warn { padding:9px 28px; background:#fffaeb; color:#93620a; font-size:12px; border-bottom:1px solid #fef0c7; }
+  .warn { padding:9px 28px; background:var(--warn-bg); color:var(--warn-txt); font-size:12px; border-bottom:1px solid var(--warn-line); }
   .empty { padding:48px 28px; color:var(--muted); }
   /* Add-entry panel */
   .panel { display:none; padding:16px 28px; background:var(--surface); border-bottom:1px solid var(--line); }
@@ -426,23 +464,70 @@ function renderPage(data, opts) {
   .form-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
   .panel-actions { margin-top:12px; display:flex; gap:10px; align-items:center; }
   .msg { font-size:12.5px; }
-  .msg.err { color:#b42318; } .msg.ok { color:#067647; }
+  .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
+  /* KPI hero */
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:18px 28px 4px; }
+  .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
+  .kpi:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--kc,var(--accent)); }
+  .kpi.off { opacity:.5; }
+  .kpi .ic { position:absolute; right:12px; top:12px; width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-size:17px; background:color-mix(in srgb, var(--kc,var(--accent)) 16%, transparent); }
+  .kpi .n { font-size:30px; font-weight:760; line-height:1; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+  .kpi .l { font-size:12px; color:var(--muted); margin-top:5px; font-weight:550; }
+  .kpi .spark { height:4px; border-radius:3px; margin-top:10px; background:var(--kc,var(--accent)); opacity:.85; }
+  /* Insights / charts */
+  .insights { padding:8px 28px 4px; }
+  .ins-toggle { display:inline-flex; align-items:center; gap:7px; font:inherit; font-size:12.5px; font-weight:600; color:var(--muted); background:none; border:0; cursor:pointer; padding:6px 0; }
+  .ins-toggle:hover { color:var(--accent); }
+  .ins-grid { display:grid; grid-template-columns:auto 1fr 1fr; gap:14px; margin-top:8px; }
+  @media (max-width:900px){ .ins-grid { grid-template-columns:1fr; } }
+  .ins-card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
+  .ins-card h4 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
+  .donut-wrap { display:flex; align-items:center; gap:16px; }
+  .donut { position:relative; width:132px; height:132px; flex:none; }
+  .donut .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; }
+  .donut .center .big { font-size:26px; font-weight:760; line-height:1; }
+  .donut .center .small { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .leg2 { display:flex; flex-direction:column; gap:6px; }
+  .leg2 .li { display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer; }
+  .leg2 .li:hover { color:var(--accent); }
+  .leg2 .sw { width:10px; height:10px; border-radius:3px; flex:none; }
+  .leg2 .li .v { margin-left:auto; font-weight:650; font-variant-numeric:tabular-nums; color:var(--txt2); }
+  .bc { display:flex; flex-direction:column; gap:9px; }
+  .bc-row { display:grid; grid-template-columns:1fr; gap:4px; cursor:pointer; }
+  .bc-top { display:flex; align-items:center; gap:8px; font-size:12px; }
+  .bc-top .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bc-top .ct { margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .bc-track { height:9px; border-radius:5px; background:var(--line2); overflow:hidden; display:flex; }
+  .bc-track i { height:100%; display:block; }
+  .bc-row:hover .bc-top .nm { color:var(--accent); }
+  /* Avatars */
+  .avatar { width:22px; height:22px; border-radius:50%; display:inline-grid; place-items:center; font-size:9.5px; font-weight:700; color:#fff; flex:none; letter-spacing:.02em; box-shadow:inset 0 0 0 1px rgba(255,255,255,.18); }
+  .avatar.lg { width:44px; height:44px; font-size:16px; border-radius:13px; }
+  .av-tag { display:inline-flex; align-items:center; gap:6px; padding:2px 9px 2px 3px; border-radius:999px; background:var(--line2); border:1px solid var(--line); font-size:11px; cursor:pointer; }
+  .av-tag:hover { border-color:var(--accent-line); background:var(--accent-weak); color:var(--accent); }
+  .av-head { display:flex; align-items:center; gap:12px; }
+  .ctag { font-size:11px; padding:2px 9px; border-radius:999px; white-space:nowrap; cursor:pointer; border:1px solid transparent; font-weight:550; }
+  .ctag:hover { filter:brightness(.97); border-color:rgba(0,0,0,.06); }
 </style>
 </head>
 <body>
 <header>
   <div class="row">
-    <div>
-      <h1>Dashboard Tracker</h1>
-      <div class="sub">${data.total} dashboards${opts.standalone ? ` · standalone (sheet disconnected)` : ` · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''}`} · updated ${escapeHtml(fresh)}</div>
+    <div class="brand">
+      <div class="logo">◆</div>
+      <div>
+        <h1>Dashboard Tracker</h1>
+        <div class="sub">${data.total} dashboards${opts.standalone ? ` · standalone (sheet disconnected)` : ` · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''}`} · updated ${escapeHtml(fresh)}</div>
+      </div>
     </div>
     <div class="header-actions">
-      <button class="btn ghost" id="teamToggle">👤 Team view</button>
-      <button class="btn ghost" id="clientsToggle">🏢 Clients view</button>
+      <button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button>
+      <button class="btn ghost" id="teamToggle">👤 Team</button>
+      <button class="btn ghost" id="clientsToggle">🏢 Clients</button>
       <div class="dropdown">
-        <button class="btn ghost" id="exportToggle">⬇ Export to Excel ▾</button>
+        <button class="btn ghost" id="exportToggle">⬇ Export ▾</button>
         <div class="menu" id="exportMenu">
-          <button data-export="all">All — full workbook (overview + per-client + per-owner sheets)</button>
+          <button data-export="all">All — full workbook (cover + per-client + per-owner sheets)</button>
           <button data-export="client">Client-wise — one sheet per client</button>
           <button data-export="owner">Owner-wise — one sheet per owner</button>
         </div>
@@ -453,6 +538,8 @@ function renderPage(data, opts) {
   </div>
   <div class="legend" id="legend"></div>
 </header>
+<div class="kpis" id="kpis"></div>
+<div class="insights" id="insights"></div>
 
 ${opts.manualEnabled ? `
 <div class="panel" id="panel">
@@ -508,6 +595,34 @@ const hidden = new Set();
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+// ── Theme (light / dark) ───────────────────────────────────────────────────
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  const b = document.getElementById('themeToggle');
+  if (b) b.textContent = t === 'dark' ? '☀️' : '🌙';
+}
+(function initTheme(){
+  const saved = localStorage.getItem('theme');
+  const t = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  applyTheme(t);
+})();
+
+// ── Avatars & deterministic colours ────────────────────────────────────────
+const AV_COLORS = ['#6366f1','#8b5cf6','#ec4899','#f43f5e','#f97316','#f59e0b','#10b981','#14b8a6','#06b6d4','#3b82f6','#a855f7','#ef4444','#22c55e','#0ea5e9'];
+function hashIndex(str, n){ let h = 0; for (let i=0;i<str.length;i++){ h = (h*31 + str.charCodeAt(i)) >>> 0; } return h % n; }
+function nameColor(name){ return AV_COLORS[hashIndex(String(name||'?'), AV_COLORS.length)]; }
+function initials(name){
+  const parts = String(name||'?').trim().split(/\\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts.length>1 ? parts[parts.length-1][0] : '')).toUpperCase();
+}
+function avatar(name, cls){ return \`<span class="avatar \${cls||''}" style="background:\${nameColor(name)}">\${esc(initials(name))}</span>\`; }
+function ownerTag(name){ return \`<span class="av-tag owner-link" data-owner="\${esc(name)}" title="View \${esc(name)}'s profile">\${avatar(name)}\${esc(name)}</span>\`; }
+function clientTag(name){
+  const c = nameColor('c·'+name);
+  return \`<span class="ctag owner-link" data-customer="\${esc(name)}" title="View \${esc(name)}" style="background:color-mix(in srgb, \${c} 16%, transparent); color:\${c}">\${esc(name)}</span>\`;
+}
+
 function renderLegend(){
   const el = document.getElementById('legend');
   el.innerHTML = STATES.map(s =>
@@ -527,14 +642,14 @@ function card(d){
   const editable = d.source==='manual' && CFG.manualEnabled;
   const showManualTag = d.source==='manual' && !CFG.standalone; // once standalone, every card is "manual" — no point flagging it
   const cardBtns = editable ? \`<div class="cardbtns"><button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button></div>\` : '';
-  return \`<div class="card \${showManualTag?'manual':''}" style="border-top:3px solid \${s.color}">
+  return \`<div class="card \${showManualTag?'manual':''}" style="--cardc:\${s.color}">
     \${cardBtns}
     <h3>\${title}</h3>
     <div class="meta">
-      <span class="tag state" style="color:\${s.color}">\${s.label}</span>
+      <span class="tag state" style="color:\${s.color};background:color-mix(in srgb, \${s.color} 13%, transparent);border-color:color-mix(in srgb, \${s.color} 28%, transparent)">\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
-      \${d.customers.map(c => \`<span class="tag owner-link" data-customer="\${esc(c)}" title="View \${esc(c)}">\${esc(c)}</span>\`).join('')}
-      <span class="tag owner-link" data-owner="\${esc(d.owner)}" title="View \${esc(d.owner)}'s full track">\${esc(d.owner)}</span>
+      \${d.customers.map(c => clientTag(c)).join('')}
+      \${ownerTag(d.owner)}
       \${showManualTag ? '<span class="tag src">Manual</span>' : ''}
     </div>
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Status</span><br>\${esc(d.status)}</div>\` : ''}
@@ -547,7 +662,76 @@ function card(d){
   </div>\`;
 }
 
+// ── KPI hero ───────────────────────────────────────────────────────────────
+const KPI_ICONS = { live:'🚀', done:'✅', review:'🔍', in_progress:'⚙️', blocked:'⛔', not_started:'⏳' };
+let kpiAnimated = false;
+function animateCounts(el){
+  el.querySelectorAll('[data-count]').forEach(n => {
+    const target = +n.dataset.count;
+    if (kpiAnimated){ n.textContent = target; return; }
+    const dur = 700, t0 = performance.now();
+    (function step(t){ const p = Math.min(1,(t-t0)/dur); n.textContent = Math.round(target*(1-Math.pow(1-p,3))); if (p<1) requestAnimationFrame(step); })(t0);
+  });
+  kpiAnimated = true;
+}
+function renderKpis(){
+  const el = document.getElementById('kpis'); if (!el) return;
+  const tiles = [{ id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊' }]
+    .concat(STATES.map(s => ({ id:s.id, label:s.label, n:DATA.counts[s.id]||0, color:s.color, icon:KPI_ICONS[s.id]||'•' })));
+  el.innerHTML = tiles.map(t => \`<div class="kpi \${t.id!=='__all'&&hidden.has(t.id)?'off':''}" data-kpi="\${t.id}" style="--kc:\${t.color}">
+      <div class="ic">\${t.icon}</div><div class="n" data-count="\${t.n}">0</div><div class="l">\${esc(t.label)}</div><div class="spark"></div>
+    </div>\`).join('');
+  el.querySelectorAll('[data-kpi]').forEach(k => k.onclick = () => {
+    const id = k.dataset.kpi;
+    if (id === '__all'){ hidden.clear(); document.getElementById('q').value=''; document.getElementById('customer').value=''; document.getElementById('owner').value=''; document.getElementById('liveonly').checked=false; }
+    else { hidden.has(id) ? hidden.delete(id) : hidden.add(id); }
+    renderLegend(); render();
+  });
+  animateCounts(el);
+}
+
+// ── Insights (SVG donut + bar charts, no external libs) ────────────────────
+function donutSvg(){
+  const total = DATA.total || 1, r = 54, c = 2*Math.PI*r; let off = 0, segs = '';
+  STATES.forEach(s => {
+    const v = DATA.counts[s.id]||0; if (!v) return;
+    const len = v/total*c;
+    segs += \`<circle cx="66" cy="66" r="\${r}" fill="none" stroke="\${s.color}" stroke-width="15" stroke-dasharray="\${len} \${c-len}" stroke-dashoffset="\${-off}" transform="rotate(-90 66 66)" style="transition:stroke-dasharray .5s"></circle>\`;
+    off += len;
+  });
+  return \`<svg width="132" height="132" viewBox="0 0 132 132">\${segs}</svg>\`;
+}
+function barChart(items, statsFn, attr, useAvatar){
+  const rows = items.map(name => ({ name, s: statsFn(name) })).filter(r => r.s.total).sort((a,b) => b.s.total - a.s.total).slice(0,6);
+  if (!rows.length) return '<div class="sub">No data yet.</div>';
+  const max = Math.max(1, ...rows.map(r => r.s.total));
+  return \`<div class="bc">\${rows.map(r => \`<div class="bc-row" \${attr}="\${esc(r.name)}">
+    <div class="bc-top">\${useAvatar?avatar(r.name):''}<span class="nm">\${esc(r.name)}</span><span class="ct">\${r.s.total}</span></div>
+    <div class="bc-track" style="width:\${Math.max(8,r.s.total/max*100)}%">\${STATES.filter(x => r.s.c[x.id]).map(x => \`<i style="width:\${r.s.c[x.id]/r.s.total*100}%;background:\${x.color}" title="\${x.label}: \${r.s.c[x.id]}"></i>\`).join('')}</div>
+  </div>\`).join('')}</div>\`;
+}
+let insightsOpen = true;
+function renderInsights(){
+  const el = document.getElementById('insights'); if (!el) return;
+  const body = insightsOpen ? \`<div class="ins-grid">
+    <div class="ins-card"><h4>Status mix</h4><div class="donut-wrap">
+      <div class="donut">\${donutSvg()}<div class="center"><div class="big">\${DATA.total}</div><div class="small">total</div></div></div>
+      <div class="leg2">\${STATES.map(s => \`<div class="li" data-leg="\${s.id}"><span class="sw" style="background:\${s.color}"></span>\${s.label}<span class="v">\${DATA.counts[s.id]||0}</span></div>\`).join('')}</div>
+    </div></div>
+    <div class="ins-card"><h4>Top team members</h4>\${barChart(DATA.owners, ownerStats, 'data-bc-owner', true)}</div>
+    <div class="ins-card"><h4>Top clients</h4>\${barChart(DATA.customers, clientStats, 'data-bc-customer', false)}</div>
+  </div>\` : '';
+  el.innerHTML = \`<button class="ins-toggle" id="insToggle">📊 Insights \${insightsOpen?'▾':'▸'}</button>\${body}\`;
+  document.getElementById('insToggle').onclick = () => { insightsOpen = !insightsOpen; renderInsights(); };
+  if (insightsOpen){
+    el.querySelectorAll('[data-leg]').forEach(li => li.onclick = () => { const id = li.dataset.leg; hidden.has(id)?hidden.delete(id):hidden.add(id); renderLegend(); render(); });
+    el.querySelectorAll('[data-bc-owner]').forEach(b => b.onclick = () => openOwner(b.getAttribute('data-bc-owner')));
+    el.querySelectorAll('[data-bc-customer]').forEach(b => b.onclick = () => openClient(b.getAttribute('data-bc-customer')));
+  }
+}
+
 function render(){
+  renderKpis();
   const q = document.getElementById('q').value.trim().toLowerCase();
   const cust = document.getElementById('customer').value;
   const own = document.getElementById('owner').value;
@@ -719,15 +903,16 @@ function openOwner(name){
   const s = ownerStats(name);
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="drawerBack">‹ Team view</button><h2>\${esc(name)}</h2>
-      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.clients.length} client\${s.clients.length!==1?'s':''}</div></div>
+      <div><button class="back" id="drawerBack">‹ Team view</button>
+      <div class="av-head">\${avatar(name,'lg')}<div><h2>\${esc(name)}</h2>
+      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.clients.length} client\${s.clients.length!==1?'s':''}</div></div></div></div>
       <button class="x" id="drawerX">×</button>
     </div>
     <div class="drawer-body">
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
       \${employeeTerminalHtml(name)}
-      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>\`<span class="tag owner-link" data-jump-customer="\${esc(c)}">\${esc(c)}</span>\`).join('')}</div>\`:''}
+      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:''}
       \${sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
@@ -812,14 +997,15 @@ function openClient(name){
   const s = clientStats(name);
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="drawerBack">‹ Clients view</button><h2>\${esc(name)}</h2>
-      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.people.length} on the team</div></div>
+      <div><button class="back" id="drawerBack">‹ Clients view</button>
+      <div class="av-head"><span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span><div><h2>\${esc(name)}</h2>
+      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.people.length} on the team</div></div></div></div>
       <button class="x" id="drawerX">×</button>
     </div>
     <div class="drawer-body">
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
-      \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="tag owner-link" data-jump-owner="\${esc(o)}">\${esc(o)}</span>\`).join('')}</div>\`:''}
+      \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="av-tag owner-link" data-jump-owner="\${esc(o)}">\${avatar(o)}\${esc(o)}</span>\`).join('')}</div>\`:''}
       \${sectionsHtml(s, d => esc(d.owner)+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
@@ -827,11 +1013,13 @@ function openClient(name){
 }
 
 function overview(title, sub, items, jumpAttr, statsFn, rosterType){
+  const isOwner = rosterType === 'owner';
   const cards = items.map(name => {
     const s = statsFn(name);
     const rm = (CFG.manualEnabled && s.total===0) ? \`<button class="rm" data-rm="\${esc(name)}" title="Remove">×</button>\` : '';
+    const mark = isOwner ? avatar(name,'lg') : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)};border-radius:13px">🏢</span>\`;
     return \`<div class="owner-card" \${jumpAttr}="\${esc(name)}">
-      \${rm}<div class="on">\${esc(name)}</div>
+      \${rm}<div class="av-head" style="margin-bottom:4px">\${mark}<div class="on">\${esc(name)}</div></div>
       <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.active} active · \${s.pending} pending\${s.blocked?' · '+s.blocked+' blocked':''}</div>
       <div class="bar" style="margin:8px 0 0">\${stateBar(s.c,s.total)}</div>
     </div>\`;
@@ -942,8 +1130,14 @@ async function loadExcelJS(){
   throw new Error('Could not load the Excel library (network blocked?).');
 }
 const ARGB = { live:'FF22C55E', done:'FF3B82F6', review:'FFEAB308', in_progress:'FFF97316', blocked:'FFEF4444', not_started:'FF9CA3AF' };
-const THIN = { style:'thin', color:{ argb:'FFD0D5DD' } };
+const ARGB_SOFT = { live:'FFE7F8EE', done:'FFE8F0FE', review:'FFFEF7E0', in_progress:'FFFDEEE3', blocked:'FFFDE8E8', not_started:'FFF0F1F4' };
+const ARGB_TEXT = { live:'FF15803D', done:'FF1D4ED8', review:'FF92670B', in_progress:'FFC2410C', blocked:'FFB91C1C', not_started:'FF4B5563' };
+const THIN = { style:'thin', color:{ argb:'FFE2E6EE' } };
 const BORDER = { top:THIN, left:THIN, bottom:THIN, right:THIN };
+function applyDataBar(ws, col, n, argb){
+  if (n < 1) return;
+  ws.addConditionalFormatting({ ref: \`\${col}2:\${col}\${n+1}\`, rules:[{ type:'dataBar', cfvo:[{ type:'min' },{ type:'max' }], color:{ argb }, gradient:true, border:false }] });
+}
 
 function uniqueName(wb, base){
   let name = String(base || 'Sheet');
@@ -1050,7 +1244,14 @@ function styleExisting(ws, cols, stateKey){
       cell.alignment = { vertical:'top', horizontal: col && col.num ? 'center' : 'left', wrapText: !!(col && col.wrap) };
       if (rn % 2 === 0) cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF7F8FA' } };
     });
-    if (stateIdx){ const c = row.getCell(stateIdx); const argb = ARGB[c._stateId]; if (argb) c.font = { bold:true, color:{ argb } }; }
+    if (stateIdx){
+      const c = row.getCell(stateIdx), id = c._stateId;
+      if (ARGB_SOFT[id]){
+        c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb: ARGB_SOFT[id] } };
+        c.font = { bold:true, color:{ argb: ARGB_TEXT[id] } };
+        c.alignment = { vertical:'top', horizontal:'center' };
+      }
+    }
   });
   ws.autoFilter = { from:{ row:1, column:1 }, to:{ row:1, column:cols.length } };
 }
@@ -1069,19 +1270,92 @@ const SUMMARY_COLS = (firstHeader, firstKey, lastHeader, lastKey) => [
   { header:'Not Started', key:'notstarted', width:11, num:true },
   { header:lastHeader, key:lastKey, width:9, num:true },
 ];
+// Data bars on the count columns: B Total, C Completed, D Active, F Blocked.
+function summaryDataBars(ws, n){
+  applyDataBar(ws, 'B', n, 'FF4F46E5');
+  applyDataBar(ws, 'C', n, 'FF22C55E');
+  applyDataBar(ws, 'D', n, 'FFF97316');
+  applyDataBar(ws, 'F', n, 'FFEF4444');
+}
 function ownerSummary(wb){
   const rows = DATA.owners.map(o => { const s = ownerStats(o); return {
     name:o, total:s.total, completed:s.completed, active:s.active, pending:s.pending, blocked:s.blocked,
     live:s.c.live, done:s.c.done, review:s.c.review, inprog:s.c.in_progress, notstarted:s.c.not_started, last:s.clients.length };
   });
-  styledSheet(wb, 'Owner Summary', SUMMARY_COLS('Owner','name','Clients','last'), rows);
+  const ws = styledSheet(wb, 'Owner Summary', SUMMARY_COLS('Owner','name','Clients','last'), rows);
+  summaryDataBars(ws, rows.length);
 }
 function clientSummary(wb){
   const rows = DATA.customers.map(c => { const s = clientStats(c); return {
     name:c, total:s.total, completed:s.completed, active:s.active, pending:s.pending, blocked:s.blocked,
     live:s.c.live, done:s.c.done, review:s.c.review, inprog:s.c.in_progress, notstarted:s.c.not_started, last:s.people.length };
   });
-  styledSheet(wb, 'Client Summary', SUMMARY_COLS('Client','name','People','last'), rows);
+  const ws = styledSheet(wb, 'Client Summary', SUMMARY_COLS('Client','name','People','last'), rows);
+  summaryDataBars(ws, rows.length);
+}
+
+// ── Cover / summary sheet ──────────────────────────────────────────────────
+function coverSheet(wb){
+  const ws = wb.addWorksheet('Overview', { properties:{ tabColor:{ argb:'FF4F46E5' } }, views:[{ showGridLines:false }] });
+  ws.columns = [{ width:3 },{ width:20 },{ width:12 },{ width:12 },{ width:12 },{ width:12 }];
+  const set = (addr, val, font, align, fill) => {
+    const c = ws.getCell(addr); c.value = val;
+    if (font) c.font = font; if (align) c.alignment = align; if (fill) c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:fill } };
+    return c;
+  };
+  ws.mergeCells('B2:F2'); set('B2', 'Dashboard Tracker', { bold:true, size:22, color:{ argb:'FF111827' } });
+  ws.mergeCells('B3:F3'); set('B3', 'Status report · generated ' + new Date().toLocaleString('en-GB', { hour12:false }) + (CFG.standalone ? '  ·  standalone' : ''), { size:11, color:{ argb:'FF6B7280' } });
+
+  // KPI band (B5:F6) — big number + label, each a coloured tile.
+  const kpis = [
+    ['Total', DATA.total, 'FF4F46E5'],
+    ['Live', DATA.counts.live||0, 'FF22C55E'],
+    ['Completed', (DATA.counts.live||0)+(DATA.counts.done||0), 'FF3B82F6'],
+    ['In Progress', DATA.counts.in_progress||0, 'FFF97316'],
+    ['Blocked', DATA.counts.blocked||0, 'FFEF4444'],
+  ];
+  ws.getRow(5).height = 30;
+  kpis.forEach(([label, val, argb], i) => {
+    const col = String.fromCharCode(66 + i); // B,C,D,E,F
+    set(col+'5', val, { bold:true, size:18, color:{ argb:'FFFFFFFF' } }, { vertical:'middle', horizontal:'center' }, argb).border = BORDER;
+    set(col+'6', label, { size:10, bold:true, color:{ argb:'FF6B7280' } }, { horizontal:'center' });
+  });
+
+  // Status breakdown table.
+  let r = 8;
+  set('B'+r, 'STATUS BREAKDOWN', { bold:true, size:11, color:{ argb:'FF6B7280' } }); r++;
+  ['State','Count','Share'].forEach((h, i) => {
+    const c = set(String.fromCharCode(66+i)+r, h, { bold:true, color:{ argb:'FFFFFFFF' } }, { horizontal: i?'center':'left' }, 'FF1D4ED8'); c.border = BORDER;
+  });
+  const headRow = r; r++;
+  const total = DATA.total || 1;
+  STATES.forEach(s => {
+    const n = DATA.counts[s.id]||0, id = s.id;
+    const a = set('B'+r, s.label, { bold:true, color:{ argb:ARGB_TEXT[id] } }, { horizontal:'left' }, ARGB_SOFT[id]);
+    const b = set('C'+r, n, { color:{ argb:'FF374151' } }, { horizontal:'center' });
+    const c = set('D'+r, (n/total), { color:{ argb:'FF374151' } }, { horizontal:'center' });
+    c.numFmt = '0%';
+    [a,b,c].forEach(x => x.border = BORDER);
+    r++;
+  });
+  ws.addConditionalFormatting({ ref:'C'+(headRow+1)+':C'+(r-1), rules:[{ type:'dataBar', cfvo:[{ type:'min' },{ type:'max' }], color:{ argb:'FF4F46E5' }, gradient:true, border:false }] });
+
+  // Top clients & owners (by total), side by side.
+  r += 1;
+  const topStart = r;
+  const top = (arr, statsFn) => arr.map(n => ({ n, t: statsFn(n).total })).filter(x => x.t).sort((a,b) => b.t-a.t).slice(0,8);
+  const tc = top(DATA.customers, clientStats), to = top(DATA.owners, ownerStats);
+  set('B'+r, 'TOP CLIENTS', { bold:true, size:11, color:{ argb:'FF6B7280' } });
+  set('E'+r, 'TOP TEAM', { bold:true, size:11, color:{ argb:'FF6B7280' } }); r++;
+  const rowsN = Math.max(tc.length, to.length);
+  for (let i=0;i<rowsN;i++){
+    if (tc[i]){ set('B'+r, tc[i].n, null, { horizontal:'left' }).border = BORDER; set('C'+r, tc[i].t, null, { horizontal:'center' }).border = BORDER; }
+    if (to[i]){ set('E'+r, to[i].n, null, { horizontal:'left' }).border = BORDER; set('F'+r, to[i].t, null, { horizontal:'center' }).border = BORDER; }
+    r++;
+  }
+  if (tc.length) ws.addConditionalFormatting({ ref:'C'+topStart+':C'+(r-1), rules:[{ type:'dataBar', cfvo:[{ type:'min' },{ type:'max' }], color:{ argb:'FF3B82F6' }, gradient:true, border:false }] });
+  if (to.length) ws.addConditionalFormatting({ ref:'F'+topStart+':F'+(r-1), rules:[{ type:'dataBar', cfvo:[{ type:'min' },{ type:'max' }], color:{ argb:'FF8B5CF6' }, gradient:true, border:false }] });
+  return ws;
 }
 
 async function saveWb(wb, filename){
@@ -1097,6 +1371,7 @@ async function doExport(kind){
     const wb = new ExcelJS.Workbook();
     const all = DATA.dashboards;
     if (kind === 'all'){
+      coverSheet(wb);
       detailSheet(wb, 'All Dashboards', all);
       ownerSummary(wb);
       clientSummary(wb);
@@ -1121,7 +1396,12 @@ exportMenu.querySelectorAll('[data-export]').forEach(b => b.onclick = () => { ex
   const el = document.getElementById(id);
   el.addEventListener(el.type==='checkbox'?'change':'input', render);
 });
+document.getElementById('themeToggle').onclick = () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next); applyTheme(next);
+};
 renderLegend();
+renderInsights();
 render();
 </script>
 </body>
