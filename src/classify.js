@@ -207,6 +207,10 @@ export function rowToDashboard(cells) {
     links: normalizeLinks(null, meetingUrl, meetingNote || 'Recording / link'),
     lastUpdated: clean(lastUpdated),
     note: !blank(extra) && !/^https?:\/\//i.test(String(extra).trim()) ? clean(extra) : '',
+    dueDate: '',
+    manualStatus: '',
+    requirementFiles: [],
+    feedbacks: [],
   };
 }
 
@@ -239,7 +243,26 @@ export function manualToDashboard(m) {
     meetingNote: '',
     lastUpdated: clean(m.lastUpdated),
     note: clean(m.note),
+    dueDate: clean(m.dueDate),
+    manualStatus: clean(m.manualStatus),
+    requirementFiles: Array.isArray(m.requirementFiles) ? m.requirementFiles : [],
+    feedbacks: normalizeFeedbacks(m.feedbacks),
   };
+}
+
+// Structured feedbacks: each is a dated client comment with optional link/files
+// and a yes/no "implemented" toggle. Tolerates partially-filled objects.
+export function normalizeFeedbacks(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((f, i) => ({
+    id: f.id || 'fb' + i,
+    label: clean(f.label) || 'Feedback ' + (i + 1),
+    date: clean(f.date),
+    text: clean(f.text),
+    link: /^https?:\/\//i.test(String(f.link ?? '').trim()) ? String(f.link).trim() : '',
+    files: Array.isArray(f.files) ? f.files : [],
+    implemented: !!f.implemented,
+  }));
 }
 
 // Convert raw CSV rows into standalone editable entries (the shape stored in
@@ -323,6 +346,9 @@ export function buildDataset(rows, manual = [], opts = {}) {
   for (const d of dashboards) counts[d.state]++;
   const liveCount = dashboards.filter((d) => d.isLive).length;
   const priorityCount = dashboards.filter((d) => d.priority).length;
+  // Feedback roll-up (for the to-do views): pending = not yet implemented.
+  let fbTotal = 0, fbPending = 0;
+  for (const d of dashboards) for (const f of (d.feedbacks || [])) { fbTotal++; if (!f.implemented) fbPending++; }
 
   // Detect gaps in the serial sequence (e.g. #34 & #36 missing).
   const serials = dashboards.map((d) => d.serial).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
@@ -344,10 +370,13 @@ export function buildDataset(rows, manual = [], opts = {}) {
     counts,
     liveCount,
     priorityCount,
+    fbTotal,
+    fbPending,
     gaps,
     customers: [...new Set([...dashboards.flatMap((d) => d.customers), ...(roster.customers || [])])].filter(Boolean).sort(),
     owners: [...new Set([...dashboards.map((d) => d.owner), ...(roster.owners || [])])].filter(Boolean).sort(),
     people: opts.people || {},
+    clientDetails: opts.clients || {},
     dashboards,
   };
 }

@@ -150,6 +150,33 @@ test('links normalize: array kept, legacy meetingUrl becomes first link, progres
   assert.equal(d2.links[0].url, 'https://x.test/v');
 });
 
+test('feedbacks, due date and requirement files pass through; fbPending counts open ones', () => {
+  const data = buildDataset([], [
+    { id: 'a', name: 'A', owner: 'X', customer: 'C', dueDate: '2026-07-15', manualStatus: 'UI 80%',
+      requirementFiles: [{ id: 'f1', name: 'req.pdf', type: 'application/pdf' }],
+      feedbacks: [
+        { id: 'x', label: 'First feedback', text: 'change colors', implemented: false },
+        { id: 'y', label: 'Second feedback', link: 'https://youtu.be/z', implemented: true },
+      ] },
+  ], { standalone: true });
+  const d = data.dashboards[0];
+  assert.equal(d.dueDate, '2026-07-15');
+  assert.equal(d.manualStatus, 'UI 80%');
+  assert.equal(d.requirementFiles.length, 1);
+  assert.equal(d.feedbacks.length, 2);
+  assert.equal(d.feedbacks[1].link, 'https://youtu.be/z');
+  assert.equal(data.fbTotal, 2);
+  assert.equal(data.fbPending, 1); // only the un-implemented one
+});
+
+test('normalizeFeedbacks defaults labels and drops bad links', () => {
+  const d = manualToDashboard({ id: 'z', name: 'Z', owner: 'X', customer: 'C',
+    feedbacks: [{ text: 'hi', link: 'not-a-url' }, { label: 'Call 2', link: 'https://x.test' }] });
+  assert.equal(d.feedbacks[0].label, 'Feedback 1');
+  assert.equal(d.feedbacks[0].link, '');           // bad link stripped
+  assert.equal(d.feedbacks[1].link, 'https://x.test');
+});
+
 test('progress reflects stage position (0% start → 100% completed)', () => {
   const data = buildDataset([], [
     { id: 'a', name: 'A', owner: 'X', customer: 'C', stage: 'not_started' },
