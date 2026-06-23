@@ -192,9 +192,13 @@ export function manualToDashboard(m) {
   };
 }
 
+const STATE_IDS = new Set(STATES.map((s) => s.id));
+
 // Build the full dataset + summary from parsed CSV rows, merged with any
-// manually-entered records (KV).
-export function buildDataset(rows, manual = []) {
+// manually-entered records, an extra roster (team members / clients added by
+// hand), and a daily-update overlay — all stored in KV.
+//   opts = { roster: { owners:[], customers:[] }, updates: { [dashboardId]: [{date,state,note}] } }
+export function buildDataset(rows, manual = [], opts = {}) {
   const sheet = [];
   for (const r of rows) {
     const d = rowToDashboard(r);
@@ -204,6 +208,19 @@ export function buildDataset(rows, manual = []) {
 
   const manualCards = manual.map(manualToDashboard).filter((d) => d.name);
   const dashboards = [...sheet, ...manualCards]; // sheet first (by serial), manual after
+
+  // Apply the daily-update history: the latest update wins for state + note.
+  const updates = opts.updates || {};
+  for (const d of dashboards) {
+    const log = Array.isArray(updates[d.id]) ? updates[d.id] : [];
+    d.updates = log;
+    if (log.length) {
+      const latest = log[log.length - 1];
+      if (latest.state && STATE_IDS.has(latest.state)) d.state = latest.state;
+      if (latest.note) d.latestNote = clean(latest.note);
+      if (latest.date) d.lastUpdated = clean(latest.date);
+    }
+  }
 
   const counts = Object.fromEntries(STATES.map((s) => [s.id, 0]));
   for (const d of dashboards) counts[d.state]++;
@@ -217,6 +234,7 @@ export function buildDataset(rows, manual = []) {
     }
   }
 
+  const roster = opts.roster || {};
   return {
     generatedAt: new Date().toISOString(),
     total: dashboards.length,
@@ -224,8 +242,8 @@ export function buildDataset(rows, manual = []) {
     manualCount: manualCards.length,
     counts,
     gaps,
-    customers: [...new Set(dashboards.flatMap((d) => d.customers))].sort(),
-    owners: [...new Set(dashboards.map((d) => d.owner))].sort(),
+    customers: [...new Set([...dashboards.flatMap((d) => d.customers), ...(roster.customers || [])])].filter(Boolean).sort(),
+    owners: [...new Set([...dashboards.map((d) => d.owner), ...(roster.owners || [])])].filter(Boolean).sort(),
     dashboards,
   };
 }

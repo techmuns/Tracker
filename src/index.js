@@ -12,23 +12,28 @@ import { buildDataset, manualToDashboard, STATES } from './classify.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
+const KV_ROSTER = 'roster';
+const KV_UPDATES = 'dashboard_updates';
 
-async function readManual(env) {
-  if (!env.MANUAL) return [];
-  const raw = await env.MANUAL.get(KV_KEY);
-  return raw ? JSON.parse(raw) : [];
+async function kvGet(env, key, fallback) {
+  if (!env.MANUAL) return fallback;
+  const raw = await env.MANUAL.get(key);
+  return raw ? JSON.parse(raw) : fallback;
 }
-async function writeManual(env, list) {
-  await env.MANUAL.put(KV_KEY, JSON.stringify(list));
-}
+const readManual = (env) => kvGet(env, KV_KEY, []);
+const writeManual = (env, list) => env.MANUAL.put(KV_KEY, JSON.stringify(list));
+const readRoster = (env) => kvGet(env, KV_ROSTER, { owners: [], customers: [] });
+const writeRoster = (env, r) => env.MANUAL.put(KV_ROSTER, JSON.stringify(r));
+const readUpdates = (env) => kvGet(env, KV_UPDATES, {});
+const writeUpdates = (env, u) => env.MANUAL.put(KV_UPDATES, JSON.stringify(u));
 
 async function getDataset(env) {
   if (!env.CSV_URL) throw new Error('CSV_URL is not configured');
   const res = await fetch(env.CSV_URL, { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } });
   if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
   const text = await res.text();
-  const manual = await readManual(env);
-  return buildDataset(parseCsv(text), manual);
+  const [manual, roster, updates] = await Promise.all([readManual(env), readRoster(env), readUpdates(env)]);
+  return buildDataset(parseCsv(text), manual, { roster, updates });
 }
 
 const json = (obj, status = 200) =>
@@ -85,6 +90,70 @@ export default {
           const next = list.filter((e) => e.id !== id);
           await writeManual(env, next);
           return json({ ok: true, removed: list.length - next.length });
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Roster API (extra team members / clients) ───────────────────────
+      if (pathname === '/api/roster') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const type = (request.method === 'DELETE' ? url.searchParams.get('type') : (await request.clone().json().catch(() => ({}))).type);
+        const key = type === 'owner' ? 'owners' : type === 'customer' ? 'customers' : null;
+        if (!key) return json({ error: "type must be 'owner' or 'customer'." }, 400);
+        const roster = await readRoster(env);
+        if (!Array.isArray(roster.owners)) roster.owners = [];
+        if (!Array.isArray(roster.customers)) roster.customers = [];
+
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          const name = String(body.name || '').trim();
+          if (!name) return json({ error: 'name is required.' }, 400);
+          if (!roster[key].includes(name)) roster[key].push(name);
+          await writeRoster(env, roster);
+          return json({ ok: true, roster }, 201);
+        }
+        if (request.method === 'DELETE') {
+          const name = url.searchParams.get('name');
+          roster[key] = roster[key].filter((n) => n !== name);
+          await writeRoster(env, roster);
+          return json({ ok: true, roster });
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Daily status-update API ─────────────────────────────────────────
+      if (pathname === '/api/update') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const updates = await readUpdates(env);
+
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          const id = String(body.id || '').trim();
+          if (!id) return json({ error: 'id is required.' }, 400);
+          if (!body.state && !body.note) return json({ error: 'Pick a status or write a note.' }, 400);
+          const entry = {
+            ts: Date.now(),
+            date: body.date || new Date().toLocaleDateString('en-GB'),
+            state: body.state || '',
+            note: body.note || '',
+            by: body.by || '',
+          };
+          if (!Array.isArray(updates[id])) updates[id] = [];
+          updates[id].push(entry);
+          await writeUpdates(env, updates);
+          return json({ ok: true, entry }, 201);
+        }
+        if (request.method === 'DELETE') {
+          const id = url.searchParams.get('id');
+          const ts = Number(url.searchParams.get('ts'));
+          if (Array.isArray(updates[id])) {
+            updates[id] = updates[id].filter((e) => e.ts !== ts);
+            if (!updates[id].length) delete updates[id];
+            await writeUpdates(env, updates);
+          }
+          return json({ ok: true });
         }
         return json({ error: 'Method not allowed.' }, 405);
       }
@@ -213,6 +282,34 @@ function renderPage(data, opts) {
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
   .foot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:11px; padding-top:9px; border-top:1px solid var(--line2); font-size:11.5px; color:var(--muted); }
+  .upd { margin-top:9px; padding:8px 10px; background:var(--accent-weak); border:1px solid #dbe6ff; border-radius:8px; }
+  .upd .label { color:var(--accent); }
+  .upd .val { font-size:12.5px; color:#374151; margin-top:2px; }
+  .upd-btn { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--surface); border:1px solid #cdddff; border-radius:7px; padding:4px 9px; cursor:pointer; }
+  .upd-btn:hover { background:var(--accent-weak); }
+  /* Update modal */
+  .modal-bg { position:fixed; inset:0; background:rgba(16,24,40,.4); display:none; z-index:60; align-items:center; justify-content:center; }
+  .modal-bg.open { display:flex; }
+  .modal { background:var(--surface); border-radius:14px; width:min(460px,94vw); max-height:88vh; overflow-y:auto; box-shadow:0 20px 50px rgba(16,24,40,.25); }
+  .modal-head { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .modal-head h3 { margin:0; font-size:16px; }
+  .modal-head .sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .modal-body { padding:16px 20px 20px; }
+  .modal-body label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
+  .modal-body select, .modal-body textarea, .modal-body input { width:100%; margin-bottom:13px; }
+  .modal-body textarea { min-height:64px; resize:vertical; }
+  .timeline { margin-top:6px; border-top:1px solid var(--line2); padding-top:10px; }
+  .tl-item { display:flex; gap:9px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--line2); }
+  .tl-item .tl-dot { width:9px; height:9px; border-radius:50%; margin-top:4px; flex:none; }
+  .tl-item .tl-main { flex:1; }
+  .tl-item .tl-date { font-size:11px; color:var(--muted); }
+  .tl-item .tl-note { font-size:13px; }
+  .tl-item .tl-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; }
+  .tl-item .tl-del:hover { color:#b42318; }
+  .roster-add { display:flex; gap:8px; margin-bottom:14px; }
+  .roster-add input { flex:1; margin:0; }
+  .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
+  .owner-card .rm:hover { color:#b42318; border-color:#fda29b; }
   .del { position:absolute; top:10px; right:10px; width:22px; height:22px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--muted); cursor:pointer; line-height:1; font-size:14px; }
   .del:hover { color:#b42318; border-color:#fda29b; background:#fef3f2; }
   .group-h { grid-column:1/-1; margin:16px 0 2px; font-size:12.5px; font-weight:600; color:var(--muted); }
@@ -292,6 +389,7 @@ ${data.gaps.length ? `<div class="warn">Note: sheet serial numbers ${data.gaps.j
 <div class="grid" id="grid"></div>
 
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
+<div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
 
 <script>
 const DATA = ${payload};
@@ -331,7 +429,11 @@ function card(d){
     </div>
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Status</span><br>\${esc(d.status)}</div>\` : ''}
     \${fields.map(([k,v]) => \`<div class="field"><span class="label">\${k}</span><div class="val">\${esc(v)}</div></div>\`).join('')}
-    <div class="foot"><span>\${meeting}</span><span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span></div>
+    \${d.updates && d.updates.length ? \`<div class="upd"><span class="label">Latest update · \${esc(d.updates[d.updates.length-1].date||'')}</span><div class="val">\${esc(d.updates[d.updates.length-1].note || SMAP[d.updates[d.updates.length-1].state]?.label || '')}</div></div>\` : ''}
+    <div class="foot">
+      <span>\${meeting}</span>
+      \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : \`<span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>\`}
+    </div>
   </div>\`;
 }
 
@@ -499,25 +601,80 @@ function openClient(name){
   wireDrawer('customer', name);
 }
 
-function overview(title, sub, items, jumpAttr, statsFn){
+function overview(title, sub, items, jumpAttr, statsFn, rosterType){
   const cards = items.map(name => {
     const s = statsFn(name);
+    const rm = (CFG.manualEnabled && s.total===0) ? \`<button class="rm" data-rm="\${esc(name)}" title="Remove">×</button>\` : '';
     return \`<div class="owner-card" \${jumpAttr}="\${esc(name)}">
-      <div class="on">\${esc(name)}</div>
+      \${rm}<div class="on">\${esc(name)}</div>
       <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.active} active · \${s.pending} pending\${s.blocked?' · '+s.blocked+' blocked':''}</div>
       <div class="bar" style="margin:8px 0 0">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
+  const addRow = (CFG.manualEnabled && rosterType) ? \`<div class="roster-add"><input id="rosterInput" placeholder="Add \${rosterType==='owner'?'team member':'client'} name…"><button class="btn" id="rosterAdd">Add</button></div>\` : '';
   drawer.innerHTML = \`
     <div class="drawer-head"><div><h2>\${title}</h2><div class="sub">\${sub}</div></div><button class="x" id="drawerX">×</button></div>
-    <div class="drawer-body"><div class="owner-grid">\${cards}</div></div>\`;
+    <div class="drawer-body">\${addRow}<div class="owner-grid">\${cards}</div></div>\`;
   overlay.classList.add('open');
   document.getElementById('drawerX').onclick = closeDrawer;
   drawer.querySelectorAll('[data-jump-owner]').forEach(el => el.onclick = () => openOwner(el.dataset.jumpOwner));
   drawer.querySelectorAll('[data-jump-customer]').forEach(el => el.onclick = () => openClient(el.dataset.jumpCustomer));
+  if (CFG.manualEnabled && rosterType){
+    document.getElementById('rosterAdd').onclick = async () => {
+      const name = document.getElementById('rosterInput').value.trim();
+      if (!name) return;
+      const res = await api('POST', '/api/roster', { type: rosterType, name });
+      if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+    };
+    drawer.querySelectorAll('[data-rm]').forEach(b => b.onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm('Remove '+b.dataset.rm+'?')) return;
+      const res = await api('DELETE', \`/api/roster?type=\${rosterType}&name=\${encodeURIComponent(b.dataset.rm)}\`);
+      if (res.ok) location.reload();
+    });
+  }
 }
-function openTeam(){ overview('Team', DATA.owners.length+' people · click anyone for their full track', DATA.owners, 'data-jump-owner', ownerStats); }
-function openClients(){ overview('Clients', DATA.customers.length+' clients · click any to see their dashboards & team', DATA.customers, 'data-jump-customer', clientStats); }
+function openTeam(){ overview('Team', DATA.owners.length+' people · click anyone for their full track', DATA.owners, 'data-jump-owner', ownerStats, 'owner'); }
+function openClients(){ overview('Clients', DATA.customers.length+' clients · click any to see their dashboards & team', DATA.customers, 'data-jump-customer', clientStats, 'customer'); }
+
+// ── Daily status update modal ──────────────────────────────────────────────
+const updModalBg = document.getElementById('updModalBg');
+const updModal = document.getElementById('updModal');
+function closeUpd(){ updModalBg.classList.remove('open'); }
+updModalBg.addEventListener('click', (e) => { if (e.target === updModalBg) closeUpd(); });
+function openUpdate(id, name){
+  const d = DATA.dashboards.find(x => x.id === id) || { updates: [], state: 'in_progress', name };
+  const log = d.updates || [];
+  const opts = STATES.map(x => \`<option value="\${x.id}">\${x.label}</option>\`).join('');
+  const tl = log.slice().reverse().map(e => {
+    const st = SMAP[e.state];
+    return \`<div class="tl-item"><span class="tl-dot" style="background:\${st?st.color:'#ccc'}"></span><div class="tl-main"><div class="tl-date">\${esc(e.date||'')}\${st?' · '+st.label:''}</div>\${e.note?\`<div class="tl-note">\${esc(e.note)}</div>\`:''}</div><button class="tl-del" data-ts="\${e.ts}" title="Remove">×</button></div>\`;
+  }).join('') || '<div class="tl-date">No updates yet — add your first below.</div>';
+  updModal.innerHTML = \`
+    <div class="modal-head"><div><h3>Daily update</h3><div class="sub">\${esc(name||d.name||'')}</div></div><button class="x" id="updX">×</button></div>
+    <div class="modal-body">
+      <label>Status (sets the card colour)</label>
+      <select id="u_state">\${opts}</select>
+      <label>What did you do today? (note)</label>
+      <textarea id="u_note" placeholder="e.g. Wired live data into the P&amp;L tab; pending QA"></textarea>
+      <button class="btn" id="u_save">Post update</button>
+      <div class="timeline"><div class="label" style="margin-bottom:6px">History (\${log.length})</div>\${tl}</div>
+    </div>\`;
+  document.getElementById('u_state').value = d.state || 'in_progress';
+  updModalBg.classList.add('open');
+  document.getElementById('updX').onclick = closeUpd;
+  document.getElementById('u_save').onclick = async () => {
+    const state = document.getElementById('u_state').value;
+    const note = document.getElementById('u_note').value.trim();
+    const res = await api('POST', '/api/update', { id, state, note });
+    if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+  };
+  updModal.querySelectorAll('.tl-del').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this update?')) return;
+    const res = await api('DELETE', \`/api/update?id=\${encodeURIComponent(id)}&ts=\${b.dataset.ts}\`);
+    if (res.ok) location.reload();
+  });
+}
 
 // Apply a profile click as a filter on the main board.
 function applyFilter({ owner='', customer='', states=null }){
@@ -534,81 +691,199 @@ function applyFilter({ owner='', customer='', states=null }){
 
 document.getElementById('teamToggle').onclick = openTeam;
 document.getElementById('clientsToggle').onclick = openClients;
-// Click an owner or client chip on any card → open that profile
+// Click an owner/client chip, or the Update button, on any card
 document.getElementById('grid').addEventListener('click', (e) => {
+  const u = e.target.closest('[data-update]'); if (u){ openUpdate(u.dataset.update, u.dataset.name); return; }
   const o = e.target.closest('[data-owner]'); if (o){ openOwner(o.dataset.owner); return; }
   const c = e.target.closest('[data-customer]'); if (c) openClient(c.dataset.customer);
 });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUpd(); });
 
-// ── Export to Excel (multi-sheet .xlsx via SheetJS, loaded on first use) ────
-function loadXLSX(){
-  if (window.XLSX) return Promise.resolve();
+// ── Export to Excel (styled, multi-sheet .xlsx via ExcelJS) ────────────────
+function loadScript(src){
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-    s.onload = resolve; s.onerror = () => reject(new Error('Could not load the Excel library.'));
+    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('load failed: '+src));
     document.head.appendChild(s);
   });
 }
-function exportRows(list){
-  return list.map(d => ({
-    '#': d.serial ?? '',
-    Dashboard: d.name,
-    Customer: d.customer,
-    'Assigned To': d.owner,
-    State: SMAP[d.state].label,
-    Live: d.isLive ? 'Live on Munshot' : 'No',
-    Status: d.status,
-    'Client Requirements': d.requirements,
-    Improvements: d.improvement,
-    Feedback: d.feedback,
-    'Meeting Link': d.meetingUrl || d.meetingNote || '',
-    'Last Updated': d.lastUpdated,
-    Source: d.source,
-  }));
+async function loadExcelJS(){
+  if (window.ExcelJS) return;
+  const cdns = [
+    'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js',
+    'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js',
+  ];
+  for (const url of cdns){ try { await loadScript(url); if (window.ExcelJS) return; } catch(e){} }
+  throw new Error('Could not load the Excel library (network blocked?).');
 }
-function safeSheetName(wb, base){
+const ARGB = { live:'FF22C55E', done:'FF3B82F6', review:'FFEAB308', in_progress:'FFF97316', blocked:'FFEF4444', not_started:'FF9CA3AF' };
+const THIN = { style:'thin', color:{ argb:'FFD0D5DD' } };
+const BORDER = { top:THIN, left:THIN, bottom:THIN, right:THIN };
+
+function uniqueName(wb, base){
   let name = String(base || 'Sheet');
   ['\\\\', '/', '?', '*', '[', ']', ':'].forEach(ch => { name = name.split(ch).join(' '); });
   name = name.replace(/\\s+/g, ' ').trim().slice(0, 31) || 'Sheet';
   let n = name, i = 2;
-  while (wb.SheetNames.includes(n)){ const suf = ' ('+i+')'; n = name.slice(0, 31 - suf.length) + suf; i++; }
+  while (wb.worksheets.some(w => w.name === n)){ const suf = ' ('+i+')'; n = name.slice(0, 31 - suf.length) + suf; i++; }
   return n;
 }
-function addSheet(wb, base, rows){
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), safeSheetName(wb, base));
+// Add a styled worksheet. cols: [{header,key,width,wrap}]; stateKey marks the
+// column whose cell should be tinted with the dashboard's state colour.
+function styledSheet(wb, base, cols, rows, stateKey){
+  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1 }] });
+  ws.columns = cols.map(c => ({ header:c.header, key:c.key, width:c.width || 16 }));
+  rows.forEach(r => ws.addRow(r));
+  const head = ws.getRow(1);
+  head.height = 22;
+  head.eachCell((cell) => {
+    cell.font = { bold:true, color:{ argb:'FFFFFFFF' }, size:11 };
+    cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF1D4ED8' } };
+    cell.alignment = { vertical:'middle', horizontal:'center', wrapText:true };
+    cell.border = BORDER;
+  });
+  ws.eachRow((row, rn) => {
+    if (rn === 1) return;
+    row.eachCell((cell, cn) => {
+      cell.border = BORDER;
+      const col = cols[cn-1];
+      cell.alignment = { vertical:'top', horizontal: col && col.num ? 'center' : 'left', wrapText: !!(col && col.wrap) };
+      if (rn % 2 === 0) cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF7F8FA' } };
+    });
+    if (stateKey){
+      const idx = cols.findIndex(c => c.key === stateKey) + 1;
+      const argb = ARGB[row.getCell(idx)._stateId];
+      if (idx && argb) { const c = row.getCell(idx); c.font = { bold:true, color:{ argb } }; }
+    }
+  });
+  ws.autoFilter = { from:{ row:1, column:1 }, to:{ row:1, column:cols.length } };
+  return ws;
 }
-// Summary-of-people / summary-of-clients rows (the "breakdown" sheets).
-function ownerSummaryRows(){
-  return DATA.owners.map(o => { const s = ownerStats(o); return {
-    Owner:o, Total:s.total, Completed:s.completed, Active:s.active, Pending:s.pending, Blocked:s.blocked,
-    Live:s.c.live, 'Done (not live)':s.c.done, 'In Review':s.c.review, 'In Progress':s.c.in_progress, 'Not Started':s.c.not_started, Clients:s.clients.length };
+
+const DETAIL_COLS = [
+  { header:'#', key:'n', width:5, num:true },
+  { header:'Sheet #', key:'serial', width:8, num:true },
+  { header:'Dashboard', key:'name', width:30, wrap:true },
+  { header:'Customer', key:'customer', width:22, wrap:true },
+  { header:'Assigned To', key:'owner', width:14 },
+  { header:'State', key:'state', width:15 },
+  { header:'Live', key:'live', width:14 },
+  { header:'Status', key:'status', width:34, wrap:true },
+  { header:'Client Requirements', key:'req', width:26, wrap:true },
+  { header:'Improvements', key:'imp', width:26, wrap:true },
+  { header:'Feedback', key:'fb', width:26, wrap:true },
+  { header:'Latest Update', key:'update', width:30, wrap:true },
+  { header:'Meeting Link', key:'link', width:24, wrap:true },
+  { header:'Last Updated', key:'lastUpdated', width:14 },
+  { header:'Source', key:'source', width:9 },
+];
+function detailRows(ws, list){
+  list.forEach((d, i) => {
+    const u = d.updates && d.updates.length ? d.updates[d.updates.length-1] : null;
+    const row = ws.addRow({
+      n: i+1,
+      serial: d.serial ?? '',
+      name: d.name,
+      customer: d.customer,
+      owner: d.owner,
+      state: SMAP[d.state].label,
+      live: d.isLive ? 'Live on Munshot' : 'No',
+      status: d.status,
+      req: d.requirements,
+      imp: d.improvement,
+      fb: d.feedback,
+      update: u ? ((u.date?u.date+': ':'') + (u.note || (SMAP[u.state]?SMAP[u.state].label:''))) : '',
+      link: d.meetingUrl || d.meetingNote || '',
+      lastUpdated: d.lastUpdated,
+      source: d.source,
+    });
+    row.getCell(6)._stateId = d.state; // tag State cell for colouring
   });
 }
-function clientSummaryRows(){
-  return DATA.customers.map(c => { const s = clientStats(c); return {
-    Client:c, Total:s.total, Completed:s.completed, Active:s.active, Pending:s.pending, Blocked:s.blocked,
-    Live:s.c.live, 'Done (not live)':s.c.done, 'In Review':s.c.review, 'In Progress':s.c.in_progress, 'Not Started':s.c.not_started, People:s.people.length };
+// Build a detail sheet with per-sheet sequential numbering (1,2,3…).
+function detailSheet(wb, base, list){
+  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1 }] });
+  ws.columns = DETAIL_COLS.map(c => ({ header:c.header, key:c.key, width:c.width }));
+  detailRows(ws, list);
+  styleExisting(ws, DETAIL_COLS, 'state');
+  return ws;
+}
+function styleExisting(ws, cols, stateKey){
+  const head = ws.getRow(1); head.height = 22;
+  head.eachCell((cell) => {
+    cell.font = { bold:true, color:{ argb:'FFFFFFFF' }, size:11 };
+    cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FF1D4ED8' } };
+    cell.alignment = { vertical:'middle', horizontal:'center', wrapText:true };
+    cell.border = BORDER;
   });
+  const stateIdx = stateKey ? cols.findIndex(c => c.key === stateKey) + 1 : 0;
+  ws.eachRow((row, rn) => {
+    if (rn === 1) return;
+    row.eachCell((cell, cn) => {
+      cell.border = BORDER;
+      const col = cols[cn-1];
+      cell.alignment = { vertical:'top', horizontal: col && col.num ? 'center' : 'left', wrapText: !!(col && col.wrap) };
+      if (rn % 2 === 0) cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF7F8FA' } };
+    });
+    if (stateIdx){ const c = row.getCell(stateIdx); const argb = ARGB[c._stateId]; if (argb) c.font = { bold:true, color:{ argb } }; }
+  });
+  ws.autoFilter = { from:{ row:1, column:1 }, to:{ row:1, column:cols.length } };
+}
+
+const SUMMARY_COLS = (firstHeader, firstKey, lastHeader, lastKey) => [
+  { header:firstHeader, key:firstKey, width:22, wrap:true },
+  { header:'Total', key:'total', width:8, num:true },
+  { header:'Completed', key:'completed', width:11, num:true },
+  { header:'Active', key:'active', width:9, num:true },
+  { header:'Pending', key:'pending', width:9, num:true },
+  { header:'Blocked', key:'blocked', width:9, num:true },
+  { header:'Live', key:'live', width:7, num:true },
+  { header:'Done', key:'done', width:7, num:true },
+  { header:'In Review', key:'review', width:10, num:true },
+  { header:'In Progress', key:'inprog', width:11, num:true },
+  { header:'Not Started', key:'notstarted', width:11, num:true },
+  { header:lastHeader, key:lastKey, width:9, num:true },
+];
+function ownerSummary(wb){
+  const rows = DATA.owners.map(o => { const s = ownerStats(o); return {
+    name:o, total:s.total, completed:s.completed, active:s.active, pending:s.pending, blocked:s.blocked,
+    live:s.c.live, done:s.c.done, review:s.c.review, inprog:s.c.in_progress, notstarted:s.c.not_started, last:s.clients.length };
+  });
+  styledSheet(wb, 'Owner Summary', SUMMARY_COLS('Owner','name','Clients','last'), rows);
+}
+function clientSummary(wb){
+  const rows = DATA.customers.map(c => { const s = clientStats(c); return {
+    name:c, total:s.total, completed:s.completed, active:s.active, pending:s.pending, blocked:s.blocked,
+    live:s.c.live, done:s.c.done, review:s.c.review, inprog:s.c.in_progress, notstarted:s.c.not_started, last:s.people.length };
+  });
+  styledSheet(wb, 'Client Summary', SUMMARY_COLS('Client','name','People','last'), rows);
+}
+
+async function saveWb(wb, filename){
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 async function doExport(kind){
   try {
-    await loadXLSX();
-    const wb = XLSX.utils.book_new();
+    await loadExcelJS();
+    const wb = new ExcelJS.Workbook();
     const all = DATA.dashboards;
     if (kind === 'all'){
-      addSheet(wb, 'All Dashboards', exportRows(all));
-      addSheet(wb, 'Owner Summary', ownerSummaryRows());
-      addSheet(wb, 'Client Summary', clientSummaryRows());
-      DATA.customers.forEach(c => addSheet(wb, 'Client - '+c, exportRows(all.filter(d => d.customers.includes(c)))));
-      DATA.owners.forEach(o => addSheet(wb, 'Owner - '+o, exportRows(all.filter(d => d.owner === o))));
-      XLSX.writeFile(wb, 'dashboard-tracker-all.xlsx');
+      detailSheet(wb, 'All Dashboards', all);
+      ownerSummary(wb);
+      clientSummary(wb);
+      DATA.customers.forEach(c => detailSheet(wb, 'Client - '+c, all.filter(d => d.customers.includes(c))));
+      DATA.owners.forEach(o => detailSheet(wb, 'Owner - '+o, all.filter(d => d.owner === o)));
+      await saveWb(wb, 'dashboard-tracker-all.xlsx');
     } else if (kind === 'client'){
-      DATA.customers.forEach(c => addSheet(wb, c, exportRows(all.filter(d => d.customers.includes(c)))));
-      XLSX.writeFile(wb, 'dashboard-tracker-by-client.xlsx');
+      DATA.customers.forEach(c => detailSheet(wb, c, all.filter(d => d.customers.includes(c))));
+      await saveWb(wb, 'dashboard-tracker-by-client.xlsx');
     } else {
-      DATA.owners.forEach(o => addSheet(wb, o, exportRows(all.filter(d => d.owner === o))));
-      XLSX.writeFile(wb, 'dashboard-tracker-by-owner.xlsx');
+      DATA.owners.forEach(o => detailSheet(wb, o, all.filter(d => d.owner === o)));
+      await saveWb(wb, 'dashboard-tracker-by-owner.xlsx');
     }
   } catch (e){ alert(e.message || 'Export failed.'); }
 }

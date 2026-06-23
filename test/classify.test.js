@@ -92,6 +92,34 @@ test('buildDataset customer list contains the split clients individually', () =>
   assert.deepEqual(data.customers, ['Arisag Partners', 'Beas Capital']);
 });
 
+test('roster adds team members / clients with no dashboards yet', () => {
+  const csv = [
+    ',Dashboards,Name,Assigned,Live,Reqs,Imp,Fb,Status,Link,Updated,',
+    '1,A,Beas Capital,Naval,Not Live,Received,-,-,Not Started Yet,-,,',
+  ].join('\n');
+  const data = buildDataset(parseCsv(csv), [], { roster: { owners: ['Zoya'], customers: ['New Fund'] } });
+  assert.ok(data.owners.includes('Zoya'));
+  assert.ok(data.customers.includes('New Fund'));
+});
+
+test('daily-update overlay: latest update changes state and counts', () => {
+  const csv = [
+    ',Dashboards,Name,Assigned,Live,Reqs,Imp,Fb,Status,Link,Updated,',
+    '1,A,Beas Capital,Naval,Not Live,Received,-,-,Not Started Yet,-,,',
+  ].join('\n');
+  const updates = { 'sheet-1': [
+    { ts: 1, date: '01/06/2026', state: 'in_progress', note: 'started' },
+    { ts: 2, date: '05/06/2026', state: 'review', note: 'QA now' },
+  ] };
+  const data = buildDataset(parseCsv(csv), [], { updates });
+  const d = data.dashboards[0];
+  assert.equal(d.state, 'review');           // latest update wins
+  assert.equal(d.latestNote, 'QA now');
+  assert.equal(d.lastUpdated, '05/06/2026');
+  assert.equal(data.counts.review, 1);       // counts reflect the override
+  assert.equal(data.counts.not_started, 0);
+});
+
 test('manualToDashboard uses the same colour logic and is tagged manual', () => {
   const d = manualToDashboard({ id: 'abc', name: 'Revenue Tracker', customer: 'Vimana', owner: 'Vipul', liveRaw: 'Live on Munshot', status: 'All changes done', meetingUrl: 'https://x.test/v' });
   assert.equal(d.source, 'manual');
