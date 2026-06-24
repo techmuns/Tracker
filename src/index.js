@@ -755,6 +755,7 @@ function renderPage(data, opts) {
   .fbv { border:1px solid var(--line); border-radius:11px; padding:11px 13px; margin-bottom:9px; background:var(--surface2); }
   .fbv-top { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
   .fbv-top b { font-size:13.5px; }
+  .fbcat { font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-weak); border-radius:5px; padding:2px 7px; }
   .impl { font:inherit; font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px; border:1px solid transparent; cursor:pointer; margin-left:auto; }
   .impl.yes { color:#15803d; background:#dcfce7; border-color:#86efac; }
   .impl.no { color:#b42318; background:#fef3f2; border-color:#fda29b; }
@@ -769,8 +770,9 @@ function renderPage(data, opts) {
   /* Feedback editor rows (form) */
   .fb-row { border:1px solid var(--line); border-radius:11px; padding:10px; margin-bottom:9px; background:var(--surface2); }
   .fb-top { display:flex; gap:8px; align-items:center; margin-bottom:7px; flex-wrap:wrap; }
+  .fb-top .fb-cat { flex:0 0 30%; min-width:110px; }
   .fb-top .fb-label { flex:1; min-width:120px; }
-  .fb-top .fb-date { width:140px; }
+  .fb-top .fb-date { width:138px; }
   .fb-bot { display:flex; gap:8px; margin-top:7px; }
   .fb-bot .fb-link { flex:1; }
   .fb-row textarea { width:100%; }
@@ -1210,16 +1212,17 @@ function renderReqFiles(){
 }
 function fbRowHtml(f, i){
   return \`<div class="fb-row">
-    <div class="fb-top"><input class="fb-label" placeholder="Feedback \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
+    <div class="fb-top"><input class="fb-cat" placeholder="area, e.g. Data Audit" value="\${esc(f.category||'')}"><input class="fb-label" placeholder="headline / change \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
       <label class="toggle"><input type="checkbox" class="fb-done" \${f.implemented?'checked':''}><span class="track"></span><span class="tlabel">implemented</span></label>
       <button type="button" class="rm-client fb-rm" title="Remove">×</button></div>
-    <textarea class="fb-text" rows="2" placeholder="what the client said / changes asked">\${esc(f.text||'')}</textarea>
-    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 attach</button></div>
+    <textarea class="fb-text" rows="2" placeholder="what the client asked / what you changed">\${esc(f.text||'')}</textarea>
+    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 screenshot / file</button></div>
     <div class="filebox fb-files"></div>
   </div>\`;
 }
 function syncFbFromDom(){
   [...G('fbRows').children].forEach((row,i) => { const f = fbState[i]; if(!f) return;
+    f.category = row.querySelector('.fb-cat').value;
     f.label = row.querySelector('.fb-label').value; f.date = row.querySelector('.fb-date').value;
     f.text = row.querySelector('.fb-text').value; f.link = row.querySelector('.fb-link').value;
     f.implemented = row.querySelector('.fb-done').checked;
@@ -1282,7 +1285,7 @@ if (CFG.manualEnabled){
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
   G('addReqFile').onclick = async () => { const up = await uploadFile(); if (up){ reqFilesState.push(up); renderReqFiles(); } };
-  G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
+  G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
     const msg = G('formMsg');
@@ -1630,7 +1633,7 @@ function factCell(label, val){ return \`<div class="fact"><div class="fl">\${lab
 function fbView(did, f, editable){
   const u = f.link;
   return \`<div class="fbv">
-    <div class="fbv-top"><b>\${esc(f.label||'Feedback')}</b>\${f.date?\`<span class="muted"> · \${esc(f.date)}</span>\`:''}
+    <div class="fbv-top">\${f.category?\`<span class="fbcat">\${esc(f.category)}</span>\`:''}<b>\${esc(f.label||'Feedback')}</b>\${f.date?\`<span class="muted"> · \${esc(f.date)}</span>\`:''}
       <button class="impl \${f.implemented?'yes':'no'}" \${editable?\`data-fbtoggle="\${esc(did)}" data-fbid="\${esc(f.id)}"\`:'disabled'}>\${f.implemented?'✓ implemented':'✗ pending'}</button></div>
     \${f.text?\`<div class="dnote">\${esc(f.text)}</div>\`:''}
     \${(u||(f.files&&f.files.length))?\`<div class="dlinks">\${u?\`<a href="\${esc(u)}" target="_blank" rel="noopener" class="lnk">▶ recording / message</a>\`:''}\${fileGrid(f.files)}</div>\`:''}
@@ -1648,7 +1651,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -1672,6 +1675,7 @@ function openDetail(id){
   G('dX').onclick = closeDetail;
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
   const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
+  const pdfBtn = document.getElementById('dPdf'); if (pdfBtn) pdfBtn.onclick = () => genBuildUpdate(id, pdfBtn);
   detailModal.querySelectorAll('[data-owner]').forEach(b => b.onclick = () => { closeDetail(); openOwner(b.dataset.owner); });
   detailModal.querySelectorAll('[data-customer]').forEach(b => b.onclick = () => { closeDetail(); openClient(b.dataset.customer); });
   detailModal.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
@@ -1789,6 +1793,123 @@ async function loadExcelJS(){
   ];
   for (const url of cdns){ try { await loadScript(url); if (window.ExcelJS) return; } catch(e){} }
   throw new Error('Could not load the Excel library (network blocked?).');
+}
+
+// ── Build-Update PDF deck (client report for the next meeting) ──────────────
+async function loadPdfLib(){
+  if (window.PDFLib) return;
+  const cdns = [
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
+    'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
+  ];
+  for (const url of cdns){ try { await loadScript(url); if (window.PDFLib) return; } catch(e){} }
+  throw new Error('Could not load the PDF library (network blocked?).');
+}
+function downloadBytes(bytes, filename, type){
+  const blob = new Blob([bytes], { type }); const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function fetchImg(f){
+  try {
+    const r = await fetch(f.url || ('/api/file?id='+f.id)); const buf = new Uint8Array(await r.arrayBuffer());
+    const isPng = (f.type||'').includes('png') || (buf[0]===0x89 && buf[1]===0x50);
+    const isJpg = (f.type||'').includes('jpeg') || (f.type||'').includes('jpg') || (buf[0]===0xFF && buf[1]===0xD8);
+    if (!isPng && !isJpg) return null;
+    return { bytes: buf, png: isPng };
+  } catch(e){ return null; }
+}
+// Same layout engine as the prototype — cover, one page per change, closing.
+async function buildDeck(PDFLib, report){
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const doc = await PDFDocument.create();
+  const F = await doc.embedFont(StandardFonts.Helvetica);
+  const B = await doc.embedFont(StandardFonts.HelveticaBold);
+  const W = 595.28, H = 841.89, M = 48;
+  const C = (h) => rgb(parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255);
+  const ACC='#4f46e5', ACC2='#9333ea', INK='#141925', MUTE='#727a8a', LINE='#e5e8ef';
+  const hxA = (h) => [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
+  const lerp = (a,b,t) => Math.round(a+(b-a)*t);
+  const san = (s) => String(s==null?'':s).replace(/₹/g,'Rs ').replace(/[‘’‚′]/g,"'").replace(/[“”„″]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/[•●◆]/g,'-').replace(/[^\\x20-\\x7E\\xA1-\\xFF]/g,'');
+  function gradBand(page, y, h){ const s=120, a=hxA(ACC), b=hxA(ACC2); for(let i=0;i<s;i++){ const t=i/(s-1); page.drawRectangle({ x:W*i/s, y, width:W/s+1, height:h, color:rgb(lerp(a[0],b[0],t)/255,lerp(a[1],b[1],t)/255,lerp(a[2],b[2],t)/255) }); } }
+  function wrap(text, font, size, maxW){ const words=san(text).split(/\\s+/); const lines=[]; let cur=''; for(const w of words){ const t=cur?cur+' '+w:w; if(font.widthOfTextAtSize(t,size)>maxW && cur){ lines.push(cur); cur=w; } else cur=t; } if(cur)lines.push(cur); return lines; }
+  function dW(page, text, x, top, font, size, color, maxW, lh){ const lines=wrap(text,font,size,maxW); lines.forEach((ln,i)=>page.drawText(ln,{x,y:H-top-i*(lh||size*1.35)-size,size,font,color})); return Math.max(1,lines.length)*(lh||size*1.35); }
+  const sp = (s) => san(s).toUpperCase().split('').join(' ');
+
+  // Cover
+  let pg = doc.addPage([W,H]);
+  gradBand(pg, H-150, 150);
+  pg.drawRectangle({ x:M, y:H-70, width:18, height:18, color:rgb(1,1,1) });
+  pg.drawText('Munshot', { x:M+28, y:H-66, size:17, font:B, color:rgb(1,1,1) });
+  pg.drawText(sp('Build update report'), { x:M+28, y:H-83, size:8, font:F, color:C('#e8e8ff') });
+  pg.drawText(san(report.date||''), { x:W-M-F.widthOfTextAtSize(san(report.date||''),10), y:H-66, size:10, font:F, color:rgb(1,1,1) });
+  pg.drawText(sp('Build update · '+(report.date||'')), { x:M, y:H-205, size:9, font:B, color:C(ACC) });
+  let ty = 226;
+  ty += dW(pg, report.title||'Build Update', M, ty, B, 27, C(INK), W-2*M, 32); ty += 6;
+  ty += dW(pg, report.subtitle||'', M, ty, F, 12.5, C(MUTE), W-2*M, 18);
+  const impl = report.changes.filter(c=>c.implemented).length, pend = report.changes.length-impl;
+  const meta=[['DATE',report.date||''],['PREPARED FOR',(report.client||'Client')+', by Munshot'],['COVERAGE',report.changes.length+' changes'],['STATUS',impl+' implemented · '+pend+' pending']];
+  const mtop=ty+30, colW=(W-2*M-3*14)/4;
+  meta.forEach(([k,v],i)=>{ const x=M+i*(colW+14); pg.drawRectangle({x,y:H-mtop-80,width:colW,height:80,color:C('#f3f5fb'),borderColor:C(LINE),borderWidth:1}); pg.drawText(k,{x:x+10,y:H-mtop-19,size:7,font:B,color:C(MUTE)}); dW(pg,v,x+10,mtop+27,B,10.5,C(INK),colW-20,13); });
+
+  // One page per change
+  for (const ch of report.changes){
+    pg = doc.addPage([W,H]); let y = 56;
+    pg.drawText(sp(ch.category||'Update'), { x:M, y:H-y-9, size:9, font:B, color:C(ACC) }); y += 22;
+    y += dW(pg, ch.headline||'', M, y, B, 20, C(INK), W-2*M-120, 25);
+    const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = B.widthOfTextAtSize(bl,8)+18;
+    pg.drawRectangle({ x:W-M-bw, y:H-78, width:bw, height:19, color:C(ch.implemented?'#dcfce7':'#fee2e2') });
+    pg.drawText(bl, { x:W-M-bw+9, y:H-72, size:8, font:B, color:C(ch.implemented?'#15803d':'#b91c1c') });
+    y += 6;
+    if (ch.description) y += dW(pg, ch.description, M, y, F, 11, C('#48505f'), W-2*M, 16);
+    y += 14;
+    const imgs=[]; for(const im of (ch.images||[])){ try { imgs.push(im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes)); } catch(e){} }
+    if (imgs.length){
+      const cols = imgs.length===1?1:(imgs.length<=4?2:3), gap=12, cellW=(W-2*M-(cols-1)*gap)/cols;
+      let x=M, rowMaxH=0, colN=0;
+      for (const img of imgs){
+        const sc=cellW/img.width, dw=cellW, dh=img.height*sc;
+        if (H-y-dh < 56){ pg=doc.addPage([W,H]); y=56; x=M; colN=0; rowMaxH=0; }
+        pg.drawRectangle({ x:x-1, y:H-y-dh-1, width:dw+2, height:dh+2, borderColor:C(LINE), borderWidth:1, color:rgb(1,1,1) });
+        pg.drawImage(img, { x, y:H-y-dh, width:dw, height:dh });
+        rowMaxH=Math.max(rowMaxH,dh); colN++;
+        if (colN>=cols){ y+=rowMaxH+gap; x=M; colN=0; rowMaxH=0; } else x+=cellW+gap;
+      }
+    } else {
+      pg.drawText('(no screenshots attached yet)', { x:M, y:H-y-12, size:10, font:F, color:C(MUTE) });
+    }
+  }
+
+  // Closing
+  pg = doc.addPage([W,H]); gradBand(pg, 0, H);
+  pg.drawText(sp((report.title||'')+' · build update'), { x:M, y:H-120, size:9, font:B, color:C('#e8e8ff') });
+  pg.drawText('Thank you', { x:M, y:H/2, size:40, font:B, color:rgb(1,1,1) });
+  pg.drawText(san('Prepared for '+(report.client||'the client')+', by Munshot'), { x:M, y:H/2-34, size:13, font:F, color:C('#e8e8ff') });
+  pg.drawText(san((report.date||'')+'  ·  '+impl+' changes implemented'), { x:M, y:H/2-56, size:11, font:F, color:C('#cbd5e1') });
+  return await doc.save();
+}
+async function genBuildUpdate(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const fbs = d.feedbacks || [];
+  if (!fbs.length){ alert('Add at least one feedback/change (with screenshots) first.'); return; }
+  if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  try {
+    await loadPdfLib();
+    const changes = [];
+    for (const f of fbs){
+      const imgs = [];
+      for (const file of (f.files||[])){ const im = await fetchImg(file); if (im) imgs.push(im); }
+      changes.push({ category: f.category || 'Update', headline: f.label || 'Change', description: f.text || '', implemented: !!f.implemented, images: imgs });
+    }
+    const report = {
+      title: d.name + ' — Build Update',
+      subtitle: 'Changes requested by ' + (d.customer || 'the client') + ' — implemented, verified, with screenshots',
+      client: d.customer || 'Client', date: new Date().toISOString().slice(0,10), changes,
+    };
+    const bytes = await buildDeck(window.PDFLib, report);
+    downloadBytes(bytes, (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf', 'application/pdf');
+  } catch (e){ alert(e.message || 'Could not build the PDF.'); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = '📑 Build update PDF'; } }
 }
 const ARGB = { not_started:'FF9CA3AF', ui_ux:'FF8B5CF6', data_integration:'FF3B82F6', final_check:'FF06B6D4', feedback_open:'FFF59E0B', feedback_incorp:'FFF97316', completed:'FF22C55E' };
 const ARGB_SOFT = { not_started:'FFF0F1F4', ui_ux:'FFF1ECFE', data_integration:'FFE8F0FE', final_check:'FFE3F8FB', feedback_open:'FFFEF3DC', feedback_incorp:'FFFDEEE3', completed:'FFE7F8EE' };
