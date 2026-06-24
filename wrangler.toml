@@ -19,6 +19,11 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # secret (Settings → Variables → Add → Encrypt), then the UI prompts for it once.
 #   EDIT_TOKEN = "..."   (prefer a Secret over a plain var)
 
+# Email sending (Muns raw API). Set the token as a SECRET — never commit it:
+#   npx wrangler secret put MUNS_TOKEN
+# Optional endpoint override (defaults to https://devde.muns.io/email/send/raw):
+#   MUNS_EMAIL_URL = "https://devde.muns.io/email/send/raw"
+
 # Optional: keep the edge cache warm so the first visitor each window is fast.
 # [triggers]
 # crons = ["*/3 * * * *"]

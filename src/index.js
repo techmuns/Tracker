@@ -212,6 +212,40 @@ export default {
         return json({ ok: true, id, fbId, implemented: fb.implemented });
       }
 
+      // ── Email via the Muns raw email API (token from Worker env) ─────────
+      if (pathname === '/api/email') {
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!env.MUNS_TOKEN) return json({ error: 'MUNS_TOKEN is not set in the Worker environment. Add it as a secret (wrangler secret put MUNS_TOKEN).' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const subject = String(body.subject || '').trim();
+        const text = String(body.text || '');
+        // Accept { to: [...] | "a, b" } or the raw API's { email }.
+        let recipients = [];
+        if (Array.isArray(body.to)) recipients = body.to;
+        else if (body.to) recipients = String(body.to).split(',');
+        else if (body.email) recipients = [body.email];
+        recipients = recipients.map((s) => String(s).trim()).filter(Boolean);
+        if (!recipients.length) return json({ error: 'At least one recipient is required.' }, 400);
+        if (!subject) return json({ error: 'Subject is required.' }, 400);
+        const endpoint = env.MUNS_EMAIL_URL || 'https://devde.muns.io/email/send/raw';
+        const results = [];
+        for (const email of recipients) {
+          try {
+            const r = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, subject, text }),
+            });
+            const t = await r.text();
+            results.push({ email, status: r.status, ok: r.ok, response: t.slice(0, 400) });
+          } catch (e) {
+            results.push({ email, ok: false, error: String(e && e.message || e) });
+          }
+        }
+        return json({ ok: results.every((x) => x.ok), sent: results.filter((x) => x.ok).length, results });
+      }
+
       // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
       if (pathname === '/api/file') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
@@ -1651,7 +1685,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -1676,6 +1710,7 @@ function openDetail(id){
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
   const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
   const pdfBtn = document.getElementById('dPdf'); if (pdfBtn) pdfBtn.onclick = () => genBuildUpdate(id, pdfBtn);
+  const mailBtn = document.getElementById('dMail'); if (mailBtn) mailBtn.onclick = () => emailBuildUpdate(id, mailBtn);
   detailModal.querySelectorAll('[data-owner]').forEach(b => b.onclick = () => { closeDetail(); openOwner(b.dataset.owner); });
   detailModal.querySelectorAll('[data-customer]').forEach(b => b.onclick = () => { closeDetail(); openClient(b.dataset.customer); });
   detailModal.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
@@ -1910,6 +1945,39 @@ async function genBuildUpdate(id, btn){
     downloadBytes(bytes, (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf', 'application/pdf');
   } catch (e){ alert(e.message || 'Could not build the PDF.'); }
   finally { if (btn){ btn.disabled = false; btn.textContent = '📑 Build update PDF'; } }
+}
+// Plain-text summary of a dashboard's changes (the raw email API sends text only).
+function buildUpdateText(d){
+  const fbs = d.feedbacks || [], impl = fbs.filter(f => f.implemented).length;
+  const L = [];
+  L.push(d.name + ' — Build Update');
+  L.push('Client: ' + (d.customer || '-') + '   ·   Owner: ' + d.owner);
+  L.push(fbs.length + ' changes  ·  ' + impl + ' implemented  ·  ' + (fbs.length - impl) + ' pending');
+  L.push('');
+  fbs.forEach((f, i) => {
+    L.push((i+1) + '. [' + (f.implemented ? 'IMPLEMENTED' : 'PENDING') + '] ' + (f.category ? '['+f.category+'] ' : '') + (f.label || 'Change'));
+    if (f.text) L.push('    ' + f.text);
+    if (f.link) L.push('    link: ' + f.link);
+    (f.files||[]).forEach(fl => L.push('    file: ' + location.origin + (fl.url || ('/api/file?id='+fl.id))));
+    L.push('');
+  });
+  L.push('— Munshot Tracker');
+  return L.join('\\n');
+}
+async function emailBuildUpdate(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const ownerEmail = (DATA.people && DATA.people[d.owner] && DATA.people[d.owner].email) || '';
+  const def = ['aashita1619@gmail.com', 'ceekay@muns.io'].concat(ownerEmail ? [ownerEmail] : []).join(', ');
+  const to = prompt('Email this Build Update summary to (comma-separated):', def);
+  if (to === null || !to.trim()) return;
+  if (btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const res = await api('POST', '/api/email', { to, subject: 'Build Update — ' + d.name, text: buildUpdateText(d) });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok && j.ok) alert('✅ Email sent to ' + j.sent + ' recipient(s):\\n' + to);
+    else alert('Email failed:\\n' + (j.error || JSON.stringify(j.results || j)).slice(0, 400));
+  } catch (e){ alert('Email error: ' + e.message); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = '📧 Email update'; } }
 }
 const ARGB = { not_started:'FF9CA3AF', ui_ux:'FF8B5CF6', data_integration:'FF3B82F6', final_check:'FF06B6D4', feedback_open:'FFF59E0B', feedback_incorp:'FFF97316', completed:'FF22C55E' };
 const ARGB_SOFT = { not_started:'FFF0F1F4', ui_ux:'FFF1ECFE', data_integration:'FFE8F0FE', final_check:'FFE3F8FB', feedback_open:'FFFEF3DC', feedback_incorp:'FFFDEEE3', completed:'FFE7F8EE' };
