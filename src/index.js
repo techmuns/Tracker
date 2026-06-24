@@ -1224,18 +1224,23 @@ function getLinks(){
   })).filter(l => l.url);
 }
 // ── File upload (PDF / image) → base64 in KV ───────────────────────────────
-function pickFile(){
-  return new Promise((resolve) => { const inp = G('filePick'); inp.value=''; inp.onchange = () => resolve(inp.files[0] || null); inp.click(); });
+function pickFiles(){
+  return new Promise((resolve) => { const inp = G('filePick'); inp.value=''; inp.multiple = true; inp.onchange = () => resolve([...inp.files]); inp.click(); });
 }
 function fileToB64(file){ return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(file); }); }
-async function uploadFile(){
-  const file = await pickFile(); if (!file) return null;
-  if (file.size > 4*1024*1024){ alert('File too large (max 4 MB).'); return null; }
-  const data = await fileToB64(file);
-  const res = await api('POST', '/api/file', { name:file.name, type:file.type, data });
-  if (!res.ok){ alert('Upload failed.'); return null; }
-  const j = await res.json(); return { id:j.id, name:j.name, type:j.type, url:j.url };
+// Upload one or more files at once → returns array of {id,name,type,url}.
+async function uploadFiles(){
+  const files = await pickFiles(); const out = [];
+  for (const file of files){
+    if (file.size > 4*1024*1024){ alert(file.name + ' is over 4 MB — skipped.'); continue; }
+    const data = await fileToB64(file);
+    const res = await api('POST', '/api/file', { name:file.name, type:file.type, data });
+    if (res.ok){ const j = await res.json(); out.push({ id:j.id, name:j.name, type:j.type, url:j.url }); }
+    else alert('Upload failed for ' + file.name);
+  }
+  return out;
 }
+async function uploadFile(){ const a = await uploadFiles(); return a[0] || null; }
 function fileChip(f, removable){
   const img = (f.type||'').startsWith('image/');
   return \`<span class="fchip"><a href="\${esc(f.url||('/api/file?id='+f.id))}" target="_blank" rel="noopener">\${img?'🖼':'📄'} \${esc(f.name||'file')}</a>\${removable?\`<button type="button" class="fx" data-fx="\${esc(f.id)}">×</button>\`:''}</span>\`;
@@ -1253,7 +1258,7 @@ function fbRowHtml(f, i){
       <label class="toggle"><input type="checkbox" class="fb-done" \${f.implemented?'checked':''}><span class="track"></span><span class="tlabel">implemented</span></label>
       <button type="button" class="rm-client fb-rm" title="Remove">×</button></div>
     <textarea class="fb-text" rows="2" placeholder="what the client asked / what you changed">\${esc(f.text||'')}</textarea>
-    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 screenshot / file</button></div>
+    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 add screenshots (pick many)</button></div>
     <div class="filebox fb-files"></div>
   </div>\`;
 }
@@ -1272,7 +1277,7 @@ function renderFbRows(){
     const fb = row.querySelector('.fb-files'); fb.innerHTML = (f.files||[]).map(x => fileChip(x,true)).join('');
     fb.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { f.files = f.files.filter(x => x.id !== b.dataset.fx); renderFbRows(); });
     row.querySelector('.fb-rm').onclick = () => { syncFbFromDom(); fbState.splice(i,1); renderFbRows(); };
-    row.querySelector('.fb-file').onclick = async () => { syncFbFromDom(); const up = await uploadFile(); if (up){ fbState[i].files = (fbState[i].files||[]).concat(up); renderFbRows(); } };
+    row.querySelector('.fb-file').onclick = async () => { syncFbFromDom(); const ups = await uploadFiles(); if (ups.length){ fbState[i].files = (fbState[i].files||[]).concat(ups); renderFbRows(); } };
   });
 }
 function getFeedbacks(){ syncFbFromDom(); return fbState.filter(f => f.label || f.text || f.link || (f.files && f.files.length)); }
@@ -1321,7 +1326,7 @@ if (CFG.manualEnabled){
     setLinks(cur.concat({ label: nextLabel, url:'' }));
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
-  G('addReqFile').onclick = async () => { const up = await uploadFile(); if (up){ reqFilesState.push(up); renderReqFiles(); } };
+  G('addReqFile').onclick = async () => { const ups = await uploadFiles(); if (ups.length){ reqFilesState.push(...ups); renderReqFiles(); } };
   G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
@@ -1891,37 +1896,42 @@ async function buildDeck(PDFLib, report){
   pg.drawRectangle({ x:M, y:163, width:W-2*M, height:25, color:C(GOLD) });
   D(pg, 'All '+report.changes.length+' changes - '+impl+' implemented · '+pend+' pending', M+13, 171, FB, 10, NAVY);
 
-  // One page per change
+  // One change → one or more pages (all its screenshots, 2 per page)
   let pageNo = 1;
   for (const ch of report.changes){
-    pg = doc.addPage([W,H]); pageNo++; pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
-    D(pg, sp(ch.category||'Update'), M, 548, FB, 8, GOLD);
-    wrap(ch.headline||'', SB, 22, W-2*M-150).slice(0,2).forEach((ln,i)=>D(pg,ln,M,522-i*26,SB,22,NAVY));
-    const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
-    pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
-    D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
-    pg.drawRectangle({ x:8, y:158, width:W-16, height:280, color:C(NAVY) });   // navy stage
     const imgs=[]; for(const im of (ch.images||[])){ try { imgs.push(im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes)); } catch(e){} }
-    const two = imgs.slice(0,2);
-    if (two.length){
-      const sw = two.length===2 ? 370 : 600, gap=16, totW=two.length*sw+(two.length-1)*gap; let x=(W-totW)/2;
-      two.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
-        const cy = 158 + (280-dh)/2;
-        pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) });
-        pg.drawImage(im, { x, y:cy, width:dw, height:dh });
-        x += sw + gap; });
-      if (imgs.length>2) D(pg, '+'+(imgs.length-2)+' more screenshots', M, 148, F, 8, BODY);
-    } else { D(pg, '(no screenshots attached for this change yet)', M, 300, F, 12, GRAY); }
-    if (ch.description){
-      const sents = san(ch.description).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
-      sents.forEach(s => wrap('-  '+s, F, 9.5, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln)));
-      const half = Math.ceil(lines.length/2);
-      lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,95-i*13,F,9.5,BODY));
-      lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,95-i*13,F,9.5,BODY));
+    const pairs=[]; for (let i=0;i<imgs.length;i+=2) pairs.push(imgs.slice(i,i+2));
+    if (!pairs.length) pairs.push([]);
+    for (let pi=0; pi<pairs.length; pi++){
+      const pair = pairs[pi];
+      pg = doc.addPage([W,H]); pageNo++; pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+      D(pg, sp(ch.category||'Update'), M, 548, FB, 8, GOLD);
+      const head = (ch.headline||'') + (pi>0 ? '  (continued '+(pi+1)+'/'+pairs.length+')' : '');
+      wrap(head, SB, 22, W-2*M-150).slice(0,2).forEach((ln,i)=>D(pg,ln,M,522-i*26,SB,22,NAVY));
+      const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
+      pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
+      D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
+      pg.drawRectangle({ x:8, y:158, width:W-16, height:280, color:C(NAVY) });   // navy stage
+      if (pair.length){
+        const sw = pair.length===2 ? 370 : 600, gap=16, totW=pair.length*sw+(pair.length-1)*gap; let x=(W-totW)/2;
+        pair.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
+          const cy = 158 + (280-dh)/2;
+          pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) });
+          pg.drawImage(im, { x, y:cy, width:dw, height:dh });
+          x += sw + gap; });
+      } else { D(pg, '(no screenshots attached for this change yet)', M, 300, F, 12, GRAY); }
+      // description on the change's first page only
+      if (pi===0 && ch.description){
+        const sents = san(ch.description).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
+        sents.forEach(s => wrap('-  '+s, F, 9.5, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln)));
+        const half = Math.ceil(lines.length/2);
+        lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,95-i*13,F,9.5,BODY));
+        lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,95-i*13,F,9.5,BODY));
+      }
+      D(pg, report.title||'', M, 24, F, 7, FOOT);
+      const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT);
+      const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT);
     }
-    D(pg, report.title||'', M, 24, F, 7, FOOT);
-    const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT);
-    const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT);
   }
 
   // Closing
