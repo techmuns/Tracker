@@ -212,6 +212,43 @@ export default {
         return json({ ok: true, id, fbId, implemented: fb.implemented });
       }
 
+      // ── Email via the Muns raw email API (token from Worker env) ─────────
+      if (pathname === '/api/email') {
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!env.MUNS_TOKEN) return json({ error: 'MUNS_TOKEN is not set in the Worker environment. Add it as a secret (wrangler secret put MUNS_TOKEN).' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const subject = String(body.subject || '').trim();
+        const text = String(body.text || '');
+        const htmlBody = String(body.html || '');
+        // Accept { to: [...] | "a, b" } or the raw API's { email }.
+        let recipients = [];
+        if (Array.isArray(body.to)) recipients = body.to;
+        else if (body.to) recipients = String(body.to).split(',');
+        else if (body.email) recipients = [body.email];
+        recipients = recipients.map((s) => String(s).trim()).filter(Boolean);
+        if (!recipients.length) return json({ error: 'At least one recipient is required.' }, 400);
+        if (!subject) return json({ error: 'Subject is required.' }, 400);
+        const endpoint = env.MUNS_EMAIL_URL || 'https://devde.muns.io/email/send/raw';
+        const results = [];
+        for (const email of recipients) {
+          try {
+            // The Muns raw API wants EXACTLY ONE of text or html — prefer html.
+            const payload = htmlBody ? { email, subject, html: htmlBody } : { email, subject, text };
+            const r = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            const t = await r.text();
+            results.push({ email, status: r.status, ok: r.ok, response: t.slice(0, 400) });
+          } catch (e) {
+            results.push({ email, ok: false, error: String(e && e.message || e) });
+          }
+        }
+        return json({ ok: results.every((x) => x.ok), sent: results.filter((x) => x.ok).length, results });
+      }
+
       // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
       if (pathname === '/api/file') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
@@ -755,6 +792,7 @@ function renderPage(data, opts) {
   .fbv { border:1px solid var(--line); border-radius:11px; padding:11px 13px; margin-bottom:9px; background:var(--surface2); }
   .fbv-top { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
   .fbv-top b { font-size:13.5px; }
+  .fbcat { font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-weak); border-radius:5px; padding:2px 7px; }
   .impl { font:inherit; font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px; border:1px solid transparent; cursor:pointer; margin-left:auto; }
   .impl.yes { color:#15803d; background:#dcfce7; border-color:#86efac; }
   .impl.no { color:#b42318; background:#fef3f2; border-color:#fda29b; }
@@ -769,8 +807,9 @@ function renderPage(data, opts) {
   /* Feedback editor rows (form) */
   .fb-row { border:1px solid var(--line); border-radius:11px; padding:10px; margin-bottom:9px; background:var(--surface2); }
   .fb-top { display:flex; gap:8px; align-items:center; margin-bottom:7px; flex-wrap:wrap; }
+  .fb-top .fb-cat { flex:0 0 30%; min-width:110px; }
   .fb-top .fb-label { flex:1; min-width:120px; }
-  .fb-top .fb-date { width:140px; }
+  .fb-top .fb-date { width:138px; }
   .fb-bot { display:flex; gap:8px; margin-top:7px; }
   .fb-bot .fb-link { flex:1; }
   .fb-row textarea { width:100%; }
@@ -1210,16 +1249,17 @@ function renderReqFiles(){
 }
 function fbRowHtml(f, i){
   return \`<div class="fb-row">
-    <div class="fb-top"><input class="fb-label" placeholder="Feedback \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
+    <div class="fb-top"><input class="fb-cat" placeholder="area, e.g. Data Audit" value="\${esc(f.category||'')}"><input class="fb-label" placeholder="headline / change \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
       <label class="toggle"><input type="checkbox" class="fb-done" \${f.implemented?'checked':''}><span class="track"></span><span class="tlabel">implemented</span></label>
       <button type="button" class="rm-client fb-rm" title="Remove">×</button></div>
-    <textarea class="fb-text" rows="2" placeholder="what the client said / changes asked">\${esc(f.text||'')}</textarea>
-    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 attach</button></div>
+    <textarea class="fb-text" rows="2" placeholder="what the client asked / what you changed">\${esc(f.text||'')}</textarea>
+    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 screenshot / file</button></div>
     <div class="filebox fb-files"></div>
   </div>\`;
 }
 function syncFbFromDom(){
   [...G('fbRows').children].forEach((row,i) => { const f = fbState[i]; if(!f) return;
+    f.category = row.querySelector('.fb-cat').value;
     f.label = row.querySelector('.fb-label').value; f.date = row.querySelector('.fb-date').value;
     f.text = row.querySelector('.fb-text').value; f.link = row.querySelector('.fb-link').value;
     f.implemented = row.querySelector('.fb-done').checked;
@@ -1282,7 +1322,7 @@ if (CFG.manualEnabled){
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
   G('addReqFile').onclick = async () => { const up = await uploadFile(); if (up){ reqFilesState.push(up); renderReqFiles(); } };
-  G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
+  G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
     const msg = G('formMsg');
@@ -1630,7 +1670,7 @@ function factCell(label, val){ return \`<div class="fact"><div class="fl">\${lab
 function fbView(did, f, editable){
   const u = f.link;
   return \`<div class="fbv">
-    <div class="fbv-top"><b>\${esc(f.label||'Feedback')}</b>\${f.date?\`<span class="muted"> · \${esc(f.date)}</span>\`:''}
+    <div class="fbv-top">\${f.category?\`<span class="fbcat">\${esc(f.category)}</span>\`:''}<b>\${esc(f.label||'Feedback')}</b>\${f.date?\`<span class="muted"> · \${esc(f.date)}</span>\`:''}
       <button class="impl \${f.implemented?'yes':'no'}" \${editable?\`data-fbtoggle="\${esc(did)}" data-fbid="\${esc(f.id)}"\`:'disabled'}>\${f.implemented?'✓ implemented':'✗ pending'}</button></div>
     \${f.text?\`<div class="dnote">\${esc(f.text)}</div>\`:''}
     \${(u||(f.files&&f.files.length))?\`<div class="dlinks">\${u?\`<a href="\${esc(u)}" target="_blank" rel="noopener" class="lnk">▶ recording / message</a>\`:''}\${fileGrid(f.files)}</div>\`:''}
@@ -1648,7 +1688,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -1672,6 +1712,8 @@ function openDetail(id){
   G('dX').onclick = closeDetail;
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
   const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
+  const pdfBtn = document.getElementById('dPdf'); if (pdfBtn) pdfBtn.onclick = () => genBuildUpdate(id, pdfBtn);
+  const mailBtn = document.getElementById('dMail'); if (mailBtn) mailBtn.onclick = () => emailBuildUpdate(id, mailBtn);
   detailModal.querySelectorAll('[data-owner]').forEach(b => b.onclick = () => { closeDetail(); openOwner(b.dataset.owner); });
   detailModal.querySelectorAll('[data-customer]').forEach(b => b.onclick = () => { closeDetail(); openClient(b.dataset.customer); });
   detailModal.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
@@ -1789,6 +1831,207 @@ async function loadExcelJS(){
   ];
   for (const url of cdns){ try { await loadScript(url); if (window.ExcelJS) return; } catch(e){} }
   throw new Error('Could not load the Excel library (network blocked?).');
+}
+
+// ── Build-Update PDF deck (client report for the next meeting) ──────────────
+async function loadPdfLib(){
+  if (window.PDFLib) return;
+  const cdns = [
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
+    'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
+  ];
+  for (const url of cdns){ try { await loadScript(url); if (window.PDFLib) return; } catch(e){} }
+  throw new Error('Could not load the PDF library (network blocked?).');
+}
+function downloadBytes(bytes, filename, type){
+  const blob = new Blob([bytes], { type }); const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function fetchImg(f){
+  try {
+    const r = await fetch(f.url || ('/api/file?id='+f.id)); const buf = new Uint8Array(await r.arrayBuffer());
+    const isPng = (f.type||'').includes('png') || (buf[0]===0x89 && buf[1]===0x50);
+    const isJpg = (f.type||'').includes('jpeg') || (f.type||'').includes('jpg') || (buf[0]===0xFF && buf[1]===0xD8);
+    if (!isPng && !isJpg) return null;
+    return { bytes: buf, png: isPng };
+  } catch(e){ return null; }
+}
+// Same layout engine as the prototype — cover, one page per change, closing.
+// Landscape "Build Update" deck — matches Munshot's client-presentation format:
+// navy cover (gold serif), one cream page per change (navy stage of screenshots,
+// 2-column bulleted description), navy closing.
+async function buildDeck(PDFLib, report){
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const doc = await PDFDocument.create();
+  const F  = await doc.embedFont(StandardFonts.Helvetica);
+  const FB = await doc.embedFont(StandardFonts.HelveticaBold);
+  const SB = await doc.embedFont(StandardFonts.TimesRomanBold);
+  const W = 841.92, H = 594.96, M = 45;
+  const C = (h) => rgb(parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255);
+  const NAVY='#16294a', NAVY2='#11203c', CREAM='#faf6ec', GOLD='#c9a24a', GREEN='#0e7a52', AMBER='#b4791e', WHITE='#ffffff', GRAY='#c9cede', BODY='#33405a', FOOT='#9aa3b2';
+  const san = (s) => String(s==null?'':s).replace(/₹/g,'Rs ').replace(/[‘’‚′]/g,"'").replace(/[“”„″]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/[•●◆]/g,'-').replace(/[^\\x20-\\x7E\\xA1-\\xFF]/g,'');
+  const sp = (s) => san(s).toUpperCase().split('').join(' ');
+  const tw = (t,f,s) => f.widthOfTextAtSize(san(t),s);
+  const D = (pg,t,x,y,f,s,c) => pg.drawText(san(t),{ x, y, size:s, font:f, color:C(c) });
+  function wrap(t,f,s,maxW){ const w=san(t).split(/\\s+/), L=[]; let cur=''; for(const x of w){ const n=cur?cur+' '+x:x; if(f.widthOfTextAtSize(n,s)>maxW && cur){ L.push(cur); cur=x; } else cur=n; } if(cur)L.push(cur); return L; }
+  function gradient(pg,a,b){ const A=[parseInt(a.slice(1,3),16),parseInt(a.slice(3,5),16),parseInt(a.slice(5,7),16)],Bc=[parseInt(b.slice(1,3),16),parseInt(b.slice(3,5),16),parseInt(b.slice(5,7),16)]; const n=100; for(let i=0;i<n;i++){ const t=i/(n-1); pg.drawRectangle({ x:W*i/n, y:0, width:W/n+1, height:H, color:rgb((A[0]+(Bc[0]-A[0])*t)/255,(A[1]+(Bc[1]-A[1])*t)/255,(A[2]+(Bc[2]-A[2])*t)/255) }); } }
+  const impl = report.changes.filter(c=>c.implemented).length, pend = report.changes.length-impl;
+
+  // Cover
+  let pg = doc.addPage([W,H]); gradient(pg,NAVY,NAVY2);
+  pg.drawRectangle({ x:M, y:420, width:30, height:3, color:C(GOLD) });
+  D(pg, sp('Weekly build update · '+(report.date||'')), M, 406, FB, 8, GOLD);
+  wrap(report.title||'Build Update', SB, 40, W-2*M).forEach((ln,i)=>D(pg,ln,M,365-i*42,SB,40,WHITE));
+  D(pg, report.subtitle||'', M, 298, F, 13, GRAY);
+  const c2=342;
+  const meta=(x,ruleW,y,lab,val)=>{ pg.drawRectangle({x,y:y+13,width:ruleW,height:0.8,color:C(GOLD)}); D(pg,sp(lab),x,y,FB,8,GOLD); D(pg,val,x,y-12,FB,10,WHITE); };
+  meta(M,285,261,'Date',report.date||''); meta(c2,455,261,'Prepared for',(report.client||'Client')+', by Munshot');
+  meta(M,285,224,'Coverage',report.changes.length+' changes'); meta(c2,455,224,'Walkthrough',report.changes.length+' feature pages');
+  pg.drawRectangle({ x:M, y:163, width:W-2*M, height:25, color:C(GOLD) });
+  D(pg, 'All '+report.changes.length+' changes - '+impl+' implemented · '+pend+' pending', M+13, 171, FB, 10, NAVY);
+
+  // One page per change
+  let pageNo = 1;
+  for (const ch of report.changes){
+    pg = doc.addPage([W,H]); pageNo++; pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+    D(pg, sp(ch.category||'Update'), M, 548, FB, 8, GOLD);
+    wrap(ch.headline||'', SB, 22, W-2*M-150).slice(0,2).forEach((ln,i)=>D(pg,ln,M,522-i*26,SB,22,NAVY));
+    const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
+    pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
+    D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
+    pg.drawRectangle({ x:8, y:158, width:W-16, height:280, color:C(NAVY) });   // navy stage
+    const imgs=[]; for(const im of (ch.images||[])){ try { imgs.push(im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes)); } catch(e){} }
+    const two = imgs.slice(0,2);
+    if (two.length){
+      const sw = two.length===2 ? 370 : 600, gap=16, totW=two.length*sw+(two.length-1)*gap; let x=(W-totW)/2;
+      two.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
+        const cy = 158 + (280-dh)/2;
+        pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) });
+        pg.drawImage(im, { x, y:cy, width:dw, height:dh });
+        x += sw + gap; });
+      if (imgs.length>2) D(pg, '+'+(imgs.length-2)+' more screenshots', M, 148, F, 8, BODY);
+    } else { D(pg, '(no screenshots attached for this change yet)', M, 300, F, 12, GRAY); }
+    if (ch.description){
+      const sents = san(ch.description).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
+      sents.forEach(s => wrap('-  '+s, F, 9.5, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln)));
+      const half = Math.ceil(lines.length/2);
+      lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,95-i*13,F,9.5,BODY));
+      lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,95-i*13,F,9.5,BODY));
+    }
+    D(pg, report.title||'', M, 24, F, 7, FOOT);
+    const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT);
+    const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT);
+  }
+
+  // Closing
+  pg = doc.addPage([W,H]); gradient(pg,NAVY,NAVY2);
+  pg.drawRectangle({ x:M, y:H/2+78, width:30, height:3, color:C(GOLD) });
+  D(pg, sp('Weekly build update · '+(report.date||'')), M, H/2+62, FB, 8, GOLD);
+  D(pg, 'Thank you', M, H/2-6, SB, 46, WHITE);
+  D(pg, 'Prepared for '+(report.client||'the client')+', by Munshot', M, H/2-40, F, 13, GRAY);
+  D(pg, (report.date||'')+'  ·  '+impl+' of '+report.changes.length+' changes implemented', M, H/2-60, F, 11, GRAY);
+  return await doc.save();
+}
+async function genBuildUpdate(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const fbs = d.feedbacks || [];
+  if (!fbs.length){ alert('Add at least one feedback/change (with screenshots) first.'); return; }
+  if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  try {
+    await loadPdfLib();
+    const changes = [];
+    for (const f of fbs){
+      const imgs = [];
+      for (const file of (f.files||[])){ const im = await fetchImg(file); if (im) imgs.push(im); }
+      changes.push({ category: f.category || 'Update', headline: f.label || 'Change', description: f.text || '', implemented: !!f.implemented, images: imgs });
+    }
+    const report = {
+      title: d.name + ' — Build Update',
+      subtitle: 'Implemented changes, verified, with a visual walkthrough',
+      client: d.customer || 'Client', date: new Date().toISOString().slice(0,10), changes,
+    };
+    const bytes = await buildDeck(window.PDFLib, report);
+    downloadBytes(bytes, (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf', 'application/pdf');
+  } catch (e){ alert(e.message || 'Could not build the PDF.'); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = '📑 Build update PDF'; } }
+}
+// Plain-text summary of a dashboard's changes (the raw email API sends text only).
+function buildUpdateText(d){
+  const fbs = d.feedbacks || [], impl = fbs.filter(f => f.implemented).length;
+  const L = [];
+  L.push(d.name + ' — Build Update');
+  L.push('Client: ' + (d.customer || '-') + '   ·   Owner: ' + d.owner);
+  L.push(fbs.length + ' changes  ·  ' + impl + ' implemented  ·  ' + (fbs.length - impl) + ' pending');
+  L.push('');
+  fbs.forEach((f, i) => {
+    L.push((i+1) + '. [' + (f.implemented ? 'IMPLEMENTED' : 'PENDING') + '] ' + (f.category ? '['+f.category+'] ' : '') + (f.label || 'Change'));
+    if (f.text) L.push('    ' + f.text);
+    if (f.link) L.push('    link: ' + f.link);
+    (f.files||[]).forEach(fl => L.push('    file: ' + location.origin + (fl.url || ('/api/file?id='+fl.id))));
+    L.push('');
+  });
+  L.push('— Munshot Tracker');
+  return L.join('\\n');
+}
+// Rich HTML email — header, each change as a card with badge + inline screenshots.
+function buildUpdateHtml(d, pdfUrl){
+  const fbs = d.feedbacks || [], impl = fbs.filter(f => f.implemented).length, O = location.origin;
+  const badge = ok => '<span style="font:700 11px Arial;color:'+(ok?'#15803d':'#b91c1c')+';background:'+(ok?'#dcfce7':'#fee2e2')+';border-radius:999px;padding:3px 10px;white-space:nowrap">'+(ok?'IMPLEMENTED':'PENDING')+'</span>';
+  const cta = pdfUrl ? '<div style="text-align:center;margin:2px 0 18px"><a href="'+esc(pdfUrl)+'" style="display:inline-block;background:#4f46e5;color:#fff;font:700 14px Arial;text-decoration:none;padding:13px 26px;border-radius:10px">📑 Open the full Build Update (PDF)</a></div>' : '';
+  const cards = fbs.map((f,i) => {
+    const imgs = (f.files||[]).filter(x => (x.type||'').startsWith('image/'))
+      .map(x => '<img src="'+O+esc(x.url||('/api/file?id='+x.id))+'" alt="" style="max-width:100%;border:1px solid #e5e8ef;border-radius:8px;margin:8px 0 0;display:block">').join('');
+    return '<div style="border:1px solid #e5e8ef;border-radius:12px;padding:16px;margin:0 0 14px">'
+      + (f.category?'<div style="font:800 10px Arial;letter-spacing:.06em;text-transform:uppercase;color:#4f46e5">'+esc(f.category)+'</div>':'')
+      + '<div style="font:700 16px Arial;color:#141925;margin:4px 0 8px">'+esc(f.label||('Change '+(i+1)))+' &nbsp; '+badge(f.implemented)+'</div>'
+      + (f.text?'<div style="font:14px/1.55 Arial;color:#48505f">'+esc(f.text)+'</div>':'')
+      + (f.link?'<div style="margin-top:8px"><a href="'+esc(f.link)+'" style="color:#4f46e5;font:13px Arial;text-decoration:none">▶ recording / message</a></div>':'')
+      + imgs + '</div>';
+  }).join('');
+  return '<div style="max-width:640px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#141925">'
+    + '<div style="background:#4f46e5;background:linear-gradient(135deg,#4f46e5,#9333ea);color:#fff;padding:22px;border-radius:14px 14px 0 0">'
+      + '<div style="font:800 17px Arial">◆ Munshot</div>'
+      + '<div style="font:800 21px Arial;margin-top:8px">'+esc(d.name)+' — Build Update</div>'
+      + '<div style="font:13px Arial;opacity:.92;margin-top:4px">For '+esc(d.customer||'the client')+' &nbsp;·&nbsp; '+fbs.length+' changes &nbsp;·&nbsp; '+impl+' implemented &nbsp;·&nbsp; '+(fbs.length-impl)+' pending</div>'
+    + '</div>'
+    + '<div style="padding:18px 2px">'+cta+cards+'</div>'
+    + '<div style="color:#727a8a;font:12px Arial;text-align:center;padding:8px 0 18px">Auto-generated by Munshot Tracker</div>'
+  + '</div>';
+}
+function bytesToB64(bytes){ let bin=''; const ch=0x8000; for (let i=0;i<bytes.length;i+=ch) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+ch)); return btoa(bin); }
+async function emailBuildUpdate(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  if (!(d.feedbacks||[]).length){ alert('Add at least one feedback/change first.'); return; }
+  const def = 'aashita1619@gmail.com'; // test recipient — change to ceekay@muns.io + team once verified
+  const to = prompt('Email this Build Update to (comma-separated):', def);
+  if (to === null || !to.trim()) return;
+  if (btn){ btn.disabled = true; btn.textContent = 'Building PDF…'; }
+  try {
+    // 1) generate the polished PDF deck
+    await loadPdfLib();
+    const changes = [];
+    for (const f of (d.feedbacks||[])){
+      const imgs = []; for (const file of (f.files||[])){ const im = await fetchImg(file); if (im) imgs.push(im); }
+      changes.push({ category: f.category||'Update', headline: f.label||'Change', description: f.text||'', implemented: !!f.implemented, images: imgs });
+    }
+    const report = { title: d.name + ' — Build Update', subtitle: 'Changes requested by ' + (d.customer||'the client') + ' — implemented, with screenshots',
+      client: d.customer||'Client', date: new Date().toISOString().slice(0,10), changes };
+    const bytes = await buildDeck(window.PDFLib, report);
+    // 2) host it so the email can link to the real deck
+    let pdfUrl = '';
+    try {
+      const up = await api('POST', '/api/file', { name: (d.name||'build-update').replace(/[^a-z0-9]+/gi,'-').toLowerCase()+'.pdf', type:'application/pdf', data: bytesToB64(new Uint8Array(bytes)) });
+      if (up.ok){ const j = await up.json(); pdfUrl = location.origin + (j.url || ('/api/file?id='+j.id)); }
+    } catch(e){}
+    // 3) send: branded preview + a button to the full PDF
+    if (btn) btn.textContent = 'Sending…';
+    const res = await api('POST', '/api/email', { to, subject: 'Build Update — ' + d.name, html: buildUpdateHtml(d, pdfUrl), text: buildUpdateText(d) });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok && j.ok) alert('✅ Email sent to ' + j.sent + ' recipient(s):\\n' + to + (pdfUrl?'\\n\\nWith a link to the full PDF.':'\\n\\n(PDF link unavailable — sent preview only.)'));
+    else alert('Email failed:\\n' + (j.error || JSON.stringify(j.results || j)).slice(0, 400));
+  } catch (e){ alert('Email error: ' + e.message); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = '📧 Email update'; } }
 }
 const ARGB = { not_started:'FF9CA3AF', ui_ux:'FF8B5CF6', data_integration:'FF3B82F6', final_check:'FF06B6D4', feedback_open:'FFF59E0B', feedback_incorp:'FFF97316', completed:'FF22C55E' };
 const ARGB_SOFT = { not_started:'FFF0F1F4', ui_ux:'FFF1ECFE', data_integration:'FFE8F0FE', final_check:'FFE3F8FB', feedback_open:'FFFEF3DC', feedback_incorp:'FFFDEEE3', completed:'FFE7F8EE' };

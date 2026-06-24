@@ -169,11 +169,12 @@ test('feedbacks, due date and requirement files pass through; fbPending counts o
   assert.equal(data.fbPending, 1); // only the un-implemented one
 });
 
-test('normalizeFeedbacks defaults labels and drops bad links', () => {
+test('normalizeFeedbacks defaults labels, keeps category, drops bad links', () => {
   const d = manualToDashboard({ id: 'z', name: 'Z', owner: 'X', customer: 'C',
-    feedbacks: [{ text: 'hi', link: 'not-a-url' }, { label: 'Call 2', link: 'https://x.test' }] });
+    feedbacks: [{ text: 'hi', link: 'not-a-url', category: 'Data Audit' }, { label: 'Call 2', link: 'https://x.test' }] });
   assert.equal(d.feedbacks[0].label, 'Feedback 1');
-  assert.equal(d.feedbacks[0].link, '');           // bad link stripped
+  assert.equal(d.feedbacks[0].category, 'Data Audit'); // category for the PDF deck
+  assert.equal(d.feedbacks[0].link, '');               // bad link stripped
   assert.equal(d.feedbacks[1].link, 'https://x.test');
 });
 

@@ -257,6 +257,7 @@ export function normalizeFeedbacks(list) {
   return list.map((f, i) => ({
     id: f.id || 'fb' + i,
     label: clean(f.label) || 'Feedback ' + (i + 1),
+    category: clean(f.category),
     date: clean(f.date),
     text: clean(f.text),
     link: /^https?:\/\//i.test(String(f.link ?? '').trim()) ? String(f.link).trim() : '',
