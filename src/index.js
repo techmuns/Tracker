@@ -233,8 +233,8 @@ export default {
         const results = [];
         for (const email of recipients) {
           try {
-            const payload = { email, subject, text };
-            if (htmlBody) payload.html = htmlBody;
+            // The Muns raw API wants EXACTLY ONE of text or html — prefer html.
+            const payload = htmlBody ? { email, subject, html: htmlBody } : { email, subject, text };
             const r = await fetch(endpoint, {
               method: 'POST',
               headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
