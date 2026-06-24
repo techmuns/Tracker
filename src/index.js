@@ -2013,7 +2013,7 @@ function bytesToB64(bytes){ let bin=''; const ch=0x8000; for (let i=0;i<bytes.le
 async function emailBuildUpdate(id, btn){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   if (!(d.feedbacks||[]).length){ alert('Add at least one feedback/change first.'); return; }
-  const def = 'aashita1619@gmail.com'; // test recipient — change to ceekay@muns.io + team once verified
+  const def = 'nadamsaluja@gmail.com'; // default recipient
   const to = prompt('Email this Build Update to (comma-separated):', def);
   if (to === null || !to.trim()) return;
   if (btn){ btn.disabled = true; btn.textContent = 'Building PDF…'; }
