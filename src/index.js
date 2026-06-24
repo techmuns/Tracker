@@ -1923,10 +1923,10 @@ async function buildDeck(PDFLib, report){
       // description on the change's first page only
       if (pi===0 && ch.description){
         const sents = san(ch.description).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
-        sents.forEach(s => wrap('-  '+s, F, 9.5, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln)));
-        const half = Math.ceil(lines.length/2);
-        lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,95-i*13,F,9.5,BODY));
-        lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,95-i*13,F,9.5,BODY));
+        sents.forEach(s => wrap('-  '+s, F, 10, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln)));
+        const half = Math.ceil(lines.length/2);          // balance across two columns
+        lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,148-i*14,F,10,BODY));
+        lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,148-i*14,F,10,BODY));
       }
       D(pg, report.title||'', M, 24, F, 7, FOOT);
       const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT);
