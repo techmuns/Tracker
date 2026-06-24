@@ -813,6 +813,9 @@ function renderPage(data, opts) {
   .fb-bot { display:flex; gap:8px; margin-top:7px; }
   .fb-bot .fb-link { flex:1; }
   .fb-row textarea { width:100%; }
+  .ssrow { display:flex; align-items:center; gap:8px; margin:5px 0; }
+  .ssrow .fchip { flex:0 0 auto; max-width:40%; overflow:hidden; }
+  .ssrow .sscap { flex:1; min-width:0; font-size:12px; }
   /* Toggle switch */
   .toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:var(--muted); }
   .toggle input { display:none; }
@@ -891,7 +894,7 @@ ${opts.manualEnabled ? `
         <div class="filebox" id="reqFiles"></div>
         <button class="btn ghost sm" id="addReqFile" type="button">📎 Upload requirement file</button>
       </label>
-      <label class="wide">Feedbacks <span class="hint">(one per client call — message/link/file + an "implemented" toggle)</span>
+      <label class="wide">Feedbacks <span class="hint">(upload many screenshots; give each its OWN description → each becomes its own PDF page)</span>
         <div id="fbRows"></div>
         <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
       </label>
@@ -1274,8 +1277,10 @@ function renderFbRows(){
   const box = G('fbRows'); box.innerHTML = fbState.map((f,i) => fbRowHtml(f,i)).join('');
   [...box.children].forEach((row,i) => {
     const f = fbState[i];
-    const fb = row.querySelector('.fb-files'); fb.innerHTML = (f.files||[]).map(x => fileChip(x,true)).join('');
+    const fb = row.querySelector('.fb-files');
+    fb.innerHTML = (f.files||[]).map((x,k) => '<div class="ssrow">'+fileChip(x,true)+'<input class="sscap" data-k="'+k+'" placeholder="this screenshot&#39;s own description (its own PDF page) — optional" value="'+esc(x.caption||'')+'"></div>').join('');
     fb.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { f.files = f.files.filter(x => x.id !== b.dataset.fx); renderFbRows(); });
+    fb.querySelectorAll('.sscap').forEach(inp => inp.oninput = () => { const fl=f.files[+inp.dataset.k]; if(fl) fl.caption = inp.value; });
     row.querySelector('.fb-rm').onclick = () => { syncFbFromDom(); fbState.splice(i,1); renderFbRows(); };
     row.querySelector('.fb-file').onclick = async () => { syncFbFromDom(); const ups = await uploadFiles(); if (ups.length){ fbState[i].files = (fbState[i].files||[]).concat(ups); renderFbRows(); } };
   });
@@ -1896,41 +1901,41 @@ async function buildDeck(PDFLib, report){
   pg.drawRectangle({ x:M, y:163, width:W-2*M, height:25, color:C(GOLD) });
   D(pg, 'All '+report.changes.length+' changes - '+impl+' implemented · '+pend+' pending', M+13, 171, FB, 10, NAVY);
 
-  // One change → one or more pages (all its screenshots, 2 per page)
+  // Pages per change. If the screenshots carry their own captions, each
+  // screenshot becomes its OWN page with its OWN description; otherwise the
+  // change's screenshots flow 2-per-page sharing the change description.
   let pageNo = 1;
+  function changePage(ch, headSuffix){
+    pg = doc.addPage([W,H]); pageNo++; pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+    D(pg, sp(ch.category||'Update'), M, 548, FB, 8, GOLD);
+    wrap((ch.headline||'')+(headSuffix||''), SB, 22, W-2*M-150).slice(0,2).forEach((ln,i)=>D(pg,ln,M,522-i*26,SB,22,NAVY));
+    const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
+    pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
+    D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
+    pg.drawRectangle({ x:8, y:158, width:W-16, height:280, color:C(NAVY) });
+  }
+  function drawShots(shots){
+    const sw = shots.length===2 ? 370 : 600, gap=16, totW=shots.length*sw+(shots.length-1)*gap; let x=(W-totW)/2;
+    shots.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
+      const cy=158+(280-dh)/2; pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) }); pg.drawImage(im,{ x, y:cy, width:dw, height:dh }); x+=sw+gap; });
+  }
+  function drawDesc(text){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
+    sents.forEach(s => wrap('-  '+s, F, 10, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln))); const half=Math.ceil(lines.length/2);
+    lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,148-i*14,F,10,BODY)); lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,148-i*14,F,10,BODY)); }
+  function drawFooter(){ D(pg, report.title||'', M, 24, F, 7, FOOT); const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT); const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT); }
+
   for (const ch of report.changes){
-    const imgs=[]; for(const im of (ch.images||[])){ try { imgs.push(im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes)); } catch(e){} }
-    const pairs=[]; for (let i=0;i<imgs.length;i+=2) pairs.push(imgs.slice(i,i+2));
-    if (!pairs.length) pairs.push([]);
-    for (let pi=0; pi<pairs.length; pi++){
-      const pair = pairs[pi];
-      pg = doc.addPage([W,H]); pageNo++; pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
-      D(pg, sp(ch.category||'Update'), M, 548, FB, 8, GOLD);
-      const head = (ch.headline||'') + (pi>0 ? '  (continued '+(pi+1)+'/'+pairs.length+')' : '');
-      wrap(head, SB, 22, W-2*M-150).slice(0,2).forEach((ln,i)=>D(pg,ln,M,522-i*26,SB,22,NAVY));
-      const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
-      pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
-      D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
-      pg.drawRectangle({ x:8, y:158, width:W-16, height:280, color:C(NAVY) });   // navy stage
-      if (pair.length){
-        const sw = pair.length===2 ? 370 : 600, gap=16, totW=pair.length*sw+(pair.length-1)*gap; let x=(W-totW)/2;
-        pair.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
-          const cy = 158 + (280-dh)/2;
-          pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) });
-          pg.drawImage(im, { x, y:cy, width:dw, height:dh });
-          x += sw + gap; });
-      } else { D(pg, '(no screenshots attached for this change yet)', M, 300, F, 12, GRAY); }
-      // description on the change's first page only
-      if (pi===0 && ch.description){
-        const sents = san(ch.description).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
-        sents.forEach(s => wrap('-  '+s, F, 10, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln)));
-        const half = Math.ceil(lines.length/2);          // balance across two columns
-        lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,148-i*14,F,10,BODY));
-        lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,148-i*14,F,10,BODY));
-      }
-      D(pg, report.title||'', M, 24, F, 7, FOOT);
-      const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT);
-      const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT);
+    const shots=[]; for(const im of (ch.images||[])){ try { const p=im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes); p._cap=(im.caption||''); shots.push(p); } catch(e){} }
+    const anyCap = shots.some(p => (p._cap||'').trim());
+    if (anyCap){
+      // one page per screenshot, each with its own description
+      shots.forEach(p => { changePage(ch); drawShots([p]); drawDesc(p._cap || ch.description); drawFooter(); });
+    } else {
+      const pairs=[]; for (let i=0;i<shots.length;i+=2) pairs.push(shots.slice(i,i+2));
+      if (!pairs.length) pairs.push([]);
+      pairs.forEach((pair,pi) => { changePage(ch, pi>0?'  (continued '+(pi+1)+'/'+pairs.length+')':'');
+        if (pair.length) drawShots(pair); else D(pg, '(no screenshots attached for this change yet)', M, 300, F, 12, GRAY);
+        if (pi===0) drawDesc(ch.description); drawFooter(); });
     }
   }
 
@@ -1953,7 +1958,7 @@ async function genBuildUpdate(id, btn){
     const changes = [];
     for (const f of fbs){
       const imgs = [];
-      for (const file of (f.files||[])){ const im = await fetchImg(file); if (im) imgs.push(im); }
+      for (const file of (f.files||[])){ const im = await fetchImg(file); if (im){ im.caption = file.caption || ''; imgs.push(im); } }
       changes.push({ category: f.category || 'Update', headline: f.label || 'Change', description: f.text || '', implemented: !!f.implemented, images: imgs });
     }
     const report = {
@@ -2022,7 +2027,7 @@ async function emailBuildUpdate(id, btn){
     await loadPdfLib();
     const changes = [];
     for (const f of (d.feedbacks||[])){
-      const imgs = []; for (const file of (f.files||[])){ const im = await fetchImg(file); if (im) imgs.push(im); }
+      const imgs = []; for (const file of (f.files||[])){ const im = await fetchImg(file); if (im){ im.caption = file.caption || ''; imgs.push(im); } }
       changes.push({ category: f.category||'Update', headline: f.label||'Change', description: f.text||'', implemented: !!f.implemented, images: imgs });
     }
     const report = { title: d.name + ' — Build Update', subtitle: 'Changes requested by ' + (d.customer||'the client') + ' — implemented, with screenshots',
