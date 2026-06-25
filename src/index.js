@@ -1944,7 +1944,12 @@ async function buildDeck(PDFLib, report){
     const cols=[blocks.slice(0,splitAt), blocks.slice(splitAt)], colX=[M+14, M+14+colW+18];
     const span=c=>{ let y=0, low=0; c.forEach(b=>{ for(let i=0;i<b.length;i++) low=Math.min(low,y-i*lineH); y-=b.length*lineH+gap; }); return -low; };
     const maxSpan=Math.max(span(cols[0]), span(cols[1]));
-    let top=76+maxSpan; const cap=(cardBottom!=null?cardBottom:170)-28; if(top>cap) top=cap;  // keep a clear gap below the card
+    // Adaptive: center the description in the space between the card bottom and
+    // the footer (min gap below the card). Big shot + long text -> small even
+    // margins, sits just under the shot; small shot + short text -> leftover
+    // whitespace split evenly, so it never looks very empty or cramped.
+    const regionTop=(cardBottom!=null?cardBottom:170)-30, regionBottom=74, avail=regionTop-regionBottom;
+    let top = maxSpan>=avail ? regionTop : regionTop-(avail-maxSpan)/2;
     cols.forEach((col,ci) => { let y=top; col.forEach(b => {
       pg.drawCircle({ x:colX[ci]+2.5, y:y+3.2, size:1.6, color:C(NAVY) });
       b.forEach((ln,i) => D(pg, ln, colX[ci]+txtX, y-i*lineH, F, 10, BODY)); y -= b.length*lineH+gap; }); }); }
