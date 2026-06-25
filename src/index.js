@@ -1912,18 +1912,29 @@ async function buildDeck(PDFLib, report){
     const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
     pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
     D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
-    pg.drawRectangle({ x:8, y:158, width:W-16, height:280, color:C(NAVY) });
   }
+  // Draw the screenshots inside a navy card that HUGS the image height (no dead
+  // space), all shots in one row. Returns the card's bottom Y so the
+  // description can sit right below it with consistent breathing room.
   function drawShots(shots){
-    const sw = shots.length===2 ? 370 : 600, gap=16, totW=shots.length*sw+(shots.length-1)*gap; let x=(W-totW)/2;
-    shots.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
-      const cy=158+(280-dh)/2; pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) }); pg.drawImage(im,{ x, y:cy, width:dw, height:dh }); x+=sw+gap; });
+    const n=shots.length, gap=18, pad=22, availW=W-2*M, cardTop=476, maxH=236;
+    if(!n){ const cardH=190, cardY=cardTop-cardH; pg.drawRectangle({ x:8, y:cardY, width:W-16, height:cardH, color:C(NAVY) });
+      D(pg, '(no screenshots attached for this change yet)', M, cardY+cardH/2, F, 12, GRAY); return cardY; }
+    let sw = n===1 ? 560 : Math.min(n===2?372:300, (availW-(n-1)*gap)/n);
+    const drawn = shots.map(im => { let dw=sw, dh=im.height*(sw/im.width); if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); } return {im,dw,dh}; });
+    const maxDh = Math.max.apply(null, drawn.map(d=>d.dh));
+    const totW = drawn.reduce((a,d)=>a+d.dw,0) + (n-1)*gap;
+    const cardH = maxDh + 2*pad, cardY = cardTop - cardH;
+    pg.drawRectangle({ x:8, y:cardY, width:W-16, height:cardH, color:C(NAVY) });
+    let x=(W-totW)/2;
+    drawn.forEach(({im,dw,dh}) => { const cy=cardY+(cardH-dh)/2; pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) }); pg.drawImage(im,{ x, y:cy, width:dw, height:dh }); x+=dw+gap; });
+    return cardY;
   }
   // Render the description as clean bullets (one per sentence). Each bullet is
   // kept WHOLE — never split across the column gap — and the bullets are
   // balanced by height between the two columns, like the reference deck.
-  function drawDesc(text){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).map(s=>s.trim()).filter(Boolean); if(!sents.length) return;
-    const colW=(W-2*M-46)/2, txtX=14, lineH=13, gap=10, top=150;
+  function drawDesc(text, topY){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).map(s=>s.trim()).filter(Boolean); if(!sents.length) return;
+    const colW=(W-2*M-46)/2, txtX=14, lineH=14, gap=13, top=(topY!=null?topY:150)-24;
     const blocks=sents.map(s => wrap(s, F, 10, colW-txtX)); const heights=blocks.map(b => b.length*lineH+gap);
     const total=heights.reduce((a,b)=>a+b,0); let acc=0, splitAt=blocks.length;
     for(let i=0;i<blocks.length;i++){ acc+=heights[i]; if(acc>=total/2){ splitAt=i+1; break; } }
@@ -1938,13 +1949,12 @@ async function buildDeck(PDFLib, report){
     const anyCap = shots.some(p => (p._cap||'').trim());
     if (anyCap){
       // one page per screenshot, each with its own description
-      shots.forEach(p => { changePage(ch); drawShots([p]); drawDesc(p._cap || ch.description); drawFooter(); });
+      shots.forEach(p => { changePage(ch); const b=drawShots([p]); drawDesc(p._cap || ch.description, b); drawFooter(); });
     } else {
-      const pairs=[]; for (let i=0;i<shots.length;i+=2) pairs.push(shots.slice(i,i+2));
-      if (!pairs.length) pairs.push([]);
-      pairs.forEach((pair,pi) => { changePage(ch, pi>0?'  (continued '+(pi+1)+'/'+pairs.length+')':'');
-        if (pair.length) drawShots(pair); else D(pg, '(no screenshots attached for this change yet)', M, 300, F, 12, GRAY);
-        if (pi===0) drawDesc(ch.description); drawFooter(); });
+      const PER=3, groups=[]; for (let i=0;i<shots.length;i+=PER) groups.push(shots.slice(i,i+PER));
+      if (!groups.length) groups.push([]);
+      groups.forEach((g,gi) => { changePage(ch, gi>0?'  (continued '+(gi+1)+'/'+groups.length+')':'');
+        const b=drawShots(g); if (gi===0) drawDesc(ch.description, b); drawFooter(); });
     }
   }
 
