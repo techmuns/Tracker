@@ -1933,16 +1933,23 @@ async function buildDeck(PDFLib, report){
   // Render the description as clean bullets (one per sentence). Each bullet is
   // kept WHOLE — never split across the column gap — and the bullets are
   // balanced by height between the two columns, like the reference deck.
-  function drawDesc(text, topY){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).map(s=>s.trim()).filter(Boolean); if(!sents.length) return;
-    const colW=(W-2*M-46)/2, txtX=14, lineH=14, gap=13, top=(topY!=null?topY:150)-24;
+  // Description bullets sit LOW on the page — anchored just above the footer
+  // rule — so there is comfortable space between the screenshots and the text
+  // (like the reference deck), instead of hugging the image.
+  function drawDesc(text, cardBottom){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).map(s=>s.trim()).filter(Boolean); if(!sents.length) return;
+    const colW=(W-2*M-46)/2, txtX=14, lineH=14, gap=13;
     const blocks=sents.map(s => wrap(s, F, 10, colW-txtX)); const heights=blocks.map(b => b.length*lineH+gap);
     const total=heights.reduce((a,b)=>a+b,0); let acc=0, splitAt=blocks.length;
     for(let i=0;i<blocks.length;i++){ acc+=heights[i]; if(acc>=total/2){ splitAt=i+1; break; } }
     const cols=[blocks.slice(0,splitAt), blocks.slice(splitAt)], colX=[M+14, M+14+colW+18];
+    const span=c=>{ let y=0, low=0; c.forEach(b=>{ for(let i=0;i<b.length;i++) low=Math.min(low,y-i*lineH); y-=b.length*lineH+gap; }); return -low; };
+    const maxSpan=Math.max(span(cols[0]), span(cols[1]));
+    let top=76+maxSpan; const cap=(cardBottom!=null?cardBottom:170)-28; if(top>cap) top=cap;  // keep a clear gap below the card
     cols.forEach((col,ci) => { let y=top; col.forEach(b => {
       pg.drawCircle({ x:colX[ci]+2.5, y:y+3.2, size:1.6, color:C(NAVY) });
       b.forEach((ln,i) => D(pg, ln, colX[ci]+txtX, y-i*lineH, F, 10, BODY)); y -= b.length*lineH+gap; }); }); }
-  function drawFooter(){ D(pg, report.title||'', M, 24, F, 7, FOOT); const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT); const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT); }
+  function drawFooter(){ pg.drawRectangle({ x:M, y:48, width:W-2*M, height:0.8, color:C('#dccfa6') });
+    D(pg, report.title||'', M, 28, F, 7, FOOT); const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 28, F, 7, FOOT); const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 28, F, 7, FOOT); }
 
   for (const ch of report.changes){
     const shots=[]; for(const im of (ch.images||[])){ try { const p=im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes); p._cap=(im.caption||''); shots.push(p); } catch(e){} }
