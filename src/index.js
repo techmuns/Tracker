@@ -1936,7 +1936,7 @@ async function buildDeck(PDFLib, report){
   // Description bullets sit LOW on the page — anchored just above the footer
   // rule — so there is comfortable space between the screenshots and the text
   // (like the reference deck), instead of hugging the image.
-  function drawDesc(text, cardBottom){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).map(s=>s.trim()).filter(Boolean); if(!sents.length) return;
+  function drawDesc(text, cardBottom){ if(!text) return; const sents=String(text).split(/\\n+|(?<=[.!?])\\s+|(?<=[a-z][.!?])(?=[A-Z(])/).map(s=>san(s).trim()).filter(Boolean); if(!sents.length) return;
     const colW=(W-2*M-46)/2, txtX=14, lineH=14, gap=13;
     const blocks=sents.map(s => wrap(s, F, 10, colW-txtX)); const heights=blocks.map(b => b.length*lineH+gap);
     const total=heights.reduce((a,b)=>a+b,0); let acc=0, splitAt=blocks.length;
