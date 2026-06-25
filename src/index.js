@@ -1919,9 +1919,18 @@ async function buildDeck(PDFLib, report){
     shots.forEach(im => { let dw=sw, dh=im.height*(sw/im.width); const maxH=250; if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); }
       const cy=158+(280-dh)/2; pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) }); pg.drawImage(im,{ x, y:cy, width:dw, height:dh }); x+=sw+gap; });
   }
-  function drawDesc(text){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).filter(Boolean), colW=(W-2*M-46)/2, lines=[];
-    sents.forEach(s => wrap('-  '+s, F, 10, colW).forEach((ln,i)=>lines.push(i?'   '+ln:ln))); const half=Math.ceil(lines.length/2);
-    lines.slice(0,half).forEach((ln,i)=>D(pg,ln,M+14,148-i*14,F,10,BODY)); lines.slice(half).forEach((ln,i)=>D(pg,ln,M+14+colW+18,148-i*14,F,10,BODY)); }
+  // Render the description as clean bullets (one per sentence). Each bullet is
+  // kept WHOLE — never split across the column gap — and the bullets are
+  // balanced by height between the two columns, like the reference deck.
+  function drawDesc(text){ if(!text) return; const sents=san(text).split(/(?<=\\.)\\s+/).map(s=>s.trim()).filter(Boolean); if(!sents.length) return;
+    const colW=(W-2*M-46)/2, txtX=14, lineH=13, gap=10, top=150;
+    const blocks=sents.map(s => wrap(s, F, 10, colW-txtX)); const heights=blocks.map(b => b.length*lineH+gap);
+    const total=heights.reduce((a,b)=>a+b,0); let acc=0, splitAt=blocks.length;
+    for(let i=0;i<blocks.length;i++){ acc+=heights[i]; if(acc>=total/2){ splitAt=i+1; break; } }
+    const cols=[blocks.slice(0,splitAt), blocks.slice(splitAt)], colX=[M+14, M+14+colW+18];
+    cols.forEach((col,ci) => { let y=top; col.forEach(b => {
+      pg.drawCircle({ x:colX[ci]+2.5, y:y+3.2, size:1.6, color:C(NAVY) });
+      b.forEach((ln,i) => D(pg, ln, colX[ci]+txtX, y-i*lineH, F, 10, BODY)); y -= b.length*lineH+gap; }); }); }
   function drawFooter(){ D(pg, report.title||'', M, 24, F, 7, FOOT); const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 24, F, 7, FOOT); const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 24, F, 7, FOOT); }
 
   for (const ch of report.changes){
