@@ -46,10 +46,13 @@ const writeClients = (env, c) => env.MANUAL.put(KV_CLIENTS, JSON.stringify(c));
 const KV_DIGEST = 'digest_queue';
 const readDigest = (env) => kvGet(env, KV_DIGEST, []);
 const writeDigest = (env, q) => env.MANUAL.put(KV_DIGEST, JSON.stringify(q));
+const KV_ASSIGN = 'assignments';
+const readAssign = (env) => kvGet(env, KV_ASSIGN, {});
+const writeAssign = (env, a) => env.MANUAL.put(KV_ASSIGN, JSON.stringify(a));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, config, priority, clients] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env), readClients(env),
+  const [manual, roster, updates, people, config, priority, clients, assignments] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env), readClients(env), readAssign(env),
   ]);
   // Standalone mode: serve purely from KV, never touch the Google Sheet.
   let rows = [];
@@ -59,7 +62,7 @@ async function getDataset(env) {
     if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
     rows = parseCsv(await res.text());
   }
-  return buildDataset(rows, manual, { roster, updates, people, priority, clients, standalone: !!config.standalone });
+  return buildDataset(rows, manual, { roster, updates, people, priority, clients, assignments, standalone: !!config.standalone });
 }
 
 const json = (obj, status = 200) =>
@@ -316,6 +319,22 @@ export default {
         if (action === 'send') { const r = await runDigest(env); return json(r, r.ok ? 200 : 502); }
         if (action === 'clear') { await writeDigest(env, []); return json({ ok: true, count: 0 }); }
         return json({ error: 'Unknown action.' }, 400);
+      }
+
+      // ── Owner assignment overlay (auto-balanced workload) ────────────────
+      if (pathname === '/api/assign') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') return json({ ok: true, assignments: await readAssign(env) });
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const map = await readAssign(env);
+        const setOne = (id, owner) => { const o = String(owner || '').trim(); if (o) map[String(id)] = o; else delete map[String(id)]; };
+        if (body.assignments && typeof body.assignments === 'object') { for (const [id, owner] of Object.entries(body.assignments)) setOne(id, owner); }
+        else if (body.id) setOne(body.id, body.owner);
+        else return json({ error: 'Provide {id, owner} or {assignments}.' }, 400);
+        await writeAssign(env, map);
+        return json({ ok: true, count: Object.keys(map).length, assignments: map });
       }
 
       // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
@@ -700,6 +719,22 @@ function renderPage(data, opts) {
   .digest-bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; padding:10px 14px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; }
   .digest-bar .dgi { font-size:12.5px; color:var(--txt2); }
   .digest-bar .sub { margin-left:auto; font-size:12px; }
+  .wl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin:10px 0 4px; }
+  .wl-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:13px 14px; }
+  .wl-head { display:flex; align-items:center; gap:9px; }
+  .wl-name { font-weight:600; font-size:13.5px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wl-meta { font-size:11.5px; color:var(--muted); margin:7px 0 6px; }
+  .wl-bar { height:7px; border-radius:5px; background:var(--line2); overflow:hidden; }
+  .wl-bar i { display:block; height:100%; border-radius:5px; }
+  .wl-pill { font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:2px 8px; border-radius:999px; }
+  .wl-pill.free, .wl-bar i.free { background:#e7f7ee; color:#0e7a52; } .wl-bar i.free { background:#22c55e; }
+  .wl-pill.ok, .wl-bar i.ok { background:#e8f0fe; color:#1d4ed8; } .wl-bar i.ok { background:#3b82f6; }
+  .wl-pill.busy, .wl-bar i.busy { background:#fef3dc; color:#b45309; } .wl-bar i.busy { background:#f59e0b; }
+  .wl-pill.full, .wl-bar i.full { background:#fdeee3; color:#c2410c; } .wl-bar i.full { background:#ef4444; }
+  .asg-row { display:flex; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line2); }
+  .asg-row .dn { font-weight:550; font-size:13.5px; } .asg-row .dmeta { font-size:12px; color:var(--muted); }
+  .asg-act { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .asg-sel { font:inherit; font-size:12.5px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
   .owner-card .rm:hover { color:var(--danger); border-color:var(--danger-line); }
   .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
@@ -940,6 +975,7 @@ function renderPage(data, opts) {
     <button class="tab on" data-tab="overview">📊 Overview</button>
     <button class="tab" data-tab="team">👤 Team</button>
     <button class="tab" data-tab="clients">🏢 Clients</button>
+    <button class="tab" data-tab="assign">⚖️ Assign</button>
   </nav>
 </header>
 
@@ -1013,6 +1049,7 @@ ${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial n
 
 <section class="tabview" id="tab-team" hidden></section>
 <section class="tabview" id="tab-clients" hidden></section>
+<section class="tabview" id="tab-assign" hidden></section>
 
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
@@ -1884,9 +1921,68 @@ let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
   document.querySelectorAll('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','team','clients','assign'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
+  if (tab === 'assign') renderAssignTab();
+}
+
+// ── Workload-balanced auto-assignment ──────────────────────────────────────
+// How much a dashboard weighs on its owner, by stage. A finished/late-stage
+// dashboard barely counts, so whoever wrapped one up is "free" for a new one.
+const LOAD_W = { not_started:1, ui_ux:1, data_integration:0.85, final_check:0.4, feedback_open:0.7, feedback_incorp:0.6, completed:0 };
+const CAP = 3; // ~2-3 active dashboards is a full plate
+function dashLoad(d){ if (d.isLive && d.state==='completed') return 0; return LOAD_W[d.state]!=null ? LOAD_W[d.state] : 1; }
+function ownerLoad(name, overrides){
+  let load=0, active=0;
+  DATA.dashboards.forEach(d => { const own = (overrides && overrides[d.id]) || d.owner; if (own!==name) return; const w=dashLoad(d); if (w>0){ load+=w; active++; } });
+  return { load, active };
+}
+function loadStatus(load, active){ if (active===0) return ['free','Free']; if (load>=CAP||active>=3) return ['full','Full']; if (load>=1.6) return ['busy','Busy']; return ['ok','Open']; }
+function assignOwners(){ return DATA.owners.filter(o => o && o!=='Unassigned'); }
+function unassignedDashboards(){ return DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned'); }
+function recommendOwner(overrides){
+  const owners = assignOwners(); if (!owners.length) return null;
+  let best=null, bestLoad=Infinity;
+  owners.forEach(o => { const { load } = ownerLoad(o, overrides); if (load<bestLoad){ bestLoad=load; best=o; } });
+  return best;
+}
+// Greedy least-loaded distribution of every unassigned dashboard.
+function planAutoAssign(){
+  const un = unassignedDashboards().slice().sort((a,b)=>(b.priorityLevel-a.priorityLevel) || ((a.serial||1e9)-(b.serial||1e9)));
+  const overrides = {};
+  un.forEach(d => { const o = recommendOwner(overrides); if (o) overrides[d.id]=o; });
+  return overrides;
+}
+async function autoAssignAll(btn){
+  if (!assignOwners().length){ alert('Add at least one team member first (Team tab).'); return; }
+  const plan = planAutoAssign();
+  if (!Object.keys(plan).length){ alert('No unassigned dashboards. 🎉'); return; }
+  if (btn){ btn.disabled=true; btn.textContent='Assigning…'; }
+  const r = await api('POST','/api/assign',{ assignments: plan });
+  if (r.ok) location.reload(); else { alert('Assign failed.'); if(btn){ btn.disabled=false; btn.textContent='⚡ Auto-assign all'; } }
+}
+async function assignOne(id, owner){ const r = await api('POST','/api/assign',{ id, owner }); if (r.ok) location.reload(); else alert('Assign failed.'); }
+function renderAssignTab(){
+  const el = G('tab-assign'), owners = assignOwners(), un = unassignedDashboards();
+  const board = owners.length ? owners.map(o => { const { load, active } = ownerLoad(o); const [cls,lab] = loadStatus(load,active); const pct = Math.min(100, load/CAP*100);
+    return \`<div class="wl-card"><div class="wl-head">\${avatar(o)}<div class="wl-name">\${esc(o)}</div><span class="wl-pill \${cls}">\${lab}</span></div>
+      <div class="wl-meta">\${active} active · load \${load.toFixed(1)} / \${CAP}</div><div class="wl-bar"><i class="\${cls}" style="width:\${pct}%"></i></div></div>\`;
+    }).join('') : '<div class="empty">No team members yet — add them in the Team tab.</div>';
+  const rec = planAutoAssign();
+  const queue = un.length ? un.slice().sort((a,b)=>(b.priorityLevel-a.priorityLevel)||((a.serial||1e9)-(b.serial||1e9))).map(d => {
+    const opts = owners.map(o => \`<option \${o===rec[d.id]?'selected':''}>\${esc(o)}</option>\`).join('');
+    const sel = CFG.manualEnabled ? \`<select class="asg-sel">\${opts}</select><button class="btn sm" data-assign="\${esc(d.id)}">Assign</button>\` : \`<span class="wl-pill ok">→ \${esc(rec[d.id]||'—')}</span>\`;
+    return \`<div class="asg-row"><div><div class="dn">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</div><div class="dmeta">\${esc(d.customer||'—')} · \${SMAP[d.state]?SMAP[d.state].label:esc(d.state)}</div></div><div class="asg-act">\${sel}</div></div>\`;
+  }).join('') : '<div class="empty">Everything is assigned. 🎉</div>';
+  el.innerHTML = \`<div class="tabhead"><h2>⚖️ Assign</h2><div class="sub">Workload-balanced · \${un.length} unassigned · least-loaded teammate gets the next one</div></div>
+    \${CFG.manualEnabled && un.length ? \`<div class="roster-add"><button class="btn" id="autoAll">⚡ Auto-assign all \${un.length}</button><span class="sub" style="align-self:center">picks the lightest plate for each dashboard</span></div>\` : ''}
+    <div class="section-t">Team workload</div><div class="wl-grid">\${board}</div>
+    <div class="section-t" style="margin-top:18px">Unassigned dashboards</div>\${queue}\`;
+  if (CFG.manualEnabled){
+    const aa = G('autoAll'); if (aa) aa.onclick = () => autoAssignAll(aa);
+    el.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => { const row=b.closest('.asg-row'), sel=row.querySelector('.asg-sel'); assignOne(b.dataset.assign, sel?sel.value:''); });
+  }
 }
 document.querySelectorAll('#tabs .tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
 

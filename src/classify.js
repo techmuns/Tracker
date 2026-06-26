@@ -343,6 +343,15 @@ export function buildDataset(rows, manual = [], opts = {}) {
     d.priority = d.priorityLevel > 0;
   }
 
+  // Assignment overlay — { dashboardId: ownerName }. An explicit (often
+  // auto-balanced) owner that overrides the sheet/manual owner, so work can be
+  // (re)assigned without editing the Google Sheet.
+  const assignments = opts.assignments || {};
+  for (const d of dashboards) {
+    const a = assignments[d.id];
+    if (a && String(a).trim()) { d.owner = clean(a); d.autoAssigned = true; }
+  }
+
   const counts = Object.fromEntries(STATES.map((s) => [s.id, 0]));
   for (const d of dashboards) counts[d.state]++;
   const liveCount = dashboards.filter((d) => d.isLive).length;
