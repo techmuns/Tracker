@@ -542,6 +542,9 @@ function renderPage(data, opts) {
   .drow .sn { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12px; min-width:26px; }
   .drow .dn { font-weight:550; font-size:13.5px; }
   .drow .dmeta { font-size:12px; color:var(--muted); }
+  .drow .dlinks { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; align-items:center; align-self:center; }
+  .drow .dlink { font-size:11px; font-weight:600; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 9px; text-decoration:none; white-space:nowrap; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+  .drow .dlink:hover { text-decoration:underline; filter:brightness(0.97); }
   .chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 6px; }
   /* Employee terminal */
   .emp { margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
@@ -1409,7 +1412,12 @@ function statRow(s){
 }
 function sectionsHtml(s, metaFn){
   return STATES.filter(x => s.byState[x.id].length).map(x => {
-    const rows = s.byState[x.id].map(d => \`<div class="drow clickable" data-open="\${esc(d.id)}"><span class="sn">\${d.priorityLevel?'★':'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div></div>\`).join('');
+    const rows = s.byState[x.id].map(d => {
+      const lks = (d.links||[]).filter(l => l && l.url);
+      const live = d.isLive ? \`<span class="dlink" style="background:#e7f7ee;border-color:#bfe6cf;color:#0e7a52">● Live</span>\` : '';
+      const linkHtml = (lks.length||live) ? \`<div class="dlinks">\${live}\${lks.map(l => \`<a class="dlink" href="\${esc(l.url)}" target="_blank" rel="noopener" title="\${esc(l.url)}">\${esc(l.label||'Open')} ↗</a>\`).join('')}</div>\` : '';
+      return \`<div class="drow clickable" data-open="\${esc(d.id)}"><span class="sn">\${d.priorityLevel?'★':'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div>\${linkHtml}</div>\`;
+    }).join('');
     return \`<div class="section-t clk" data-states="\${x.id}"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
   }).join('');
 }
@@ -1479,7 +1487,7 @@ function renderOwner(name){
   drawer.querySelectorAll('.subtab').forEach(b => b.onclick = () => { ownerSub = b.dataset.sub; renderOwner(name); });
   drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
   drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ owner:name, states:b.dataset.states.split(' ') }));
-  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { closeDrawer(); openDetail(b.dataset.open); });
+  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = (e) => { if (e.target.closest('a.dlink')) return; closeDrawer(); openDetail(b.dataset.open); });
   drawer.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
     const d = DATA.dashboards.find(x=>x.id===el.dataset.fbtoggle), f = (d.feedbacks||[]).find(x=>x.id===el.dataset.fbid); if(!f) return;
     const res = await api('POST','/api/feedback',{ id:el.dataset.fbtoggle, fbId:el.dataset.fbid, implemented:!f.implemented });
@@ -1595,7 +1603,7 @@ function openClient(name){
   document.getElementById('drawerBack').onclick = () => { closeDrawer(); switchTab('clients'); };
   drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
   drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ customer:name, states:b.dataset.states.split(' ') }));
-  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { closeDrawer(); openDetail(b.dataset.open); });
+  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = (e) => { if (e.target.closest('a.dlink')) return; closeDrawer(); openDetail(b.dataset.open); });
   if (ed){
     document.getElementById('clSave').onclick = async () => {
       const emails = val('cl_emails').split(',').map(x=>x.trim()).filter(Boolean);
