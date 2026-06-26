@@ -43,6 +43,9 @@ const readPriority = (env) => kvGet(env, KV_PRIORITY, {});
 const writePriority = (env, p) => env.MANUAL.put(KV_PRIORITY, JSON.stringify(p));
 const readClients = (env) => kvGet(env, KV_CLIENTS, {});
 const writeClients = (env, c) => env.MANUAL.put(KV_CLIENTS, JSON.stringify(c));
+const KV_DIGEST = 'digest_queue';
+const readDigest = (env) => kvGet(env, KV_DIGEST, []);
+const writeDigest = (env, q) => env.MANUAL.put(KV_DIGEST, JSON.stringify(q));
 
 async function getDataset(env) {
   const [manual, roster, updates, people, config, priority, clients] = await Promise.all([
@@ -69,6 +72,61 @@ const json = (obj, status = 200) =>
 function authorized(request, env) {
   if (!env.EDIT_TOKEN) return true;
   return request.headers.get('x-edit-token') === env.EDIT_TOKEN;
+}
+
+// Send via the Muns raw email API. The raw API wants EXACTLY ONE of text/html.
+async function sendMuns(env, recipients, subject, html, text) {
+  if (!env.MUNS_TOKEN) return { ok: false, sent: 0, error: 'MUNS_TOKEN not set' };
+  const endpoint = env.MUNS_EMAIL_URL || 'https://devde.muns.io/email/send/raw';
+  const list = (Array.isArray(recipients) ? recipients : String(recipients).split(','))
+    .map((s) => String(s).trim()).filter(Boolean);
+  const results = [];
+  for (const email of list) {
+    try {
+      const payload = html ? { email, subject, html } : { email, subject, text: text || '' };
+      const r = await fetch(endpoint, { method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload) });
+      const t = await r.text();
+      results.push({ email, status: r.status, ok: r.ok, response: t.slice(0, 400) });
+    } catch (e) { results.push({ email, ok: false, error: String((e && e.message) || e) }); }
+  }
+  return { ok: results.length > 0 && results.every((x) => x.ok), sent: results.filter((x) => x.ok).length, results };
+}
+
+// Nightly digest recipient — override with the DIGEST_TO env var/secret.
+const digestTo = (env) => env.DIGEST_TO || 'tech@muns.io';
+
+function digestEmailHtml(items, dateStr) {
+  const rows = items.map((it) => {
+    const meta = [it.client, (it.count != null ? it.count + ' change' + (it.count === 1 ? '' : 's') : '')].filter(Boolean).join('  ·  ');
+    const cta = it.url
+      ? `<a href="${escapeHtml(it.url)}" style="display:inline-block;background:#16294a;color:#fff;text-decoration:none;font-size:12px;font-weight:600;padding:9px 15px;border-radius:8px">Open the Build Update PDF →</a>`
+      : '<span style="color:#b4791e;font-size:12px">PDF link unavailable</span>';
+    return `<tr><td style="padding:13px 15px;border:1px solid #e7e2d3;border-radius:11px;background:#fff">
+      <div style="font-weight:700;color:#16294a;font-size:15px">${escapeHtml(it.name || 'Build Update')}</div>
+      <div style="color:#7a8395;font-size:12px;margin:3px 0 9px">${escapeHtml(meta)}</div>${cta}
+    </td></tr><tr><td style="height:10px"></td></tr>`;
+  }).join('');
+  return `<div style="font-family:Arial,Helvetica,sans-serif;background:#faf6ec;padding:24px">
+    <div style="max-width:620px;margin:0 auto">
+      <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c9a24a;font-weight:700">Daily Build Update · ${escapeHtml(dateStr)}</div>
+      <h1 style="font-family:Georgia,'Times New Roman',serif;color:#16294a;font-size:25px;margin:6px 0 4px">Today's Build Updates</h1>
+      <p style="color:#33405a;font-size:13px;margin:0 0 18px">${items.length} update${items.length === 1 ? '' : 's'} prepared today — each links to its full visual deck.</p>
+      <table style="width:100%;border-collapse:separate;border-spacing:0">${rows}</table>
+      <p style="color:#9aa3b2;font-size:11px;margin-top:16px">Sent automatically by the Munshot Dashboard Tracker.</p>
+    </div></div>`;
+}
+
+// Build and send the nightly digest of the day's Build Updates. Clears the
+// queue only on a successful send so nothing is silently dropped.
+async function runDigest(env) {
+  const queue = await readDigest(env);
+  if (!queue.length) return { ok: true, sent: 0, count: 0, skipped: 'empty' };
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const res = await sendMuns(env, digestTo(env), `Build Updates — ${dateStr} (${queue.length})`, digestEmailHtml(queue, dateStr), '');
+  if (res.ok) await writeDigest(env, []);
+  return { ...res, count: queue.length, to: digestTo(env) };
 }
 
 export default {
@@ -229,24 +287,35 @@ export default {
         recipients = recipients.map((s) => String(s).trim()).filter(Boolean);
         if (!recipients.length) return json({ error: 'At least one recipient is required.' }, 400);
         if (!subject) return json({ error: 'Subject is required.' }, 400);
-        const endpoint = env.MUNS_EMAIL_URL || 'https://devde.muns.io/email/send/raw';
-        const results = [];
-        for (const email of recipients) {
-          try {
-            // The Muns raw API wants EXACTLY ONE of text or html — prefer html.
-            const payload = htmlBody ? { email, subject, html: htmlBody } : { email, subject, text };
-            const r = await fetch(endpoint, {
-              method: 'POST',
-              headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            });
-            const t = await r.text();
-            results.push({ email, status: r.status, ok: r.ok, response: t.slice(0, 400) });
-          } catch (e) {
-            results.push({ email, ok: false, error: String(e && e.message || e) });
-          }
+        const out = await sendMuns(env, recipients, subject, htmlBody, text);
+        return json(out);
+      }
+
+      // ── Nightly digest queue (auto-collected PDFs, sent once at 8pm IST) ──
+      if (pathname === '/api/digest') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') {
+          const q = await readDigest(env);
+          return json({ ok: true, count: q.length, to: digestTo(env), items: q });
         }
-        return json({ ok: results.every((x) => x.ok), sent: results.filter((x) => x.ok).length, results });
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const action = String(body.action || 'enqueue');
+        if (action === 'enqueue') {
+          const it = body.item || {};
+          if (!it.url && !it.dashboardId) return json({ error: 'Nothing to enqueue.' }, 400);
+          let q = await readDigest(env);
+          q = q.filter((x) => !it.dashboardId || x.dashboardId !== it.dashboardId); // one entry per dashboard — newest wins
+          q.push({ dashboardId: String(it.dashboardId || ''), name: String(it.name || 'Build Update'), client: String(it.client || ''),
+            count: it.count != null ? +it.count : null, url: String(it.url || ''), at: new Date().toISOString() });
+          if (q.length > 100) q = q.slice(q.length - 100);
+          await writeDigest(env, q);
+          return json({ ok: true, count: q.length });
+        }
+        if (action === 'send') { const r = await runDigest(env); return json(r, r.ok ? 200 : 502); }
+        if (action === 'clear') { await writeDigest(env, []); return json({ ok: true, count: 0 }); }
+        return json({ error: 'Unknown action.' }, 400);
       }
 
       // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
@@ -431,6 +500,11 @@ export default {
         headers: { 'content-type': 'text/html; charset=utf-8' },
       });
     }
+  },
+  // Cron (see wrangler.toml: "30 14 * * *" = 8:00pm IST). Sends the day's
+  // Build Updates as one digest email, then clears the queue.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runDigest(env).catch(() => {}));
   },
 };
 
@@ -623,6 +697,9 @@ function renderPage(data, opts) {
   .tl-item .tl-del:hover { color:var(--danger); }
   .roster-add { display:flex; gap:8px; margin-bottom:14px; }
   .roster-add input { flex:1; margin:0; }
+  .digest-bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; padding:10px 14px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; }
+  .digest-bar .dgi { font-size:12.5px; color:var(--txt2); }
+  .digest-bar .sub { margin-left:auto; font-size:12px; }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
   .owner-card .rm:hover { color:var(--danger); border-color:var(--danger-line); }
   .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
@@ -1664,10 +1741,14 @@ function renderClientsTab(){
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
-  el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
+  const digest = CFG.manualEnabled ? \`<div class="digest-bar"><span class="dgi">🌙 <b>8pm founder digest</b> — every Build Update PDF made today is sent together once at 8:00pm IST.</span><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now (test)</button></div>\` : '';
+  el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${digest}\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
   if (CFG.manualEnabled){
     G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
     el.querySelectorAll('[data-rmcli]').forEach(b => b.onclick = rosterDelete('customer', b.dataset.rmcli, +b.dataset.total));
+    const dn = document.getElementById('digestNow'); if (dn) dn.onclick = () => sendDigestNow(dn);
+    api('GET','/api/digest').then(async r => { if(!r.ok) return; const j = await r.json(); const c = document.getElementById('digestCount');
+      if (c) c.textContent = j.count ? (j.count+' queued → '+j.to) : ('nothing queued yet → '+j.to); }).catch(()=>{});
   }
   el.querySelectorAll('[data-client]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openClient(c.dataset.client); });
 }
@@ -2006,9 +2087,31 @@ async function genBuildUpdate(id, btn){
       client: d.customer || 'Client', date: new Date().toISOString().slice(0,10), changes,
     };
     const bytes = await buildDeck(window.PDFLib, report);
-    downloadBytes(bytes, (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf', 'application/pdf');
+    const fname = (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf';
+    downloadBytes(bytes, fname, 'application/pdf');
+    // Auto-queue this PDF for tonight's single 8pm digest to the founder.
+    let queued = false;
+    try {
+      const up = await api('POST','/api/file',{ name:fname, type:'application/pdf', data: bytesToB64(new Uint8Array(bytes)) });
+      if (up.ok){ const j = await up.json(); const url = location.origin + (j.url || ('/api/file?id='+j.id));
+        const q = await api('POST','/api/digest',{ action:'enqueue', item:{ dashboardId:d.id, name:(d.name||'Build Update'), client:(d.customer||''), count:fbs.length, url } });
+        queued = q.ok; }
+    } catch(e){}
+    if (btn && queued){ btn.textContent = 'Saved · queued for 8pm ✓'; setTimeout(()=>{ if(btn) btn.textContent='📑 Build update PDF'; }, 2200); }
   } catch (e){ alert(e.message || 'Could not build the PDF.'); }
-  finally { if (btn){ btn.disabled = false; btn.textContent = '📑 Build update PDF'; } }
+  finally { if (btn){ btn.disabled = false; if (btn.textContent==='Generating…') btn.textContent = '📑 Build update PDF'; } }
+}
+// Manually fire tonight's digest now — used to test the 8pm flow without waiting.
+async function sendDigestNow(btn){
+  if (btn){ btn.disabled = true; const o=btn.textContent; btn.dataset.o=o; btn.textContent='Sending…'; }
+  try {
+    const r = await api('POST','/api/digest',{ action:'send' });
+    const j = await r.json().catch(()=>({}));
+    if (j.skipped==='empty') alert('Nothing queued yet today.\\n\\nGenerate a Build Update PDF first — every PDF auto-queues for the 8pm email.');
+    else if (j.ok) alert('✅ Sent today\\'s digest ('+j.count+' update'+(j.count===1?'':'s')+') to '+j.to+'.');
+    else alert('Digest send failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
+  } catch(e){ alert('Digest error: '+e.message); }
+  finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'🌙 Send digest now'; } }
 }
 // Plain-text summary of a dashboard's changes (the raw email API sends text only).
 function buildUpdateText(d){

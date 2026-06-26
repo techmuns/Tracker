@@ -24,6 +24,12 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # Optional endpoint override (defaults to https://devde.muns.io/email/send/raw):
 #   MUNS_EMAIL_URL = "https://devde.muns.io/email/send/raw"
 
-# Optional: keep the edge cache warm so the first visitor each window is fast.
-# [triggers]
-# crons = ["*/3 * * * *"]
+# Nightly Build Update digest recipient. Defaults to tech@muns.io (your test
+# inbox). Once verified, switch to the founder:
+#   npx wrangler secret put DIGEST_TO     # then enter ceekay@muns.io
+# (or set DIGEST_TO here as a plain [vars] entry if committing the address is OK)
+
+# Scheduled trigger: 8:00 PM IST = 14:30 UTC, daily. Sends the day's Build
+# Update PDFs as ONE digest email to DIGEST_TO, then clears the queue.
+[triggers]
+crons = ["30 14 * * *"]
