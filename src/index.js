@@ -1473,6 +1473,9 @@ if (CFG.manualEnabled){
       feedbacks: getFeedbacks(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
+    // New dashboard with no owner → auto-assign to the lightest-loaded teammate.
+    let autoOwner = '';
+    if (!id && !body.owner.trim()){ const a = (typeof recommendOwner==='function') ? recommendOwner({}) : ''; if (a){ body.owner = a; autoOwner = a; } }
     msg.className='msg'; msg.textContent='Saving…';
     const res = id ? await api('PUT', '/api/manual', { id, ...body }) : await api('POST', '/api/manual', body);
     if (!res.ok){ const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); return; }
@@ -1480,7 +1483,9 @@ if (CFG.manualEnabled){
     const savedId = id || (saved.dashboard && saved.dashboard.id);
     const level = parseInt(G('f_prio').value, 10) || 0;
     if (savedId) await api('POST', '/api/priority', { id: savedId, level });
-    msg.className='msg ok'; msg.textContent='Saved.'; location.reload();
+    msg.className='msg ok'; msg.textContent='Saved.';
+    if (autoOwner) alert('Auto-assigned to ' + autoOwner + ' — they had the lightest workload.');
+    location.reload();
   };
   const sa = G('standaloneBtn');
   if (sa) sa.onclick = async () => {
