@@ -98,7 +98,7 @@ async function sendMuns(env, recipients, subject, html, text) {
 }
 
 // Nightly digest recipient — override with the DIGEST_TO env var/secret.
-const digestTo = (env) => env.DIGEST_TO || 'aashita1619@gmail.com';
+const digestTo = (env) => env.DIGEST_TO || 'ceekay@muns.io';
 
 function digestEmailHtml(items, dateStr) {
   const rows = items.map((it) => {
