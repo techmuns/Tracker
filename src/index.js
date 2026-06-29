@@ -337,6 +337,23 @@ export default {
         return json({ ok: true, count: Object.keys(map).length, assignments: map });
       }
 
+      // ── Deck fonts (Playfair Display) — proxied + edge-cached, same-origin ─
+      if (pathname === '/api/font') {
+        const f = url.searchParams.get('f');
+        const src = f === 'italic'
+          ? 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/playfairdisplay/PlayfairDisplay-Italic%5Bwght%5D.ttf'
+          : 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf';
+        try {
+          const r = await fetch(src, { cf: { cacheTtl: 31536000, cacheEverything: true } });
+          if (!r.ok) return new Response('font fetch failed', { status: 502 });
+          return new Response(r.body, { headers: {
+            'content-type': 'font/ttf',
+            'cache-control': 'public, max-age=31536000, immutable',
+            'access-control-allow-origin': '*',
+          } });
+        } catch (e) { return new Response('font error', { status: 502 }); }
+      }
+
       // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
       if (pathname === '/api/file') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
@@ -2035,13 +2052,22 @@ async function loadExcelJS(){
 
 // ── Build-Update PDF deck (client report for the next meeting) ──────────────
 async function loadPdfLib(){
-  if (window.PDFLib) return;
-  const cdns = [
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
-    'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
-  ];
-  for (const url of cdns){ try { await loadScript(url); if (window.PDFLib) return; } catch(e){} }
-  throw new Error('Could not load the PDF library (network blocked?).');
+  if (!window.PDFLib){
+    const cdns = [
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
+      'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
+    ];
+    for (const url of cdns){ try { await loadScript(url); if (window.PDFLib) break; } catch(e){} }
+    if (!window.PDFLib) throw new Error('Could not load the PDF library (network blocked?).');
+  }
+  // fontkit lets us embed the Didone fonts — optional (deck falls back to Times).
+  if (!window.fontkit){
+    const fk = [
+      'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js',
+      'https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js',
+    ];
+    for (const url of fk){ try { await loadScript(url); if (window.fontkit) break; } catch(e){} }
+  }
 }
 function downloadBytes(bytes, filename, type){
   const blob = new Blob([bytes], { type }); const a = document.createElement('a');
@@ -2057,117 +2083,138 @@ async function fetchImg(f){
     return { bytes: buf, png: isPng };
   } catch(e){ return null; }
 }
-// Same layout engine as the prototype — cover, one page per change, closing.
-// Landscape "Build Update" deck — matches Munshot's client-presentation format:
-// navy cover (gold serif), one cream page per change (navy stage of screenshots,
-// 2-column bulleted description), navy closing.
+// Elegant "Weekly Update" deck (cream / Didone serif / dark screenshot panel) —
+// matches the Tybourne reference format exactly. Embeds Playfair Display via
+// fontkit; falls back to Times if the fonts can't be fetched.
 async function buildDeck(PDFLib, report){
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   const doc = await PDFDocument.create();
-  const F  = await doc.embedFont(StandardFonts.Helvetica);
-  const FB = await doc.embedFont(StandardFonts.HelveticaBold);
-  const SB = await doc.embedFont(StandardFonts.TimesRomanBold);
-  const W = 841.92, H = 594.96, M = 45;
+  let SER, ITA;
+  try {
+    if (!window.fontkit) throw new Error('no fontkit');
+    doc.registerFontkit(window.fontkit);
+    const fonts = await loadFonts();
+    SER = await doc.embedFont(fonts.serif, { subset:true });
+    ITA = await doc.embedFont(fonts.serifItalic, { subset:true });
+  } catch(e){ SER = await doc.embedFont(StandardFonts.TimesRomanBold); ITA = await doc.embedFont(StandardFonts.TimesRomanItalic); }
+  const SAN = await doc.embedFont(StandardFonts.Helvetica);
+  const SANB = await doc.embedFont(StandardFonts.HelveticaBold);
+  const W = 960, H = 540, M = 64;
   const C = (h) => rgb(parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255);
-  const NAVY='#16294a', NAVY2='#11203c', CREAM='#faf6ec', GOLD='#c9a24a', GREEN='#0e7a52', AMBER='#b4791e', WHITE='#ffffff', GRAY='#c9cede', BODY='#33405a', FOOT='#9aa3b2';
-  const san = (s) => String(s==null?'':s).replace(/₹/g,'Rs ').replace(/[‘’‚′]/g,"'").replace(/[“”„″]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/[•●◆]/g,'-').replace(/[^\\x20-\\x7E\\xA1-\\xFF]/g,'');
-  const sp = (s) => san(s).toUpperCase().split('').join(' ');
-  const tw = (t,f,s) => f.widthOfTextAtSize(san(t),s);
-  const D = (pg,t,x,y,f,s,c) => pg.drawText(san(t),{ x, y, size:s, font:f, color:C(c) });
-  function wrap(t,f,s,maxW){ const w=san(t).split(/\\s+/), L=[]; let cur=''; for(const x of w){ const n=cur?cur+' '+x:x; if(f.widthOfTextAtSize(n,s)>maxW && cur){ L.push(cur); cur=x; } else cur=n; } if(cur)L.push(cur); return L; }
-  function gradient(pg,a,b){ const A=[parseInt(a.slice(1,3),16),parseInt(a.slice(3,5),16),parseInt(a.slice(5,7),16)],Bc=[parseInt(b.slice(1,3),16),parseInt(b.slice(3,5),16),parseInt(b.slice(5,7),16)]; const n=100; for(let i=0;i<n;i++){ const t=i/(n-1); pg.drawRectangle({ x:W*i/n, y:0, width:W/n+1, height:H, color:rgb((A[0]+(Bc[0]-A[0])*t)/255,(A[1]+(Bc[1]-A[1])*t)/255,(A[2]+(Bc[2]-A[2])*t)/255) }); } }
-  const impl = report.changes.filter(c=>c.implemented).length, pend = report.changes.length-impl;
-
-  // Cover
-  let pg = doc.addPage([W,H]); gradient(pg,NAVY,NAVY2);
-  pg.drawRectangle({ x:M, y:420, width:30, height:3, color:C(GOLD) });
-  D(pg, sp('Weekly build update · '+(report.date||'')), M, 406, FB, 8, GOLD);
-  wrap(report.title||'Build Update', SB, 40, W-2*M).forEach((ln,i)=>D(pg,ln,M,365-i*42,SB,40,WHITE));
-  D(pg, report.subtitle||'', M, 298, F, 13, GRAY);
-  const c2=342;
-  const meta=(x,ruleW,y,lab,val)=>{ pg.drawRectangle({x,y:y+13,width:ruleW,height:0.8,color:C(GOLD)}); D(pg,sp(lab),x,y,FB,8,GOLD); D(pg,val,x,y-12,FB,10,WHITE); };
-  meta(M,285,261,'Date',report.date||''); meta(c2,455,261,'Prepared for',(report.client||'Client')+', by Munshot');
-  meta(M,285,224,'Coverage',report.changes.length+' changes'); meta(c2,455,224,'Walkthrough',report.changes.length+' feature pages');
-  pg.drawRectangle({ x:M, y:163, width:W-2*M, height:25, color:C(GOLD) });
-  D(pg, 'All '+report.changes.length+' changes - '+impl+' implemented · '+pend+' pending', M+13, 171, FB, 10, NAVY);
-
-  // Pages per change. If the screenshots carry their own captions, each
-  // screenshot becomes its OWN page with its OWN description; otherwise the
-  // change's screenshots flow 2-per-page sharing the change description.
-  let pageNo = 1;
-  function changePage(ch, headSuffix){
-    pg = doc.addPage([W,H]); pageNo++; pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
-    D(pg, sp(ch.category||'Update'), M, 548, FB, 8, GOLD);
-    wrap((ch.headline||'')+(headSuffix||''), SB, 22, W-2*M-150).slice(0,2).forEach((ln,i)=>D(pg,ln,M,522-i*26,SB,22,NAVY));
-    const bl = ch.implemented?'IMPLEMENTED':'PENDING', bw = tw(bl,FB,9)+24;
-    pg.drawRectangle({ x:W-M-bw, y:534, width:bw, height:22, color:C(ch.implemented?GREEN:AMBER) });
-    D(pg, bl, W-M-bw+12, 541, FB, 9, WHITE);
+  const CREAM='#f0e9d8', INK='#1a1712', GOLD='#a87f2e', DARK='#1c1813', MUTE='#8c8472', LINE='#d8cfb4';
+  const san = (s) => String(s==null?'':s).replace(/[‘’′]/g,"'").replace(/[“”″]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/[^\\x20-\\x7E]/g,'');
+  const sp  = (s) => san(s).toUpperCase().split('').join(' ');
+  const D = (pg,t,x,y,f,s,c) => pg.drawText(san(t), { x, y, size:s, font:f, color:C(c) });
+  const tw = (t,f,s) => f.widthOfTextAtSize(san(t), s);
+  function badges(pg, client){
+    const by = H-94, bs = 44;
+    pg.drawRectangle({ x:M, y:by, width:bs, height:bs, borderColor:C(LINE), borderWidth:1.2, color:C(CREAM) });
+    const ini = (client||'C').split(/\\s+/).map(w => w[0]||'').join('').slice(0,2).toUpperCase();
+    D(pg, ini, M+bs/2-tw(ini,SER,17)/2, by+bs/2-6, SER, 17, INK);
+    D(pg, 'x', W/2-3, by+bs/2-5, SAN, 12, MUTE);
+    pg.drawRectangle({ x:W-M-bs, y:by, width:bs, height:bs, color:C(DARK) });
+    D(pg, 'm', W-M-bs/2-tw('m',ITA,22)/2, by+bs/2-7, ITA, 22, '#c3851a');
   }
-  // Draw the screenshots inside a navy card that HUGS the image height (no dead
-  // space), all shots in one row. Returns the card's bottom Y so the
-  // description can sit right below it with consistent breathing room.
-  function drawShots(shots){
-    const n=shots.length, gap=18, pad=22, availW=W-2*M, cardTop=476, maxH=236;
-    if(!n){ const cardH=190, cardY=cardTop-cardH; pg.drawRectangle({ x:8, y:cardY, width:W-16, height:cardH, color:C(NAVY) });
-      D(pg, '(no screenshots attached for this change yet)', M, cardY+cardH/2, F, 12, GRAY); return cardY; }
-    let sw = n===1 ? 560 : Math.min(n===2?372:300, (availW-(n-1)*gap)/n);
-    const drawn = shots.map(im => { let dw=sw, dh=im.height*(sw/im.width); if(dh>maxH){ dh=maxH; dw=im.width*(maxH/im.height); } return {im,dw,dh}; });
-    const maxDh = Math.max.apply(null, drawn.map(d=>d.dh));
-    const totW = drawn.reduce((a,d)=>a+d.dw,0) + (n-1)*gap;
-    const cardH = maxDh + 2*pad, cardY = cardTop - cardH;
-    pg.drawRectangle({ x:8, y:cardY, width:W-16, height:cardH, color:C(NAVY) });
-    let x=(W-totW)/2;
-    drawn.forEach(({im,dw,dh}) => { const cy=cardY+(cardH-dh)/2; pg.drawRectangle({ x:x-6, y:cy-6, width:dw+12, height:dh+12, color:C(WHITE) }); pg.drawImage(im,{ x, y:cy, width:dw, height:dh }); x+=dw+gap; });
-    return cardY;
+  function splitHead(lead, emph){
+    lead = san(lead||''); emph = san(emph||'');
+    if (!emph && /\\s-\\s/.test(lead)){ const i = lead.indexOf(' - '); emph = lead.slice(i+3); lead = lead.slice(0,i); }
+    return { lead: lead.trim(), emph: emph.trim() };
   }
-  // Render the description as clean bullets (one per sentence). Each bullet is
-  // kept WHOLE — never split across the column gap — and the bullets are
-  // balanced by height between the two columns, like the reference deck.
-  // Description bullets sit LOW on the page — anchored just above the footer
-  // rule — so there is comfortable space between the screenshots and the text
-  // (like the reference deck), instead of hugging the image.
-  function drawDesc(text, cardBottom){ if(!text) return; const sents=String(text).split(/\\n+|(?<=[.!?])\\s+|(?<=[a-z][.!?])(?=[A-Z(])/).map(s=>san(s).trim()).filter(Boolean); if(!sents.length) return;
-    const colW=(W-2*M-46)/2, txtX=14, lineH=14, gap=13;
-    const blocks=sents.map(s => wrap(s, F, 10, colW-txtX)); const heights=blocks.map(b => b.length*lineH+gap);
-    const total=heights.reduce((a,b)=>a+b,0); let acc=0, splitAt=blocks.length;
-    for(let i=0;i<blocks.length;i++){ acc+=heights[i]; if(acc>=total/2){ splitAt=i+1; break; } }
-    const cols=[blocks.slice(0,splitAt), blocks.slice(splitAt)], colX=[M+14, M+14+colW+18];
-    const span=c=>{ let y=0, low=0; c.forEach(b=>{ for(let i=0;i<b.length;i++) low=Math.min(low,y-i*lineH); y-=b.length*lineH+gap; }); return -low; };
-    const maxSpan=Math.max(span(cols[0]), span(cols[1]));
-    // Adaptive: center the description in the space between the card bottom and
-    // the footer (min gap below the card). Big shot + long text -> small even
-    // margins, sits just under the shot; small shot + short text -> leftover
-    // whitespace split evenly, so it never looks very empty or cramped.
-    const regionTop=(cardBottom!=null?cardBottom:170)-30, regionBottom=74, avail=regionTop-regionBottom;
-    let top = maxSpan>=avail ? regionTop : regionTop-(avail-maxSpan)/2;
-    cols.forEach((col,ci) => { let y=top; col.forEach(b => {
-      pg.drawCircle({ x:colX[ci]+2.5, y:y+3.2, size:1.6, color:C(NAVY) });
-      b.forEach((ln,i) => D(pg, ln, colX[ci]+txtX, y-i*lineH, F, 10, BODY)); y -= b.length*lineH+gap; }); }); }
-  function drawFooter(){ pg.drawRectangle({ x:M, y:48, width:W-2*M, height:0.8, color:C('#dccfa6') });
-    D(pg, report.title||'', M, 28, F, 7, FOOT); const dt=san(report.date||''); D(pg, dt, W/2-tw(dt,F,7)/2, 28, F, 7, FOOT); const pn='Page '+pageNo; D(pg, pn, W-M-tw(pn,F,7), 28, F, 7, FOOT); }
-
-  for (const ch of report.changes){
-    const shots=[]; for(const im of (ch.images||[])){ try { const p=im.png? await doc.embedPng(im.bytes) : await doc.embedJpg(im.bytes); p._cap=(im.caption||''); shots.push(p); } catch(e){} }
-    const anyCap = shots.some(p => (p._cap||'').trim());
-    if (anyCap){
-      // one page per screenshot, each with its own description
-      shots.forEach(p => { changePage(ch); const b=drawShots([p]); drawDesc(p._cap || ch.description, b); drawFooter(); });
-    } else {
-      const PER=3, groups=[]; for (let i=0;i<shots.length;i+=PER) groups.push(shots.slice(i,i+PER));
-      if (!groups.length) groups.push([]);
-      groups.forEach((g,gi) => { changePage(ch, gi>0?'  (continued '+(gi+1)+'/'+groups.length+')':'');
-        const b=drawShots(g); if (gi===0) drawDesc(ch.description, b); drawFooter(); });
+  function drawHead(pg, lead, emph, size, x, yTop){
+    const maxW = W - M - x, lh = size*1.06, words = [];
+    san(lead).split(/\\s+/).filter(Boolean).forEach(w => words.push({ w, f:SER, c:INK }));
+    san(emph).split(/\\s+/).filter(Boolean).forEach(w => words.push({ w, f:ITA, c:GOLD }));
+    const lines = [[]]; let cw = 0;
+    for (const t of words){ const ww = t.f.widthOfTextAtSize(t.w+' ', size);
+      if (cw+ww > maxW && lines[lines.length-1].length){ lines.push([]); cw = 0; }
+      lines[lines.length-1].push(t); cw += ww; }
+    lines.slice(0,2).forEach((ln, li) => { let cx = x; const y = yTop - li*lh;
+      ln.forEach(t => { D(pg, t.w, cx, y, t.f, size, t.c); cx += t.f.widthOfTextAtSize(t.w+' ', size); }); });
+  }
+  function footer(pg, leftTxt, rightTxt){
+    D(pg, sp(leftTxt), M, 36, SAN, 7, MUTE);
+    pg.drawCircle({ x:M+tw(sp(leftTxt),SAN,7)+10, y:39, size:1.5, color:C(GOLD) });
+    D(pg, sp(rightTxt), W-M-tw(sp(rightTxt),SAN,7), 36, SAN, 7, MUTE);
+  }
+  // COVER
+  let pg = doc.addPage([W,H]); pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+  badges(pg, report.client);
+  D(pg, sp('The Weekly'), M, H-152, SANB, 8, GOLD);
+  D(pg, report.titleTop||'Weekly', M-4, H-250, SER, 92, INK);
+  D(pg, report.titleBot||'Update', M-2, H-330, ITA, 92, GOLD);
+  pg.drawRectangle({ x:M, y:H-372, width:70, height:2, color:C(GOLD) });
+  D(pg, 'Week of '+(report.dateLong||report.date||''), M, H-405, ITA, 17, INK);
+  D(pg, sp('Prepared for '+(report.client||'the client')), M, 50, SAN, 7.5, MUTE);
+  D(pg, sp('By Munshot AI'), W-M-tw(sp('By Munshot AI'),SAN,7.5), 50, SAN, 7.5, MUTE);
+  // CONTENT — one page per screenshot
+  const items = report.items || [], total = String(items.length+2).padStart(2,'0');
+  for (let idx=0; idx<items.length; idx++){
+    const it = items[idx];
+    pg = doc.addPage([W,H]); pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+    const nn = String(idx+1).padStart(2,'0');
+    D(pg, sp('Highlights'), M, H-42, SAN, 7, MUTE);
+    pg.drawCircle({ x:M+tw(sp('Highlights'),SAN,7)+9, y:H-39, size:1.5, color:C(GOLD) });
+    D(pg, nn, M+tw(sp('Highlights'),SAN,7)+18, H-42, SAN, 7, GOLD);
+    const dts = sp(report.dateShort||report.date||'');
+    D(pg, dts, W-M-tw(dts,SAN,7), H-42, SAN, 7, MUTE);
+    const ey = H-84;
+    if (it.category) D(pg, sp(it.category), M, ey, SANB, 7.5, GOLD);
+    const sh = splitHead(it.headline, it.emph);
+    drawHead(pg, sh.lead, sh.emph, 30, M, it.category ? ey-38 : H-104);
+    const panelTop = H-188, panelBot = 70, panelX = M-24, panelW = W - panelX - 18;
+    pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelTop-panelBot, color:C(DARK) });
+    if (it.imgBytes){ try {
+      const im = it.png===false ? await doc.embedJpg(it.imgBytes) : await doc.embedPng(it.imgBytes);
+      const availW = panelW-80, availH = (panelTop-panelBot)-46;
+      let dw = im.width, dh = im.height; const r = Math.min(availW/dw, availH/dh); dw*=r; dh*=r;
+      const ix = panelX + (panelW-dw)/2, iy = panelBot + (panelTop-panelBot-dh)/2;
+      pg.drawRectangle({ x:ix-5, y:iy-5, width:dw+10, height:dh+10, color:rgb(1,1,1) });
+      pg.drawImage(im, { x:ix, y:iy, width:dw, height:dh });
+    } catch(e){} }
+    footer(pg, report.client||'Client', nn+' / '+total);
+  }
+  // CLOSING
+  pg = doc.addPage([W,H]); pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+  badges(pg, report.client);
+  D(pg, sp('- Thank you -'), M, H-256, SANB, 8, GOLD);
+  D(pg, report.closeTop||'Until ', M-4, H-340, SER, 84, INK);
+  D(pg, report.closeEmph||'next', M-4+tw(report.closeTop||'Until ',SER,84), H-340, ITA, 84, GOLD);
+  D(pg, report.closeBot||'week.', M-4, H-420, SER, 84, INK);
+  D(pg, sp('Prepared by Munshot AI for '+(report.client||'the client')), M, 50, SAN, 7.5, MUTE);
+  const nu = 'Next update - '+(report.nextUpdate||'next week');
+  D(pg, nu, W-M-tw(nu,ITA,14), 50, ITA, 14, INK);
+  return await doc.save();
+}
+// Fetch + cache the Didone fonts (served same-origin by /api/font, edge-cached).
+let _deckFonts = null;
+async function loadFonts(){
+  if (_deckFonts) return _deckFonts;
+  const get = async (f) => new Uint8Array(await (await fetch('/api/font?f='+f)).arrayBuffer());
+  _deckFonts = { serif: await get('serif'), serifItalic: await get('italic') };
+  return _deckFonts;
+}
+// Map a dashboard's feedbacks → deck items: ONE page per screenshot, with the
+// change label as the (black) headline and its own caption (or the first
+// description sentence) as the gold-italic emphasis.
+async function buildItems(fbs){
+  const items = [];
+  for (const f of (fbs||[])){
+    const firstSent = String(f.text||'').split(/(?<=[.!?])\\s/)[0] || String(f.text||'');
+    const files = (f.files||[]);
+    if (!files.length){ items.push({ category:f.category||'', headline:f.label||'Change', emph:firstSent }); continue; }
+    for (const file of files){
+      const im = await fetchImg(file);
+      items.push({ category:f.category||'', headline:f.label||'Change', emph:(file.caption||firstSent||''), imgBytes: im?im.bytes:null, png: im?im.png:true });
     }
   }
-
-  // Closing
-  pg = doc.addPage([W,H]); gradient(pg,NAVY,NAVY2);
-  pg.drawRectangle({ x:M, y:H/2+78, width:30, height:3, color:C(GOLD) });
-  D(pg, sp('Weekly build update · '+(report.date||'')), M, H/2+62, FB, 8, GOLD);
-  D(pg, 'Thank you', M, H/2-6, SB, 46, WHITE);
-  D(pg, 'Prepared for '+(report.client||'the client')+', by Munshot', M, H/2-40, F, 13, GRAY);
-  D(pg, (report.date||'')+'  ·  '+impl+' of '+report.changes.length+' changes implemented', M, H/2-60, F, 11, GRAY);
-  return await doc.save();
+  return items;
+}
+function makeReport(d, items){
+  const t = new Date(), nx = new Date(t.getTime()+7*864e5);
+  const longD = (dt) => dt.toLocaleDateString('en-US',{ month:'long', day:'numeric', year:'numeric' });
+  return { client: d.customer||'Client', date: t.toISOString().slice(0,10),
+    dateLong: longD(t), dateShort: t.toLocaleDateString('en-GB',{ day:'numeric', month:'long', year:'numeric' }),
+    titleTop:'Weekly', titleBot:'Update', closeTop:'Until ', closeEmph:'next', closeBot:'week.', nextUpdate: longD(nx), items };
 }
 async function genBuildUpdate(id, btn){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
@@ -2176,17 +2223,7 @@ async function genBuildUpdate(id, btn){
   if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
   try {
     await loadPdfLib();
-    const changes = [];
-    for (const f of fbs){
-      const imgs = [];
-      for (const file of (f.files||[])){ const im = await fetchImg(file); if (im){ im.caption = file.caption || ''; imgs.push(im); } }
-      changes.push({ category: f.category || 'Update', headline: f.label || 'Change', description: f.text || '', implemented: !!f.implemented, images: imgs });
-    }
-    const report = {
-      title: d.name + ' — Build Update',
-      subtitle: 'Implemented changes, verified, with a visual walkthrough',
-      client: d.customer || 'Client', date: new Date().toISOString().slice(0,10), changes,
-    };
+    const report = makeReport(d, await buildItems(fbs));
     const bytes = await buildDeck(window.PDFLib, report);
     const fname = (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf';
     downloadBytes(bytes, fname, 'application/pdf');
@@ -2268,13 +2305,7 @@ async function emailBuildUpdate(id, btn){
   try {
     // 1) generate the polished PDF deck
     await loadPdfLib();
-    const changes = [];
-    for (const f of (d.feedbacks||[])){
-      const imgs = []; for (const file of (f.files||[])){ const im = await fetchImg(file); if (im){ im.caption = file.caption || ''; imgs.push(im); } }
-      changes.push({ category: f.category||'Update', headline: f.label||'Change', description: f.text||'', implemented: !!f.implemented, images: imgs });
-    }
-    const report = { title: d.name + ' — Build Update', subtitle: 'Changes requested by ' + (d.customer||'the client') + ' — implemented, with screenshots',
-      client: d.customer||'Client', date: new Date().toISOString().slice(0,10), changes };
+    const report = makeReport(d, await buildItems(d.feedbacks||[]));
     const bytes = await buildDeck(window.PDFLib, report);
     // 2) host it so the email can link to the real deck
     let pdfUrl = '';
