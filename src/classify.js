@@ -84,6 +84,8 @@ export function fixTypos(s) {
 }
 
 const clean = (s) => fixTypos(String(s ?? '').replace(/\s+/g, ' ').trim());
+// Fold "Not Assigned" / "-" / "TBD" etc. into the canonical Unassigned bucket.
+const ownerName = (raw) => { const o = clean(raw); return (!o || /^(not assigned|unassigned|none|na|n\/a|-+|tbd)$/i.test(o)) ? 'Unassigned' : o; };
 
 // A blank-ish cell: empty, "-", "n/a", etc.
 const blank = (s) => {
@@ -169,6 +171,40 @@ export function splitCustomers(raw) {
     .filter(Boolean);
 }
 
+// The published sheet's columns get reordered over time, so map them by HEADER
+// NAME rather than by fixed position. Returns { field: columnIndex } for the
+// fields we recognise, or null if this row isn't a usable header.
+const HEADER_ALIASES = {
+  name: ['dashboards', 'dashboard', 'dashboard name', 'name of dashboard'],
+  customer: ['name of customer', 'customer name', 'customer', 'client', 'name'],
+  owner: ['assigned to', 'owner', 'assignee', 'assigned'],
+  liveRaw: ['live', 'live or not', 'is live'],
+  status: ['execution status', 'status', 'stage'],
+  requirements: ['comments - deadline', 'comments', 'comment', 'deadline', 'requirements', 'reqs', 'requirement'],
+  improvement: ['improvement', 'improve', 'improvements'],
+  feedback: ['feedback'],
+  link: ['meeting link', 'link', 'recording', 'recording / link'],
+  lastUpdated: ['last updated', 'updated', 'last update'],
+};
+export function mapHeader(row) {
+  if (!Array.isArray(row)) return null;
+  const cells = row.map((s) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim());
+  const idx = {};
+  for (const [field, names] of Object.entries(HEADER_ALIASES)) {
+    const i = cells.findIndex((c) => c && names.includes(c));
+    if (i !== -1) idx[field] = i;
+  }
+  // Trust it as a header only if the essentials are present.
+  return (idx.name != null && idx.owner != null) ? idx : null;
+}
+// Reorder a raw row into the canonical positions rowToDashboard expects.
+export function remapRow(cells, idx) {
+  const at = (f) => (idx[f] != null ? cells[idx[f]] : '');
+  return [cells[0], at('name'), at('customer'), at('owner'), at('liveRaw'),
+    at('requirements'), at('improvement'), at('feedback'), at('status'),
+    at('link'), at('lastUpdated'), ''];
+}
+
 // Map one raw CSV row (array of cells) to a dashboard object, or null if the
 // row is spreadsheet noise (no serial number / no name).
 export function rowToDashboard(cells) {
@@ -194,7 +230,7 @@ export function rowToDashboard(cells) {
     name: clean(name),
     customers: customerList,
     customer: customerList.join(' & '),
-    owner: clean(owner) || 'Unassigned',
+    owner: ownerName(owner),
     liveRaw: clean(liveRaw),
     isLive,
     requirements: clean(requirements),
@@ -230,7 +266,7 @@ export function manualToDashboard(m) {
     name: clean(m.name),
     customers: customerList,
     customer: customerList.join(' & '),
-    owner: clean(m.owner) || 'Unassigned',
+    owner: ownerName(m.owner),
     liveRaw: clean(liveRaw),
     isLive,
     requirements: clean(m.requirements),
@@ -270,7 +306,15 @@ export function normalizeFeedbacks(list) {
 // KV as manual entries) — used by the one-time "import & go standalone" step.
 export function rowsToEntries(rows) {
   const out = [];
-  for (const cells of rows) {
+  const hdr = rows.length ? mapHeader(rows[0]) : null;
+  const dataRows = hdr ? rows.slice(1) : rows;
+  let lastCustomer = '';
+  for (const raw of dataRows) {
+    const cells = hdr ? remapRow(raw, hdr) : (Array.isArray(raw) ? raw.slice() : raw);
+    if (Array.isArray(cells)) {
+      if (cells[2] != null && String(cells[2]).trim()) lastCustomer = String(cells[2]);
+      else if (lastCustomer) cells[2] = lastCustomer;
+    }
     const d = rowToDashboard(cells);
     if (!d) continue;
     out.push({
@@ -303,8 +347,17 @@ const STATE_IDS = new Set(STATES.map((s) => s.id));
 //   opts = { roster: { owners:[], customers:[] }, updates: { [dashboardId]: [{date,state,note}] } }
 export function buildDataset(rows, manual = [], opts = {}) {
   const sheet = [];
-  for (const r of rows) {
-    const d = rowToDashboard(r);
+  const hdr = rows.length ? mapHeader(rows[0]) : null;
+  const dataRows = hdr ? rows.slice(1) : rows;
+  let lastCustomer = '';
+  for (const r of dataRows) {
+    const cells = hdr ? remapRow(r, hdr) : (Array.isArray(r) ? r.slice() : r);
+    // Merged client cells export blank on continuation rows — carry the client down.
+    if (Array.isArray(cells)) {
+      if (cells[2] != null && String(cells[2]).trim()) lastCustomer = String(cells[2]);
+      else if (lastCustomer) cells[2] = lastCustomer;
+    }
+    const d = rowToDashboard(cells);
     if (d) sheet.push(d);
   }
   sheet.sort((a, b) => a.serial - b.serial);
