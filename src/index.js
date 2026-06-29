@@ -1807,7 +1807,7 @@ function renderClientsTab(){
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
-  const digest = CFG.manualEnabled ? \`<div class="digest-bar"><div class="dg-main"><span class="dgi">🌙 <b>8pm founder digest</b> — every Build Update PDF made today is sent together once at 8:00pm IST.</span><span class="dgi" id="digestLast">checking last run…</span></div><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now (test)</button></div>\` : '';
+  const digest = CFG.manualEnabled ? \`<div class="digest-bar"><div class="dg-main"><span class="dgi">🌙 <b>8pm founder digest</b> — every Build Update PDF made today is sent together once at 8:00pm IST.</span><span class="dgi" id="digestLast">checking last run…</span></div><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now</button></div>\` : '';
   el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${digest}\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
   if (CFG.manualEnabled){
     G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
