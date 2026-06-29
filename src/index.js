@@ -122,14 +122,18 @@ function digestEmailHtml(items, dateStr) {
 }
 
 // Build and send the nightly digest of the day's Build Updates. Clears the
-// queue only on a successful send so nothing is silently dropped.
-async function runDigest(env) {
+// queue only on a successful send so nothing is silently dropped. Records the
+// outcome (digest_last) so the UI can show "last sent …" as proof it ran.
+async function runDigest(env, trigger) {
+  const stamp = async (rec) => { try { await env.MANUAL.put('digest_last', JSON.stringify({ at: new Date().toISOString(), trigger: trigger || 'manual', ...rec })); } catch (e) {} };
   const queue = await readDigest(env);
-  if (!queue.length) return { ok: true, sent: 0, count: 0, skipped: 'empty' };
+  if (!queue.length) { const r = { ok: true, sent: 0, count: 0, skipped: 'empty', to: digestTo(env) }; await stamp(r); return r; }
   const dateStr = new Date().toISOString().slice(0, 10);
   const res = await sendMuns(env, digestTo(env), `Build Updates — ${dateStr} (${queue.length})`, digestEmailHtml(queue, dateStr), '');
   if (res.ok) await writeDigest(env, []);
-  return { ...res, count: queue.length, to: digestTo(env) };
+  const out = { ...res, count: queue.length, to: digestTo(env), error: res.ok ? undefined : (res.error || 'send failed') };
+  await stamp({ ok: res.ok, sent: res.sent || 0, count: queue.length, to: digestTo(env), error: out.error });
+  return out;
 }
 
 export default {
@@ -299,7 +303,8 @@ export default {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
         if (request.method === 'GET') {
           const q = await readDigest(env);
-          return json({ ok: true, count: q.length, to: digestTo(env), items: q });
+          const last = await kvGet(env, 'digest_last', null);
+          return json({ ok: true, count: q.length, to: digestTo(env), items: q, last });
         }
         if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
         if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
@@ -316,7 +321,7 @@ export default {
           await writeDigest(env, q);
           return json({ ok: true, count: q.length });
         }
-        if (action === 'send') { const r = await runDigest(env); return json(r, r.ok ? 200 : 502); }
+        if (action === 'send') { const r = await runDigest(env, 'manual'); return json(r, r.ok ? 200 : 502); }
         if (action === 'clear') { await writeDigest(env, []); return json({ ok: true, count: 0 }); }
         return json({ error: 'Unknown action.' }, 400);
       }
@@ -540,7 +545,7 @@ export default {
   // Cron (see wrangler.toml: "30 14 * * *" = 8:00pm IST). Sends the day's
   // Build Updates as one digest email, then clears the queue.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runDigest(env).catch(() => {}));
+    ctx.waitUntil(runDigest(env, 'cron').catch(() => {}));
   },
 };
 
@@ -734,7 +739,9 @@ function renderPage(data, opts) {
   .roster-add { display:flex; gap:8px; margin-bottom:14px; }
   .roster-add input { flex:1; margin:0; }
   .digest-bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; padding:10px 14px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; }
+  .digest-bar .dg-main { display:flex; flex-direction:column; gap:3px; }
   .digest-bar .dgi { font-size:12.5px; color:var(--txt2); }
+  .digest-bar #digestLast { font-size:11.5px; color:var(--muted); }
   .digest-bar .sub { margin-left:auto; font-size:12px; }
   .wl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin:10px 0 4px; }
   .wl-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:13px 14px; }
@@ -1800,14 +1807,22 @@ function renderClientsTab(){
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
-  const digest = CFG.manualEnabled ? \`<div class="digest-bar"><span class="dgi">🌙 <b>8pm founder digest</b> — every Build Update PDF made today is sent together once at 8:00pm IST.</span><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now (test)</button></div>\` : '';
+  const digest = CFG.manualEnabled ? \`<div class="digest-bar"><div class="dg-main"><span class="dgi">🌙 <b>8pm founder digest</b> — every Build Update PDF made today is sent together once at 8:00pm IST.</span><span class="dgi" id="digestLast">checking last run…</span></div><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now (test)</button></div>\` : '';
   el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${digest}\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
   if (CFG.manualEnabled){
     G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
     el.querySelectorAll('[data-rmcli]').forEach(b => b.onclick = rosterDelete('customer', b.dataset.rmcli, +b.dataset.total));
     const dn = document.getElementById('digestNow'); if (dn) dn.onclick = () => sendDigestNow(dn);
-    api('GET','/api/digest').then(async r => { if(!r.ok) return; const j = await r.json(); const c = document.getElementById('digestCount');
-      if (c) c.textContent = j.count ? (j.count+' queued → '+j.to) : ('nothing queued yet → '+j.to); }).catch(()=>{});
+    api('GET','/api/digest').then(async r => { if(!r.ok) return; const j = await r.json();
+      const c = document.getElementById('digestCount'); if (c) c.textContent = j.count ? (j.count+' queued → '+j.to) : ('nothing queued yet → '+j.to);
+      const L = document.getElementById('digestLast'); if (L){ const l = j.last;
+        if (!l) L.textContent = '⏳ Has not run yet — set MUNS_TOKEN, then test with “Send now”.';
+        else { const when = new Date(l.at).toLocaleString();
+          L.innerHTML = l.skipped==='empty' ? ('🕗 Last ran '+esc(when)+' ('+esc(l.trigger||'')+') — nothing was queued')
+            : l.ok ? ('✅ Last sent '+esc(when)+' ('+esc(l.trigger||'')+') — '+l.sent+' to '+esc(l.to||''))
+            : ('⚠️ Last run '+esc(when)+' FAILED: '+esc(String(l.error||'').slice(0,80))); }
+      }
+    }).catch(()=>{});
   }
   el.querySelectorAll('[data-client]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openClient(c.dataset.client); });
 }
