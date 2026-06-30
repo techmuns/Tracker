@@ -136,6 +136,65 @@ async function runDigest(env, trigger) {
   return out;
 }
 
+// ── Daily status digest (per-dashboard & per-member progress) ──────────────
+function dailyStatusHtml(dateStr, owners, dashRows) {
+  const e = escapeHtml;
+  const ownerRows = Object.entries(owners).sort((a, b) => b[1].doneToday - a[1].doneToday).map(([name, a]) => {
+    const pct = a.total ? Math.round(a.done / a.total * 100) : 0;
+    return `<tr><td style="padding:9px 12px;border-bottom:1px solid #eee2c9;font-weight:600;color:#16294a">${e(name)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #eee2c9;text-align:center;color:#0e7a52;font-weight:700">+${a.doneToday}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #eee2c9;text-align:center;color:#b4791e">${a.pending}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #eee2c9;text-align:center;color:#33405a">${a.done}/${a.total} (${pct}%)</td></tr>`;
+  }).join('');
+  const dashList = dashRows.filter(r => r.total).sort((a, b) => b.doneToday - a.doneToday || b.pending - a.pending).map(r => {
+    const bar = `<div style="height:6px;background:#eee2c9;border-radius:4px;overflow:hidden;margin-top:5px"><div style="height:100%;width:${r.pct}%;background:#0e7a52"></div></div>`;
+    const extra = (r.doneToday ? ` · <b style="color:#0e7a52">+${r.doneToday} since last</b>` : '') + (r.newToday ? ` · <span style="color:#1d4ed8">${r.newToday} new</span>` : '');
+    return `<tr><td style="padding:11px 12px;border-bottom:1px solid #eee2c9">
+      <div style="font-weight:600;color:#16294a">${e(r.client || '—')} · ${e(r.name)}</div>
+      <div style="font-size:12px;color:#7a8395;margin-top:2px">${r.done}/${r.total} changes done (${r.pct}%) · ${r.pending} pending${extra}</div>${bar}</td>
+      <td style="padding:11px 12px;border-bottom:1px solid #eee2c9;text-align:right;color:#727a8a;font-size:12px;white-space:nowrap">${e(r.owner || 'Unassigned')}</td></tr>`;
+  }).join('');
+  return `<div style="font-family:Arial,Helvetica,sans-serif;background:#faf6ec;padding:24px"><div style="max-width:660px;margin:0 auto">
+    <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c9a24a;font-weight:700">Daily Status · ${e(dateStr)}</div>
+    <h1 style="font-family:Georgia,'Times New Roman',serif;color:#16294a;font-size:24px;margin:6px 0 16px">Dashboard progress</h1>
+    <h3 style="color:#33405a;font-size:13px;margin:0 0 7px">By team member</h3>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee2c9;border-radius:10px;overflow:hidden">
+      <tr style="background:#f4eeda"><td style="padding:8px 12px;font-size:10px;letter-spacing:.05em;color:#7a8395">MEMBER</td><td style="padding:8px 12px;font-size:10px;color:#7a8395;text-align:center">DONE</td><td style="padding:8px 12px;font-size:10px;color:#7a8395;text-align:center">PENDING</td><td style="padding:8px 12px;font-size:10px;color:#7a8395;text-align:center">COMPLETION</td></tr>
+      ${ownerRows || '<tr><td colspan="4" style="padding:12px;color:#999;font-size:13px">No tracked changes yet.</td></tr>'}
+    </table>
+    <h3 style="color:#33405a;font-size:13px;margin:18px 0 7px">By dashboard</h3>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee2c9;border-radius:10px;overflow:hidden">${dashList || '<tr><td style="padding:12px;color:#999;font-size:13px">No dashboards with feedback yet.</td></tr>'}</table>
+    <p style="color:#9aa3b2;font-size:11px;margin-top:16px">"Since last" compares with the previous daily report. Sent automatically by the Munshot Dashboard Tracker.</p>
+  </div></div>`;
+}
+
+// Compute the day's per-dashboard / per-member progress and email it. The diff
+// is vs the last snapshot (saved only on a successful send), so each report
+// shows what got done since the previous one.
+async function runDailyStatus(env, trigger) {
+  const stamp = async (rec) => { try { await env.MANUAL.put('daily_last', JSON.stringify({ at: new Date().toISOString(), trigger: trigger || 'manual', ...rec })); } catch (e) {} };
+  let data;
+  try { data = await getDataset(env); } catch (e) { const r = { ok: false, error: 'dataset: ' + (e && e.message) }; await stamp(r); return r; }
+  const dashes = (data.dashboards || []).filter(d => (d.feedbacks || []).length);
+  if (!dashes.length) { const r = { ok: true, sent: 0, skipped: 'no-feedback', to: digestTo(env) }; await stamp(r); return r; }
+  const prev = (await kvGet(env, 'status_snapshot', { dash: {} })).dash || {};
+  const cur = {}, dashRows = [], owners = {};
+  for (const d of dashes) {
+    const fb = d.feedbacks, total = fb.length, done = fb.filter(f => f.implemented).length, p = prev[d.id] || { done: 0, total: 0 };
+    cur[d.id] = { total, done };
+    const doneToday = Math.max(0, done - (p.done || 0)), newToday = Math.max(0, total - (p.total || 0)), pct = total ? Math.round(done / total * 100) : 0;
+    dashRows.push({ id: d.id, name: d.name, client: d.customer, owner: d.owner, total, done, pending: total - done, doneToday, newToday, pct });
+    const o = d.owner || 'Unassigned', a = owners[o] || (owners[o] = { done: 0, doneToday: 0, pending: 0, total: 0 });
+    a.done += done; a.doneToday += doneToday; a.pending += (total - done); a.total += total;
+  }
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const totalDoneToday = dashRows.reduce((s, r) => s + r.doneToday, 0), totalPending = dashRows.reduce((s, r) => s + r.pending, 0);
+  const res = await sendMuns(env, digestTo(env), `Daily Status — ${dateStr} (+${totalDoneToday} done · ${totalPending} pending)`, dailyStatusHtml(dateStr, owners, dashRows), '');
+  if (res.ok) await env.MANUAL.put('status_snapshot', JSON.stringify({ date: dateStr, dash: cur }));
+  await stamp({ ok: res.ok, sent: res.sent || 0, to: digestTo(env), error: res.ok ? undefined : (res.error || 'send failed'), doneToday: totalDoneToday, pending: totalPending });
+  return { ...res, to: digestTo(env), doneToday: totalDoneToday, pending: totalPending };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -304,7 +363,8 @@ export default {
         if (request.method === 'GET') {
           const q = await readDigest(env);
           const last = await kvGet(env, 'digest_last', null);
-          return json({ ok: true, count: q.length, to: digestTo(env), items: q, last });
+          const dailyLast = await kvGet(env, 'daily_last', null);
+          return json({ ok: true, count: q.length, to: digestTo(env), items: q, last, dailyLast });
         }
         if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
         if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
@@ -322,6 +382,7 @@ export default {
           return json({ ok: true, count: q.length });
         }
         if (action === 'send') { const r = await runDigest(env, 'manual'); return json(r, r.ok ? 200 : 502); }
+        if (action === 'daily') { const r = await runDailyStatus(env, 'manual'); return json(r, r.ok ? 200 : 502); }
         if (action === 'clear') { await writeDigest(env, []); return json({ ok: true, count: 0 }); }
         return json({ error: 'Unknown action.' }, 400);
       }
@@ -542,10 +603,13 @@ export default {
       });
     }
   },
-  // Cron (see wrangler.toml: "30 14 * * *" = 8:00pm IST). Sends the day's
-  // Build Updates as one digest email, then clears the queue.
+  // Crons (UTC; see wrangler.toml):
+  //   "30 15 * * *"  → 9:00pm IST daily   → daily status email
+  //   "30 15 * * 3"  → 9:00pm IST Wednesday → weekly Build-Update PDF digest
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runDigest(env, 'cron').catch(() => {}));
+    const cron = event && event.cron;
+    if (cron === '30 15 * * 3') ctx.waitUntil(runDigest(env, 'cron').catch(() => {}));
+    else ctx.waitUntil(runDailyStatus(env, 'cron').catch(() => {}));
   },
 };
 
@@ -738,11 +802,13 @@ function renderPage(data, opts) {
   .tl-item .tl-del:hover { color:var(--danger); }
   .roster-add { display:flex; gap:8px; margin-bottom:14px; }
   .roster-add input { flex:1; margin:0; }
-  .digest-bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; padding:10px 14px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; }
-  .digest-bar .dg-main { display:flex; flex-direction:column; gap:3px; }
+  .digest-bar { display:flex; flex-direction:column; gap:12px; margin-bottom:14px; padding:12px 14px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; }
+  .digest-bar .dg-row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .digest-bar .dg-row + .dg-row { padding-top:11px; border-top:1px solid var(--accent-line); }
+  .digest-bar .dg-main { display:flex; flex-direction:column; gap:3px; flex:1; min-width:240px; }
   .digest-bar .dgi { font-size:12.5px; color:var(--txt2); }
-  .digest-bar #digestLast { font-size:11.5px; color:var(--muted); }
-  .digest-bar .sub { margin-left:auto; font-size:12px; }
+  .digest-bar #digestLast, .digest-bar #dailyLast { font-size:11.5px; color:var(--muted); }
+  .digest-bar .sub { font-size:12px; white-space:nowrap; }
   .wl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin:10px 0 4px; }
   .wl-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:13px 14px; }
   .wl-head { display:flex; align-items:center; gap:9px; }
@@ -1807,21 +1873,24 @@ function renderClientsTab(){
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
-  const digest = CFG.manualEnabled ? \`<div class="digest-bar"><div class="dg-main"><span class="dgi">🌙 <b>8pm founder digest</b> — every Build Update PDF made today is sent together once at 8:00pm IST.</span><span class="dgi" id="digestLast">checking last run…</span></div><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now</button></div>\` : '';
+  const digest = CFG.manualEnabled ? \`<div class="digest-bar">
+    <div class="dg-row"><div class="dg-main"><span class="dgi">🗓 <b>Weekly PDF digest</b> — every Build Update PDF this week → founder, <b>Wednesday 9pm IST</b> (one email, each tagged with its client).</span><span class="dgi" id="digestLast">…</span></div><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now</button></div>
+    <div class="dg-row"><div class="dg-main"><span class="dgi">📊 <b>Daily status</b> — per-member & per-dashboard progress (done / pending / %) → founder, <b>every day 9pm IST</b>.</span><span class="dgi" id="dailyLast">…</span></div><span class="sub"></span><button class="btn ghost sm" id="dailyNow">Send now</button></div>
+  </div>\` : '';
   el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${digest}\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
   if (CFG.manualEnabled){
     G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
     el.querySelectorAll('[data-rmcli]').forEach(b => b.onclick = rosterDelete('customer', b.dataset.rmcli, +b.dataset.total));
     const dn = document.getElementById('digestNow'); if (dn) dn.onclick = () => sendDigestNow(dn);
+    const dl = document.getElementById('dailyNow'); if (dl) dl.onclick = () => sendDailyNow(dl);
+    const lastTxt = (l, emptyMsg) => { if (!l) return '⏳ Has not run yet — set MUNS_TOKEN, then test with “Send now”.';
+      const when = new Date(l.at).toLocaleString();
+      if (l.skipped) return '🕗 Last ran '+when+' ('+(l.trigger||'')+') — '+emptyMsg;
+      return l.ok ? ('✅ Last sent '+when+' ('+(l.trigger||'')+') → '+(l.to||'')) : ('⚠️ Last run '+when+' FAILED: '+String(l.error||'').slice(0,70)); };
     api('GET','/api/digest').then(async r => { if(!r.ok) return; const j = await r.json();
       const c = document.getElementById('digestCount'); if (c) c.textContent = j.count ? (j.count+' queued → '+j.to) : ('nothing queued yet → '+j.to);
-      const L = document.getElementById('digestLast'); if (L){ const l = j.last;
-        if (!l) L.textContent = '⏳ Has not run yet — set MUNS_TOKEN, then test with “Send now”.';
-        else { const when = new Date(l.at).toLocaleString();
-          L.innerHTML = l.skipped==='empty' ? ('🕗 Last ran '+esc(when)+' ('+esc(l.trigger||'')+') — nothing was queued')
-            : l.ok ? ('✅ Last sent '+esc(when)+' ('+esc(l.trigger||'')+') — '+l.sent+' to '+esc(l.to||''))
-            : ('⚠️ Last run '+esc(when)+' FAILED: '+esc(String(l.error||'').slice(0,80))); }
-      }
+      const L = document.getElementById('digestLast'); if (L) L.textContent = lastTxt(j.last, 'nothing was queued');
+      const D2 = document.getElementById('dailyLast'); if (D2) D2.textContent = lastTxt(j.dailyLast, 'no dashboards had feedback');
     }).catch(()=>{});
   }
   el.querySelectorAll('[data-client]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openClient(c.dataset.client); });
@@ -2250,7 +2319,7 @@ async function genBuildUpdate(id, btn){
         const q = await api('POST','/api/digest',{ action:'enqueue', item:{ dashboardId:d.id, name:(d.name||'Build Update'), client:(d.customer||''), count:fbs.length, url } });
         queued = q.ok; }
     } catch(e){}
-    if (btn && queued){ btn.textContent = 'Saved · queued for 8pm ✓'; setTimeout(()=>{ if(btn) btn.textContent='📑 Build update PDF'; }, 2200); }
+    if (btn && queued){ btn.textContent = 'Saved · queued for Wed digest ✓'; setTimeout(()=>{ if(btn) btn.textContent='📑 Build update PDF'; }, 2200); }
   } catch (e){ alert(e.message || 'Could not build the PDF.'); }
   finally { if (btn){ btn.disabled = false; if (btn.textContent==='Generating…') btn.textContent = '📑 Build update PDF'; } }
 }
@@ -2260,11 +2329,23 @@ async function sendDigestNow(btn){
   try {
     const r = await api('POST','/api/digest',{ action:'send' });
     const j = await r.json().catch(()=>({}));
-    if (j.skipped==='empty') alert('Nothing queued yet today.\\n\\nGenerate a Build Update PDF first — every PDF auto-queues for the 8pm email.');
-    else if (j.ok) alert('✅ Sent today\\'s digest ('+j.count+' update'+(j.count===1?'':'s')+') to '+j.to+'.');
+    if (j.skipped==='empty') alert('Nothing queued.\\n\\nGenerate a Build Update PDF first — every PDF auto-queues for the weekly founder email.');
+    else if (j.ok) alert('✅ Sent the PDF digest ('+j.count+' update'+(j.count===1?'':'s')+') to '+j.to+'.');
     else alert('Digest send failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
   } catch(e){ alert('Digest error: '+e.message); }
-  finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'🌙 Send digest now'; } }
+  finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'Send now'; } }
+}
+// Manually fire the daily status email now — to test it without waiting for 9pm.
+async function sendDailyNow(btn){
+  if (btn){ btn.disabled = true; const o=btn.textContent; btn.dataset.o=o; btn.textContent='Sending…'; }
+  try {
+    const r = await api('POST','/api/digest',{ action:'daily' });
+    const j = await r.json().catch(()=>({}));
+    if (j.skipped==='no-feedback') alert('No dashboards have feedback yet — add some client changes (feedbacks) first, then the daily status will have something to report.');
+    else if (j.ok) alert('✅ Sent the daily status to '+j.to+'.\\n\\n+'+(j.doneToday||0)+' done since last · '+(j.pending||0)+' pending.');
+    else alert('Daily status failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
+  } catch(e){ alert('Daily status error: '+e.message); }
+  finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'Send now'; } }
 }
 // Plain-text summary of a dashboard's changes (the raw email API sends text only).
 function buildUpdateText(d){
