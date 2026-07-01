@@ -84,8 +84,12 @@ export function fixTypos(s) {
 }
 
 const clean = (s) => fixTypos(String(s ?? '').replace(/\s+/g, ' ').trim());
-// Fold "Not Assigned" / "-" / "TBD" etc. into the canonical Unassigned bucket.
-const ownerName = (raw) => { const o = clean(raw); return (!o || /^(not assigned|unassigned|none|na|n\/a|-+|tbd)$/i.test(o)) ? 'Unassigned' : o; };
+// Fold "Not Assigned" / "-" / "(Priority)" / status-like junk into the canonical
+// Unassigned bucket. Real names never start with "(" or "-", so those are junk.
+const ownerName = (raw) => {
+  const o = clean(raw);
+  return (!o || /^[(\-]/.test(o) || /^(not assigned|unassigned|none|na|n\/a|-+|tbd|priority)$/i.test(o)) ? 'Unassigned' : o;
+};
 
 // A blank-ish cell: empty, "-", "n/a", etc.
 const blank = (s) => {
