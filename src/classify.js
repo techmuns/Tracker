@@ -299,6 +299,7 @@ export function normalizeFeedbacks(list) {
     link: /^https?:\/\//i.test(String(f.link ?? '').trim()) ? String(f.link).trim() : '',
     files: Array.isArray(f.files) ? f.files : [],
     implemented: !!f.implemented,
+    perPage: Math.min(3, Math.max(1, parseInt(f.perPage, 10) || 1)), // screenshots per deck page (1–3)
   }));
 }
 

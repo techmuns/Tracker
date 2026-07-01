@@ -1021,6 +1021,8 @@ function renderPage(data, opts) {
   .ssrow { display:flex; align-items:center; gap:8px; margin:5px 0; }
   .ssrow .fchip { flex:0 0 auto; max-width:40%; overflow:hidden; }
   .ssrow .sscap { flex:1; min-width:0; font-size:12px; }
+  .fb-pp { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); white-space:nowrap; }
+  .fb-pp select { font:inherit; font-size:12px; padding:3px 6px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--txt); }
   /* Toggle switch */
   .toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:var(--muted); }
   .toggle input { display:none; }
@@ -1468,7 +1470,7 @@ function fbRowHtml(f, i){
       <label class="toggle"><input type="checkbox" class="fb-done" \${f.implemented?'checked':''}><span class="track"></span><span class="tlabel">implemented</span></label>
       <button type="button" class="rm-client fb-rm" title="Remove">×</button></div>
     <textarea class="fb-text" rows="2" placeholder="what the client asked / what you changed">\${esc(f.text||'')}</textarea>
-    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 add screenshots (pick many)</button></div>
+    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 add screenshots (pick many)</button><label class="fb-pp" title="How many screenshots to place on each PDF page">per page <select class="fb-perpage"><option value="1"\${(f.perPage||1)==1?' selected':''}>1</option><option value="2"\${(f.perPage||1)==2?' selected':''}>2</option><option value="3"\${(f.perPage||1)==3?' selected':''}>3</option></select></label></div>
     <div class="filebox fb-files"></div>
   </div>\`;
 }
@@ -1478,6 +1480,7 @@ function syncFbFromDom(){
     f.label = row.querySelector('.fb-label').value; f.date = row.querySelector('.fb-date').value;
     f.text = row.querySelector('.fb-text').value; f.link = row.querySelector('.fb-link').value;
     f.implemented = row.querySelector('.fb-done').checked;
+    const pp = row.querySelector('.fb-perpage'); if (pp) f.perPage = +pp.value || 1;
   });
 }
 function renderFbRows(){
@@ -1485,7 +1488,7 @@ function renderFbRows(){
   [...box.children].forEach((row,i) => {
     const f = fbState[i];
     const fb = row.querySelector('.fb-files');
-    fb.innerHTML = (f.files||[]).map((x,k) => '<div class="ssrow">'+fileChip(x,true)+'<input class="sscap" data-k="'+k+'" placeholder="this screenshot&#39;s own description (its own PDF page) — optional" value="'+esc(x.caption||'')+'"></div>').join('');
+    fb.innerHTML = (f.files||[]).map((x,k) => '<div class="ssrow">'+fileChip(x,true)+'<input class="sscap" data-k="'+k+'" placeholder="this screenshot&#39;s caption / description — optional" value="'+esc(x.caption||'')+'"></div>').join('');
     fb.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { f.files = f.files.filter(x => x.id !== b.dataset.fx); renderFbRows(); });
     fb.querySelectorAll('.sscap').forEach(inp => inp.oninput = () => { const fl=f.files[+inp.dataset.k]; if(fl) fl.caption = inp.value; });
     row.querySelector('.fb-rm').onclick = () => { syncFbFromDom(); fbState.splice(i,1); renderFbRows(); };
@@ -2245,16 +2248,24 @@ async function buildDeck(PDFLib, report){
     if (it.category) D(pg, sp(it.category), M, ey, SANB, 7.5, GOLD);
     const sh = splitHead(it.headline, it.emph);
     drawHead(pg, sh.lead, sh.emph, 30, M, it.category ? ey-38 : H-104);
-    const panelTop = H-188, panelBot = 70, panelX = M-24, panelW = W - panelX - 18;
-    pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelTop-panelBot, color:C(DARK) });
-    if (it.imgBytes){ try {
-      const im = it.png===false ? await doc.embedJpg(it.imgBytes) : await doc.embedPng(it.imgBytes);
-      const availW = panelW-80, availH = (panelTop-panelBot)-46;
-      let dw = im.width, dh = im.height; const r = Math.min(availW/dw, availH/dh); dw*=r; dh*=r;
-      const ix = panelX + (panelW-dw)/2, iy = panelBot + (panelTop-panelBot-dh)/2;
-      pg.drawRectangle({ x:ix-5, y:iy-5, width:dw+10, height:dh+10, color:rgb(1,1,1) });
-      pg.drawImage(im, { x:ix, y:iy, width:dw, height:dh });
-    } catch(e){} }
+    const panelTop = H-188, panelBot = 70, panelX = M-24, panelW = W - panelX - 18, panelH = panelTop-panelBot;
+    pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelH, color:C(DARK) });
+    const imgs = (it.imgs||[]).filter(g => g && g.bytes).slice(0,3), n = imgs.length;
+    if (n){
+      const hasCaps = n>1 && imgs.some(g => (g.caption||'').trim());
+      const pad = n>1 ? 30 : 40, capH = hasCaps ? 24 : 0;
+      const slotW = (panelW - pad*(n+1)) / n, availH = panelH - 2*pad - capH;
+      for (let k=0;k<n;k++){ try {
+        const g = imgs[k], slotX = panelX + pad + k*(slotW+pad);
+        const im = g.png===false ? await doc.embedJpg(g.bytes) : await doc.embedPng(g.bytes);
+        let dw = im.width, dh = im.height; const r = Math.min(slotW/dw, availH/dh); dw*=r; dh*=r;
+        const cx = slotX + (slotW-dw)/2, cy = panelBot + pad + capH + (availH-dh)/2;
+        pg.drawRectangle({ x:cx-5, y:cy-5, width:dw+10, height:dh+10, color:rgb(1,1,1) });
+        pg.drawImage(im, { x:cx, y:cy, width:dw, height:dh });
+        if (hasCaps){ const cap = san(g.caption||''); if (cap.trim()){ const t = cap.length>64?cap.slice(0,62)+'..':cap;
+          const cw = Math.min(SAN.widthOfTextAtSize(t,9), slotW); D(pg, t, slotX + (slotW-cw)/2, panelBot+14, SAN, 9, '#e7dec8'); } }
+      } catch(e){} }
+    }
     footer(pg, report.client||'Client', nn+' / '+total);
   }
   // CLOSING
@@ -2277,18 +2288,21 @@ async function loadFonts(){
   _deckFonts = { serif: await get('serif'), serifItalic: await get('italic') };
   return _deckFonts;
 }
-// Map a dashboard's feedbacks → deck items: ONE page per screenshot, with the
-// change label as the (black) headline and its own caption (or the first
-// description sentence) as the gold-italic emphasis.
+// Map a dashboard's feedbacks → deck items. Screenshots are grouped
+// f.perPage-at-a-time (1/2/3 per page). One image → its caption is the gold
+// emphasis; multiple → each screenshot shows its own caption under it.
 async function buildItems(fbs){
   const items = [];
   for (const f of (fbs||[])){
     const firstSent = String(f.text||'').split(/(?<=[.!?])\\s/)[0] || String(f.text||'');
     const files = (f.files||[]);
-    if (!files.length){ items.push({ category:f.category||'', headline:f.label||'Change', emph:firstSent }); continue; }
-    for (const file of files){
-      const im = await fetchImg(file);
-      items.push({ category:f.category||'', headline:f.label||'Change', emph:(file.caption||firstSent||''), imgBytes: im?im.bytes:null, png: im?im.png:true });
+    if (!files.length){ items.push({ category:f.category||'', headline:f.label||'Change', emph:firstSent, imgs:[] }); continue; }
+    const per = Math.min(3, Math.max(1, f.perPage||1));
+    for (let i=0;i<files.length;i+=per){
+      const group = files.slice(i, i+per), imgs = [];
+      for (const file of group){ const im = await fetchImg(file); imgs.push({ bytes: im?im.bytes:null, png: im?im.png:true, caption: file.caption||'' }); }
+      items.push({ category:f.category||'', headline:f.label||'Change',
+        emph: per===1 ? (group[0].caption||firstSent||'') : firstSent, imgs });
     }
   }
   return items;
