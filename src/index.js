@@ -331,9 +331,14 @@ export default {
         const fbs = Array.isArray(list[i].feedbacks) ? list[i].feedbacks : [];
         const fb = fbs.find((f) => f.id === fbId);
         if (!fb) return json({ error: 'Feedback not found.' }, 404);
-        fb.implemented = !!body.implemented;
+        if ('implemented' in body) fb.implemented = !!body.implemented;
+        if (body.addFile && body.addFile.id) {           // attach a proof file
+          fb.files = Array.isArray(fb.files) ? fb.files : [];
+          fb.files.push({ id: String(body.addFile.id), name: String(body.addFile.name || 'proof'), type: String(body.addFile.type || ''), url: body.addFile.url || ('/api/file?id=' + body.addFile.id) });
+        }
+        if (body.removeFile) fb.files = (fb.files || []).filter((x) => x.id !== String(body.removeFile));
         await writeManual(env, list);
-        return json({ ok: true, id, fbId, implemented: fb.implemented });
+        return json({ ok: true, id, fbId, implemented: !!fb.implemented, files: fb.files || [] });
       }
 
       // ── Email via the Muns raw email API (token from Worker env) ─────────
@@ -825,6 +830,31 @@ function renderPage(data, opts) {
   .asg-row .dn { font-weight:550; font-size:13.5px; } .asg-row .dmeta { font-size:12px; color:var(--muted); }
   .asg-act { margin-left:auto; display:flex; gap:8px; align-items:center; }
   .asg-sel { font:inherit; font-size:12.5px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); }
+  .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
+  .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+  .ck-name { font-weight:650; font-size:15px; }
+  .ck-sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .ck-pct { font-size:13px; color:var(--txt2); white-space:nowrap; } .ck-pct b { color:#0e7a52; }
+  .ck-bar { height:6px; border-radius:4px; background:var(--line2); overflow:hidden; margin:10px 0 6px; }
+  .ck-bar i { display:block; height:100%; background:#22c55e; border-radius:4px; }
+  .ck-row { display:flex; gap:11px; align-items:flex-start; padding:11px 0; border-bottom:1px solid var(--line2); }
+  .ck-row:last-child { border-bottom:0; }
+  .ck-box { position:relative; flex:0 0 auto; width:20px; height:20px; margin-top:1px; cursor:pointer; }
+  .ck-box input { position:absolute; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+  .ck-mark { display:block; width:20px; height:20px; border:2px solid var(--line); border-radius:6px; background:var(--card); transition:.15s; }
+  .ck-box input:checked + .ck-mark { background:#22c55e; border-color:#22c55e; }
+  .ck-box input:checked + .ck-mark::after { content:'✓'; color:#fff; font-size:13px; font-weight:800; position:absolute; left:4px; top:-1px; }
+  .ck-main { flex:1; min-width:0; }
+  .ck-title { font-weight:550; font-size:13.5px; }
+  .ck-cat { font-size:9px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent); background:var(--accent-weak); border-radius:5px; padding:2px 6px; margin-right:7px; }
+  .ck-done .ck-title { text-decoration:line-through; color:var(--muted); }
+  .ck-text { font-size:12.5px; color:var(--txt2); margin:3px 0 6px; }
+  .ck-proof { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .ck-noproof { font-size:11.5px; color:var(--amber,#b4791e); font-style:italic; }
+  .pf-chip { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 4px 2px 9px; }
+  .pf-chip a { color:var(--accent); text-decoration:none; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pf-x { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; padding:0 3px; }
+  .btn.xs { font-size:11px; padding:3px 8px; }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
   .owner-card .rm:hover { color:var(--danger); border-color:var(--danger-line); }
   .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
@@ -1068,6 +1098,7 @@ function renderPage(data, opts) {
     <button class="tab" data-tab="team">👤 Team</button>
     <button class="tab" data-tab="clients">🏢 Clients</button>
     <button class="tab" data-tab="assign">⚖️ Assign</button>
+    <button class="tab" data-tab="checklist">✅ Checklist</button>
   </nav>
 </header>
 
@@ -1142,6 +1173,7 @@ ${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial n
 <section class="tabview" id="tab-team" hidden></section>
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
+<section class="tabview" id="tab-checklist" hidden></section>
 
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
@@ -2030,10 +2062,61 @@ let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
   document.querySelectorAll('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients','assign'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','team','clients','assign','checklist'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
   if (tab === 'assign') renderAssignTab();
+  if (tab === 'checklist') renderChecklistTab();
+}
+// ── Checklist / proof tab: every client feedback as a tick-off item with proof ──
+async function toggleFbDone(id, fbId, checked, el){
+  const r = await api('POST','/api/feedback',{ id, fbId, implemented: checked });
+  if (!r.ok){ alert('Could not update.'); if(el) el.checked = !checked; return; }
+  const d = DATA.dashboards.find(x=>x.id===id); if(d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.implemented=checked; }
+  renderChecklistTab();
+}
+async function addProof(id, fbId){
+  const up = await uploadFile(); if (!up) return;
+  const r = await api('POST','/api/feedback',{ id, fbId, addFile: up });
+  if (!r.ok){ alert('Upload failed.'); return; }
+  const j = await r.json().catch(()=>({})); const d = DATA.dashboards.find(x=>x.id===id);
+  if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||f.files; }
+  renderChecklistTab();
+}
+async function removeProof(id, fbId, fileId){
+  const r = await api('POST','/api/feedback',{ id, fbId, removeFile: fileId });
+  if (!r.ok){ alert('Could not remove.'); return; }
+  const j = await r.json().catch(()=>({})); const d = DATA.dashboards.find(x=>x.id===id);
+  if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||[]; }
+  renderChecklistTab();
+}
+function renderChecklistTab(){
+  const el = G('tab-checklist');
+  const dashes = DATA.dashboards.filter(d => (d.feedbacks||[]).length).sort((a,b)=>{
+    const pa=a.feedbacks.filter(f=>!f.implemented).length, pb=b.feedbacks.filter(f=>!f.implemented).length; return pb-pa;
+  });
+  const ed = CFG.manualEnabled;
+  const cards = dashes.map(d => {
+    const fbs = d.feedbacks||[], done = fbs.filter(f=>f.implemented).length, pct = fbs.length?Math.round(done/fbs.length*100):0;
+    const editable = ed && d.source === 'manual';
+    const rows = fbs.map(f => {
+      const proof = (f.files||[]).map(x => '<span class="pf-chip"><a href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener">'+((x.type||'').startsWith('image/')?'🖼':'📄')+' '+esc((x.name||'proof').slice(0,22))+'</a>'+(editable?'<button class="pf-x" data-rmproof="'+esc(f.id)+'" data-file="'+esc(x.id)+'">×</button>':'')+'</span>').join('');
+      return '<div class="ck-row'+(f.implemented?' ck-done':'')+'">'
+        + '<label class="ck-box"><input type="checkbox" '+(f.implemented?'checked':'')+' '+(editable?'':'disabled')+' data-ck="'+esc(f.id)+'"><span class="ck-mark"></span></label>'
+        + '<div class="ck-main"><div class="ck-title">'+(f.category?'<span class="ck-cat">'+esc(f.category)+'</span>':'')+esc(f.label||'Change')+'</div>'
+        + (f.text?'<div class="ck-text">'+esc(f.text)+'</div>':'')
+        + '<div class="ck-proof">'+(proof||'<span class="ck-noproof">no proof yet</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'">📎 add proof</button>':'')+'</div></div></div>';
+    }).join('');
+    return '<div class="ck-card" data-dash="'+esc(d.id)+'"><div class="ck-head"><div><div class="ck-name">'+esc(d.name)+'</div><div class="ck-sub">'+esc(d.customer||'—')+' · '+esc(d.owner||'Unassigned')+(editable?'':' · <i>read-only (from sheet)</i>')+'</div></div><div class="ck-pct">'+done+'/'+fbs.length+' <b>'+pct+'%</b></div></div>'
+      + '<div class="ck-bar"><i style="width:'+pct+'%"></i></div>'+rows+'</div>';
+  }).join('');
+  el.innerHTML = '<div class="tabhead"><h2>✅ Checklist</h2><div class="sub">Every client change with proof · tick each off as your team completes it</div></div>'
+    + (cards || '<div class="empty">No client feedback yet. Add feedbacks (client changes) to a dashboard and they\\'ll appear here as a checklist.</div>');
+  if (ed){
+    el.querySelectorAll('[data-ck]').forEach(c => c.onchange = () => toggleFbDone(c.closest('.ck-card').dataset.dash, c.dataset.ck, c.checked, c));
+    el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.closest('.ck-card').dataset.dash, b.dataset.addproof));
+    el.querySelectorAll('[data-rmproof]').forEach(b => b.onclick = () => removeProof(b.closest('.ck-card').dataset.dash, b.dataset.rmproof, b.dataset.file));
+  }
 }
 
 // ── Workload-balanced auto-assignment ──────────────────────────────────────
