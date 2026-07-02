@@ -1049,7 +1049,9 @@ function renderPage(data, opts) {
   .fb-bot .fb-link { flex:1; }
   .fb-row textarea { width:100%; }
   .ssrow { display:flex; align-items:center; gap:8px; margin:5px 0; }
-  .ssrow .fchip { flex:0 0 auto; max-width:40%; overflow:hidden; }
+  .ssrow .fchip { flex:0 0 auto; max-width:30%; overflow:hidden; }
+  .ssrow .ss-inputs { flex:1; display:flex; gap:6px; min-width:0; }
+  .ssrow .sshdr { flex:0 0 38%; min-width:0; font-size:12px; font-weight:600; }
   .ssrow .sscap { flex:1; min-width:0; font-size:12px; }
   .fb-pp { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); white-space:nowrap; }
   .fb-pp select { font:inherit; font-size:12px; padding:3px 6px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--txt); }
@@ -1520,9 +1522,10 @@ function renderFbRows(){
   [...box.children].forEach((row,i) => {
     const f = fbState[i];
     const fb = row.querySelector('.fb-files');
-    fb.innerHTML = (f.files||[]).map((x,k) => '<div class="ssrow">'+fileChip(x,true)+'<input class="sscap" data-k="'+k+'" placeholder="this screenshot&#39;s caption / description — optional" value="'+esc(x.caption||'')+'"></div>').join('');
+    fb.innerHTML = (f.files||[]).map((x,k) => '<div class="ssrow">'+fileChip(x,true)+'<div class="ss-inputs"><input class="sshdr" data-k="'+k+'" placeholder="page header (optional)" value="'+esc(x.header||'')+'"><input class="sscap" data-k="'+k+'" placeholder="description / caption (optional)" value="'+esc(x.caption||'')+'"></div></div>').join('');
     fb.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { f.files = f.files.filter(x => x.id !== b.dataset.fx); renderFbRows(); });
     fb.querySelectorAll('.sscap').forEach(inp => inp.oninput = () => { const fl=f.files[+inp.dataset.k]; if(fl) fl.caption = inp.value; });
+    fb.querySelectorAll('.sshdr').forEach(inp => inp.oninput = () => { const fl=f.files[+inp.dataset.k]; if(fl) fl.header = inp.value; });
     row.querySelector('.fb-rm').onclick = () => { syncFbFromDom(); fbState.splice(i,1); renderFbRows(); };
     row.querySelector('.fb-file').onclick = async () => { syncFbFromDom(); const ups = await uploadFiles(); if (ups.length){ fbState[i].files = (fbState[i].files||[]).concat(ups); renderFbRows(); } };
   });
@@ -2403,7 +2406,8 @@ async function buildItems(fbs){
     for (let i=0;i<files.length;i+=per){
       const group = files.slice(i, i+per), imgs = [];
       for (const file of group){ const im = await fetchImg(file); imgs.push({ bytes: im?im.bytes:null, png: im?im.png:true, caption: file.caption||'' }); }
-      items.push({ category:f.category||'', headline:f.label||'Change',
+      items.push({ category:f.category||'',
+        headline: (per===1 ? (group[0].header||f.label) : (group[0].header||f.label)) || 'Change',
         emph: per===1 ? (group[0].caption||firstSent||'') : firstSent, imgs });
     }
   }
