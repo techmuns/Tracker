@@ -2252,18 +2252,23 @@ async function buildDeck(PDFLib, report){
     pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelH, color:C(DARK) });
     const imgs = (it.imgs||[]).filter(g => g && g.bytes).slice(0,3), n = imgs.length;
     if (n){
-      const hasCaps = n>1 && imgs.some(g => (g.caption||'').trim());
-      const pad = n>1 ? 30 : 40, capH = hasCaps ? 24 : 0;
-      const slotW = (panelW - pad*(n+1)) / n, availH = panelH - 2*pad - capH;
+      const pad = n>1 ? 28 : 40, botMargin = 14, capSize = n>2 ? 8 : 9, lineH = capSize + 3;
+      const slotW = (panelW - pad*(n+1)) / n;
+      // Wrap each caption to its slot (no truncation) so the full text shows.
+      const wrapC = (t, mw) => { const w = san(t).split(/\\s+/), L = []; let c=''; for (const x of w){ const nn = c?c+' '+x:x; if (SAN.widthOfTextAtSize(nn, capSize) > mw && c){ L.push(c); c = x; } else c = nn; } if (c) L.push(c); return L; };
+      const capLines = imgs.map(g => (n>1 && (g.caption||'').trim()) ? wrapC(g.caption, slotW-4).slice(0,4) : []);
+      const maxCap = Math.max(0, ...capLines.map(l => l.length));
+      const capH = maxCap ? maxCap*lineH + 6 : 0;
+      const imgBot = panelBot + botMargin + capH + (capH?10:0), availH = (panelTop - pad) - imgBot;
       for (let k=0;k<n;k++){ try {
         const g = imgs[k], slotX = panelX + pad + k*(slotW+pad);
         const im = g.png===false ? await doc.embedJpg(g.bytes) : await doc.embedPng(g.bytes);
         let dw = im.width, dh = im.height; const r = Math.min(slotW/dw, availH/dh); dw*=r; dh*=r;
-        const cx = slotX + (slotW-dw)/2, cy = panelBot + pad + capH + (availH-dh)/2;
+        const cx = slotX + (slotW-dw)/2, cy = imgBot + (availH-dh)/2;
         pg.drawRectangle({ x:cx-5, y:cy-5, width:dw+10, height:dh+10, color:rgb(1,1,1) });
         pg.drawImage(im, { x:cx, y:cy, width:dw, height:dh });
-        if (hasCaps){ const cap = san(g.caption||''); if (cap.trim()){ const t = cap.length>64?cap.slice(0,62)+'..':cap;
-          const cw = Math.min(SAN.widthOfTextAtSize(t,9), slotW); D(pg, t, slotX + (slotW-cw)/2, panelBot+14, SAN, 9, '#e7dec8'); } }
+        const first = panelBot + botMargin + capH - lineH + 1;
+        capLines[k].forEach((ln, li) => { const cw = Math.min(SAN.widthOfTextAtSize(ln, capSize), slotW); D(pg, ln, slotX + (slotW-cw)/2, first - li*lineH, SAN, capSize, '#e7dec8'); });
       } catch(e){} }
     }
     footer(pg, report.client||'Client', nn+' / '+total);
