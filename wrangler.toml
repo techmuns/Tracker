@@ -19,6 +19,19 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # secret (Settings → Variables → Add → Encrypt), then the UI prompts for it once.
 #   EDIT_TOKEN = "..."   (prefer a Secret over a plain var)
 
-# Optional: keep the edge cache warm so the first visitor each window is fast.
-# [triggers]
-# crons = ["*/3 * * * *"]
+# Email sending (Muns raw API). Set the token as a SECRET — never commit it:
+#   npx wrangler secret put MUNS_TOKEN
+# Optional endpoint override (defaults to https://devde.muns.io/email/send/raw):
+#   MUNS_EMAIL_URL = "https://devde.muns.io/email/send/raw"
+
+# Nightly Build Update digest recipient. Defaults to tech@muns.io (your test
+# inbox). Once verified, switch to the founder:
+#   npx wrangler secret put DIGEST_TO     # then enter ceekay@muns.io
+# (or set DIGEST_TO here as a plain [vars] entry if committing the address is OK)
+
+# Scheduled triggers (UTC). IST = UTC + 5:30, so 9:00 PM IST = 15:30 UTC.
+#   "30 15 * * *"  → daily 9pm IST   → daily status email (per-member/dashboard progress)
+#   "30 15 * * 3"  → Wednesday 9pm IST → weekly Build-Update PDF digest (all PDFs, one email)
+# Both go to DIGEST_TO (the founder). The handler branches on event.cron.
+[triggers]
+crons = ["30 15 * * *", "30 15 * * 3"]

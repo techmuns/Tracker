@@ -21,6 +21,8 @@ const KV_UPDATES = 'dashboard_updates';
 const KV_PEOPLE = 'people';
 const KV_CONFIG = 'config';
 const KV_PRIORITY = 'priority';
+const KV_CLIENTS = 'clients';
+const MAX_FILE_BYTES = 4 * 1024 * 1024; // 4MB cap per uploaded file
 
 async function kvGet(env, key, fallback) {
   if (!env.MANUAL) return fallback;
@@ -39,10 +41,18 @@ const readConfig = (env) => kvGet(env, KV_CONFIG, {});
 const writeConfig = (env, c) => env.MANUAL.put(KV_CONFIG, JSON.stringify(c));
 const readPriority = (env) => kvGet(env, KV_PRIORITY, {});
 const writePriority = (env, p) => env.MANUAL.put(KV_PRIORITY, JSON.stringify(p));
+const readClients = (env) => kvGet(env, KV_CLIENTS, {});
+const writeClients = (env, c) => env.MANUAL.put(KV_CLIENTS, JSON.stringify(c));
+const KV_DIGEST = 'digest_queue';
+const readDigest = (env) => kvGet(env, KV_DIGEST, []);
+const writeDigest = (env, q) => env.MANUAL.put(KV_DIGEST, JSON.stringify(q));
+const KV_ASSIGN = 'assignments';
+const readAssign = (env) => kvGet(env, KV_ASSIGN, {});
+const writeAssign = (env, a) => env.MANUAL.put(KV_ASSIGN, JSON.stringify(a));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, config, priority] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env),
+  const [manual, roster, updates, people, config, priority, clients, assignments] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env), readClients(env), readAssign(env),
   ]);
   // Standalone mode: serve purely from KV, never touch the Google Sheet.
   let rows = [];
@@ -52,7 +62,7 @@ async function getDataset(env) {
     if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
     rows = parseCsv(await res.text());
   }
-  return buildDataset(rows, manual, { roster, updates, people, priority, standalone: !!config.standalone });
+  return buildDataset(rows, manual, { roster, updates, people, priority, clients, assignments, standalone: !!config.standalone });
 }
 
 const json = (obj, status = 200) =>
@@ -65,6 +75,124 @@ const json = (obj, status = 200) =>
 function authorized(request, env) {
   if (!env.EDIT_TOKEN) return true;
   return request.headers.get('x-edit-token') === env.EDIT_TOKEN;
+}
+
+// Send via the Muns raw email API. The raw API wants EXACTLY ONE of text/html.
+async function sendMuns(env, recipients, subject, html, text) {
+  if (!env.MUNS_TOKEN) return { ok: false, sent: 0, error: 'MUNS_TOKEN not set' };
+  const endpoint = env.MUNS_EMAIL_URL || 'https://devde.muns.io/email/send/raw';
+  const list = (Array.isArray(recipients) ? recipients : String(recipients).split(','))
+    .map((s) => String(s).trim()).filter(Boolean);
+  const results = [];
+  for (const email of list) {
+    try {
+      const payload = html ? { email, subject, html } : { email, subject, text: text || '' };
+      const r = await fetch(endpoint, { method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload) });
+      const t = await r.text();
+      results.push({ email, status: r.status, ok: r.ok, response: t.slice(0, 400) });
+    } catch (e) { results.push({ email, ok: false, error: String((e && e.message) || e) }); }
+  }
+  return { ok: results.length > 0 && results.every((x) => x.ok), sent: results.filter((x) => x.ok).length, results };
+}
+
+// Nightly digest recipient — override with the DIGEST_TO env var/secret.
+const digestTo = (env) => env.DIGEST_TO || 'ceekay@muns.io';
+
+function digestEmailHtml(items, dateStr) {
+  const rows = items.map((it) => {
+    const meta = [it.client, (it.count != null ? it.count + ' change' + (it.count === 1 ? '' : 's') : '')].filter(Boolean).join('  ·  ');
+    const cta = it.url
+      ? `<a href="${escapeHtml(it.url)}" style="display:inline-block;background:#16294a;color:#fff;text-decoration:none;font-size:12px;font-weight:600;padding:9px 15px;border-radius:8px">Open the Build Update PDF →</a>`
+      : '<span style="color:#b4791e;font-size:12px">PDF link unavailable</span>';
+    return `<tr><td style="padding:13px 15px;border:1px solid #e7e2d3;border-radius:11px;background:#fff">
+      <div style="font-weight:700;color:#16294a;font-size:15px">${escapeHtml(it.name || 'Build Update')}</div>
+      <div style="color:#7a8395;font-size:12px;margin:3px 0 9px">${escapeHtml(meta)}</div>${cta}
+    </td></tr><tr><td style="height:10px"></td></tr>`;
+  }).join('');
+  return `<div style="font-family:Arial,Helvetica,sans-serif;background:#faf6ec;padding:24px">
+    <div style="max-width:620px;margin:0 auto">
+      <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c9a24a;font-weight:700">Daily Build Update · ${escapeHtml(dateStr)}</div>
+      <h1 style="font-family:Georgia,'Times New Roman',serif;color:#16294a;font-size:25px;margin:6px 0 4px">Today's Build Updates</h1>
+      <p style="color:#33405a;font-size:13px;margin:0 0 18px">${items.length} update${items.length === 1 ? '' : 's'} prepared today — each links to its full visual deck.</p>
+      <table style="width:100%;border-collapse:separate;border-spacing:0">${rows}</table>
+      <p style="color:#9aa3b2;font-size:11px;margin-top:16px">Sent automatically by the Munshot Dashboard Tracker.</p>
+    </div></div>`;
+}
+
+// Build and send the nightly digest of the day's Build Updates. Clears the
+// queue only on a successful send so nothing is silently dropped. Records the
+// outcome (digest_last) so the UI can show "last sent …" as proof it ran.
+async function runDigest(env, trigger) {
+  const stamp = async (rec) => { try { await env.MANUAL.put('digest_last', JSON.stringify({ at: new Date().toISOString(), trigger: trigger || 'manual', ...rec })); } catch (e) {} };
+  const queue = await readDigest(env);
+  if (!queue.length) { const r = { ok: true, sent: 0, count: 0, skipped: 'empty', to: digestTo(env) }; await stamp(r); return r; }
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const res = await sendMuns(env, digestTo(env), `Build Updates — ${dateStr} (${queue.length})`, digestEmailHtml(queue, dateStr), '');
+  if (res.ok) await writeDigest(env, []);
+  const out = { ...res, count: queue.length, to: digestTo(env), error: res.ok ? undefined : (res.error || 'send failed') };
+  await stamp({ ok: res.ok, sent: res.sent || 0, count: queue.length, to: digestTo(env), error: out.error });
+  return out;
+}
+
+// ── Daily status digest (per-dashboard & per-member progress) ──────────────
+function dailyStatusHtml(dateStr, owners, dashRows) {
+  const e = escapeHtml;
+  const ownerRows = Object.entries(owners).sort((a, b) => b[1].doneToday - a[1].doneToday).map(([name, a]) => {
+    const pct = a.total ? Math.round(a.done / a.total * 100) : 0;
+    return `<tr><td style="padding:9px 12px;border-bottom:1px solid #eee2c9;font-weight:600;color:#16294a">${e(name)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #eee2c9;text-align:center;color:#0e7a52;font-weight:700">+${a.doneToday}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #eee2c9;text-align:center;color:#b4791e">${a.pending}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #eee2c9;text-align:center;color:#33405a">${a.done}/${a.total} (${pct}%)</td></tr>`;
+  }).join('');
+  const dashList = dashRows.filter(r => r.total).sort((a, b) => b.doneToday - a.doneToday || b.pending - a.pending).map(r => {
+    const bar = `<div style="height:6px;background:#eee2c9;border-radius:4px;overflow:hidden;margin-top:5px"><div style="height:100%;width:${r.pct}%;background:#0e7a52"></div></div>`;
+    const extra = (r.doneToday ? ` · <b style="color:#0e7a52">+${r.doneToday} since last</b>` : '') + (r.newToday ? ` · <span style="color:#1d4ed8">${r.newToday} new</span>` : '');
+    return `<tr><td style="padding:11px 12px;border-bottom:1px solid #eee2c9">
+      <div style="font-weight:600;color:#16294a">${e(r.client || '—')} · ${e(r.name)}</div>
+      <div style="font-size:12px;color:#7a8395;margin-top:2px">${r.done}/${r.total} changes done (${r.pct}%) · ${r.pending} pending${extra}</div>${bar}</td>
+      <td style="padding:11px 12px;border-bottom:1px solid #eee2c9;text-align:right;color:#727a8a;font-size:12px;white-space:nowrap">${e(r.owner || 'Unassigned')}</td></tr>`;
+  }).join('');
+  return `<div style="font-family:Arial,Helvetica,sans-serif;background:#faf6ec;padding:24px"><div style="max-width:660px;margin:0 auto">
+    <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c9a24a;font-weight:700">Daily Status · ${e(dateStr)}</div>
+    <h1 style="font-family:Georgia,'Times New Roman',serif;color:#16294a;font-size:24px;margin:6px 0 16px">Dashboard progress</h1>
+    <h3 style="color:#33405a;font-size:13px;margin:0 0 7px">By team member</h3>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee2c9;border-radius:10px;overflow:hidden">
+      <tr style="background:#f4eeda"><td style="padding:8px 12px;font-size:10px;letter-spacing:.05em;color:#7a8395">MEMBER</td><td style="padding:8px 12px;font-size:10px;color:#7a8395;text-align:center">DONE</td><td style="padding:8px 12px;font-size:10px;color:#7a8395;text-align:center">PENDING</td><td style="padding:8px 12px;font-size:10px;color:#7a8395;text-align:center">COMPLETION</td></tr>
+      ${ownerRows || '<tr><td colspan="4" style="padding:12px;color:#999;font-size:13px">No tracked changes yet.</td></tr>'}
+    </table>
+    <h3 style="color:#33405a;font-size:13px;margin:18px 0 7px">By dashboard</h3>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee2c9;border-radius:10px;overflow:hidden">${dashList || '<tr><td style="padding:12px;color:#999;font-size:13px">No dashboards with feedback yet.</td></tr>'}</table>
+    <p style="color:#9aa3b2;font-size:11px;margin-top:16px">"Since last" compares with the previous daily report. Sent automatically by the Munshot Dashboard Tracker.</p>
+  </div></div>`;
+}
+
+// Compute the day's per-dashboard / per-member progress and email it. The diff
+// is vs the last snapshot (saved only on a successful send), so each report
+// shows what got done since the previous one.
+async function runDailyStatus(env, trigger) {
+  const stamp = async (rec) => { try { await env.MANUAL.put('daily_last', JSON.stringify({ at: new Date().toISOString(), trigger: trigger || 'manual', ...rec })); } catch (e) {} };
+  let data;
+  try { data = await getDataset(env); } catch (e) { const r = { ok: false, error: 'dataset: ' + (e && e.message) }; await stamp(r); return r; }
+  const dashes = (data.dashboards || []).filter(d => (d.feedbacks || []).length);
+  if (!dashes.length) { const r = { ok: true, sent: 0, skipped: 'no-feedback', to: digestTo(env) }; await stamp(r); return r; }
+  const prev = (await kvGet(env, 'status_snapshot', { dash: {} })).dash || {};
+  const cur = {}, dashRows = [], owners = {};
+  for (const d of dashes) {
+    const fb = d.feedbacks, total = fb.length, done = fb.filter(f => f.implemented).length, p = prev[d.id] || { done: 0, total: 0 };
+    cur[d.id] = { total, done };
+    const doneToday = Math.max(0, done - (p.done || 0)), newToday = Math.max(0, total - (p.total || 0)), pct = total ? Math.round(done / total * 100) : 0;
+    dashRows.push({ id: d.id, name: d.name, client: d.customer, owner: d.owner, total, done, pending: total - done, doneToday, newToday, pct });
+    const o = d.owner || 'Unassigned', a = owners[o] || (owners[o] = { done: 0, doneToday: 0, pending: 0, total: 0 });
+    a.done += done; a.doneToday += doneToday; a.pending += (total - done); a.total += total;
+  }
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const totalDoneToday = dashRows.reduce((s, r) => s + r.doneToday, 0), totalPending = dashRows.reduce((s, r) => s + r.pending, 0);
+  const res = await sendMuns(env, digestTo(env), `Daily Status — ${dateStr} (+${totalDoneToday} done · ${totalPending} pending)`, dailyStatusHtml(dateStr, owners, dashRows), '');
+  if (res.ok) await env.MANUAL.put('status_snapshot', JSON.stringify({ date: dateStr, dash: cur }));
+  await stamp({ ok: res.ok, sent: res.sent || 0, to: digestTo(env), error: res.ok ? undefined : (res.error || 'send failed'), doneToday: totalDoneToday, pending: totalPending });
+  return { ...res, to: digestTo(env), doneToday: totalDoneToday, pending: totalPending };
 }
 
 export default {
@@ -94,8 +222,13 @@ export default {
             improvement: body.improvement || '',
             feedback: body.feedback || '',
             meetingUrl: body.meetingUrl || '',
+            links: Array.isArray(body.links) ? body.links : [],
             lastUpdated: body.lastUpdated || new Date().toLocaleDateString('en-GB'),
             note: body.note || '',
+            dueDate: body.dueDate || '',
+            manualStatus: body.manualStatus || '',
+            requirementFiles: Array.isArray(body.requirementFiles) ? body.requirementFiles : [],
+            feedbacks: Array.isArray(body.feedbacks) ? body.feedbacks : [],
           };
           const list = await readManual(env);
           list.push(entry);
@@ -112,7 +245,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'lastUpdated', 'note'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -149,7 +282,7 @@ export default {
         return json({ ok: true, imported: added.length, standalone: true }, 201);
       }
 
-      // ── Priority flag API ───────────────────────────────────────────────
+      // ── Priority API — stores a level per dashboard (1 = highest) ────────
       if (pathname === '/api/priority') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
         if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
@@ -158,12 +291,194 @@ export default {
         const id = String(body.id || '').trim();
         if (!id) return json({ error: 'id is required.' }, 400);
         const priority = await readPriority(env);
-        if (body.on) priority[id] = true; else delete priority[id];
+        // Accept {level:n} (0 clears) or legacy {on:bool}.
+        let level = 'level' in body ? Number.parseInt(body.level, 10) : (body.on ? 1 : 0);
+        if (!Number.isFinite(level) || level < 0) level = 0;
+        if (level > 0) priority[id] = level; else delete priority[id];
         await writePriority(env, priority);
-        return json({ ok: true, id, on: !!body.on });
+        return json({ ok: true, id, level });
       }
 
-      // ── Person / employee terminal API ──────────────────────────────────
+      // ── Quick stage setter (advance a dashboard along the pipeline) ──────
+      if (pathname === '/api/stage') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const body = await request.json().catch(() => ({}));
+        const id = String(body.id || '').trim();
+        const stage = String(body.stage || '').trim();
+        if (!id || !stage) return json({ error: 'id and stage are required.' }, 400);
+        const list = await readManual(env);
+        const i = list.findIndex((e) => e.id === id);
+        if (i === -1) return json({ error: 'Only app-stored dashboards can be changed here. Go standalone first to edit sheet rows.' }, 404);
+        list[i].stage = stage;
+        list[i].updatedAt = new Date().toISOString();
+        await writeManual(env, list);
+        return json({ ok: true, id, stage });
+      }
+
+      // ── Toggle a feedback's "implemented" flag (the yes/no slider) ───────
+      if (pathname === '/api/feedback') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const body = await request.json().catch(() => ({}));
+        const id = String(body.id || '').trim(), fbId = String(body.fbId || '');
+        if (!id || !fbId) return json({ error: 'id and fbId are required.' }, 400);
+        const list = await readManual(env);
+        const i = list.findIndex((e) => e.id === id);
+        if (i === -1) return json({ error: 'Only app-stored dashboards can be changed here.' }, 404);
+        const fbs = Array.isArray(list[i].feedbacks) ? list[i].feedbacks : [];
+        const fb = fbs.find((f) => f.id === fbId);
+        if (!fb) return json({ error: 'Feedback not found.' }, 404);
+        if ('implemented' in body) fb.implemented = !!body.implemented;
+        if (body.addFile && body.addFile.id) {           // attach a proof file
+          fb.files = Array.isArray(fb.files) ? fb.files : [];
+          fb.files.push({ id: String(body.addFile.id), name: String(body.addFile.name || 'proof'), type: String(body.addFile.type || ''), url: body.addFile.url || ('/api/file?id=' + body.addFile.id) });
+        }
+        if (body.removeFile) fb.files = (fb.files || []).filter((x) => x.id !== String(body.removeFile));
+        await writeManual(env, list);
+        return json({ ok: true, id, fbId, implemented: !!fb.implemented, files: fb.files || [] });
+      }
+
+      // ── Email via the Muns raw email API (token from Worker env) ─────────
+      if (pathname === '/api/email') {
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!env.MUNS_TOKEN) return json({ error: 'MUNS_TOKEN is not set in the Worker environment. Add it as a secret (wrangler secret put MUNS_TOKEN).' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const subject = String(body.subject || '').trim();
+        const text = String(body.text || '');
+        const htmlBody = String(body.html || '');
+        // Accept { to: [...] | "a, b" } or the raw API's { email }.
+        let recipients = [];
+        if (Array.isArray(body.to)) recipients = body.to;
+        else if (body.to) recipients = String(body.to).split(',');
+        else if (body.email) recipients = [body.email];
+        recipients = recipients.map((s) => String(s).trim()).filter(Boolean);
+        if (!recipients.length) return json({ error: 'At least one recipient is required.' }, 400);
+        if (!subject) return json({ error: 'Subject is required.' }, 400);
+        const out = await sendMuns(env, recipients, subject, htmlBody, text);
+        return json(out);
+      }
+
+      // ── Nightly digest queue (auto-collected PDFs, sent once at 8pm IST) ──
+      if (pathname === '/api/digest') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') {
+          const q = await readDigest(env);
+          const last = await kvGet(env, 'digest_last', null);
+          const dailyLast = await kvGet(env, 'daily_last', null);
+          return json({ ok: true, count: q.length, to: digestTo(env), items: q, last, dailyLast });
+        }
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const action = String(body.action || 'enqueue');
+        if (action === 'enqueue') {
+          const it = body.item || {};
+          if (!it.url && !it.dashboardId) return json({ error: 'Nothing to enqueue.' }, 400);
+          let q = await readDigest(env);
+          q = q.filter((x) => !it.dashboardId || x.dashboardId !== it.dashboardId); // one entry per dashboard — newest wins
+          q.push({ dashboardId: String(it.dashboardId || ''), name: String(it.name || 'Build Update'), client: String(it.client || ''),
+            count: it.count != null ? +it.count : null, url: String(it.url || ''), at: new Date().toISOString() });
+          if (q.length > 100) q = q.slice(q.length - 100);
+          await writeDigest(env, q);
+          return json({ ok: true, count: q.length });
+        }
+        if (action === 'send') { const r = await runDigest(env, 'manual'); return json(r, r.ok ? 200 : 502); }
+        if (action === 'daily') { const r = await runDailyStatus(env, 'manual'); return json(r, r.ok ? 200 : 502); }
+        if (action === 'clear') { await writeDigest(env, []); return json({ ok: true, count: 0 }); }
+        return json({ error: 'Unknown action.' }, 400);
+      }
+
+      // ── Owner assignment overlay (auto-balanced workload) ────────────────
+      if (pathname === '/api/assign') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') return json({ ok: true, assignments: await readAssign(env) });
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const map = await readAssign(env);
+        const setOne = (id, owner) => { const o = String(owner || '').trim(); if (o) map[String(id)] = o; else delete map[String(id)]; };
+        if (body.assignments && typeof body.assignments === 'object') { for (const [id, owner] of Object.entries(body.assignments)) setOne(id, owner); }
+        else if (body.id) setOne(body.id, body.owner);
+        else return json({ error: 'Provide {id, owner} or {assignments}.' }, 400);
+        await writeAssign(env, map);
+        return json({ ok: true, count: Object.keys(map).length, assignments: map });
+      }
+
+      // ── Deck fonts (Playfair Display) — proxied + edge-cached, same-origin ─
+      if (pathname === '/api/font') {
+        const f = url.searchParams.get('f');
+        const src = f === 'italic'
+          ? 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/playfairdisplay/PlayfairDisplay-Italic%5Bwght%5D.ttf'
+          : 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf';
+        try {
+          const r = await fetch(src, { cf: { cacheTtl: 31536000, cacheEverything: true } });
+          if (!r.ok) return new Response('font fetch failed', { status: 502 });
+          return new Response(r.body, { headers: {
+            'content-type': 'font/ttf',
+            'cache-control': 'public, max-age=31536000, immutable',
+            'access-control-allow-origin': '*',
+          } });
+        } catch (e) { return new Response('font error', { status: 502 }); }
+      }
+
+      // ── File store (PDF / image uploads) — base64 in KV, served raw ──────
+      if (pathname === '/api/file') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') {
+          const id = url.searchParams.get('id');
+          if (!id || !/^[\w-]+$/.test(id)) return new Response('Bad id', { status: 400 });
+          const raw = await env.MANUAL.get('file:' + id);
+          if (!raw) return new Response('Not found', { status: 404 });
+          const f = JSON.parse(raw);
+          const bytes = Uint8Array.from(atob(f.data), (c) => c.charCodeAt(0));
+          return new Response(bytes, { headers: {
+            'content-type': f.type || 'application/octet-stream',
+            'content-disposition': `inline; filename="${(f.name || 'file').replace(/"/g, '')}"`,
+            'cache-control': 'public, max-age=31536000, immutable',
+          } });
+        }
+        if (request.method === 'POST') {
+          if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+          const body = await request.json().catch(() => ({}));
+          const data = String(body.data || ''); // base64 (no data: prefix)
+          if (!data) return json({ error: 'No file data.' }, 400);
+          if (data.length * 0.75 > MAX_FILE_BYTES) return json({ error: 'File too large (max 4 MB).' }, 413);
+          const id = crypto.randomUUID();
+          await env.MANUAL.put('file:' + id, JSON.stringify({ name: String(body.name || 'file'), type: String(body.type || ''), data }));
+          return json({ ok: true, id, name: String(body.name || 'file'), type: String(body.type || ''), url: '/api/file?id=' + id }, 201);
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Client details API ──────────────────────────────────────────────
+      if (pathname === '/api/client') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const clients = await readClients(env);
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          const name = String(body.name || '').trim();
+          if (!name) return json({ error: 'Client name is required.' }, 400);
+          const c = clients[name] || {};
+          for (const f of ['poc', 'emails', 'meetingFreq', 'notes', 'website', 'logo']) if (f in body) c[f] = body[f];
+          clients[name] = c;
+          await writeClients(env, clients);
+          return json({ ok: true, name, client: c }, 201);
+        }
+        if (request.method === 'DELETE') {
+          const name = String(url.searchParams.get('name') || '');
+          delete clients[name];
+          await writeClients(env, clients);
+          return json({ ok: true });
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Person / employee profile + attendance API ──────────────────────
       if (pathname === '/api/person') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
         if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
@@ -173,8 +488,7 @@ export default {
         if (!name) return json({ error: 'name is required.' }, 400);
         const people = await readPeople(env);
         const p = people[name] || { joinDate: '', days: {} };
-        if ('joinDate' in body) p.joinDate = String(body.joinDate || '');
-        if ('role' in body) p.role = String(body.role || '');
+        for (const f of ['joinDate', 'role', 'qualification', 'phone', 'email', 'photo', 'calendarUrl']) if (f in body) p[f] = String(body[f] || '');
         // Mark/clear a single day's attendance: status 'present' | 'leave' | '' (clear)
         if (body.date) {
           const date = String(body.date);
@@ -209,10 +523,22 @@ export default {
           return json({ ok: true, roster }, 201);
         }
         if (request.method === 'DELETE') {
-          const name = url.searchParams.get('name');
+          const name = String(url.searchParams.get('name') || '');
           roster[key] = roster[key].filter((n) => n !== name);
           await writeRoster(env, roster);
-          return json({ ok: true, roster });
+          // Detach the name from any app-stored dashboards so it disappears
+          // everywhere (owners → Unassigned; clients → removed from the list).
+          const list = await readManual(env);
+          let changed = 0;
+          for (const e of list) {
+            if (type === 'owner' && (e.owner || '') === name) { e.owner = 'Unassigned'; changed++; }
+            if (type === 'customer') {
+              const parts = String(e.customer || '').split(/\s*&\s*/).map((s) => s.trim()).filter(Boolean);
+              if (parts.includes(name)) { e.customer = parts.filter((p) => p !== name).join(' & '); changed++; }
+            }
+          }
+          if (changed) await writeManual(env, list);
+          return json({ ok: true, roster, detached: changed });
         }
         return json({ error: 'Method not allowed.' }, 405);
       }
@@ -238,6 +564,12 @@ export default {
           if (!Array.isArray(updates[id])) updates[id] = [];
           updates[id].push(entry);
           await writeUpdates(env, updates);
+          // Keep the dashboard's canonical stage in sync when the update sets one.
+          if (entry.state) {
+            const list = await readManual(env);
+            const i = list.findIndex((e) => e.id === id);
+            if (i !== -1){ list[i].stage = entry.state; await writeManual(env, list); }
+          }
           return json({ ok: true, entry }, 201);
         }
         if (request.method === 'DELETE') {
@@ -275,6 +607,14 @@ export default {
         headers: { 'content-type': 'text/html; charset=utf-8' },
       });
     }
+  },
+  // Crons (UTC; see wrangler.toml):
+  //   "30 15 * * *"  → 9:00pm IST daily   → daily status email
+  //   "30 15 * * 3"  → 9:00pm IST Wednesday → weekly Build-Update PDF digest
+  async scheduled(event, env, ctx) {
+    const cron = event && event.cron;
+    if (cron === '30 15 * * 3') ctx.waitUntil(runDigest(env, 'cron').catch(() => {}));
+    else ctx.waitUntil(runDailyStatus(env, 'cron').catch(() => {}));
   },
 };
 
@@ -386,6 +726,9 @@ function renderPage(data, opts) {
   .drow .sn { color:var(--muted); font-variant-numeric:tabular-nums; font-size:12px; min-width:26px; }
   .drow .dn { font-weight:550; font-size:13.5px; }
   .drow .dmeta { font-size:12px; color:var(--muted); }
+  .drow .dlinks { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; align-items:center; align-self:center; }
+  .drow .dlink { font-size:11px; font-weight:600; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 9px; text-decoration:none; white-space:nowrap; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+  .drow .dlink:hover { text-decoration:underline; filter:brightness(0.97); }
   .chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 6px; }
   /* Employee terminal */
   .emp { margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
@@ -464,6 +807,54 @@ function renderPage(data, opts) {
   .tl-item .tl-del:hover { color:var(--danger); }
   .roster-add { display:flex; gap:8px; margin-bottom:14px; }
   .roster-add input { flex:1; margin:0; }
+  .digest-bar { display:flex; flex-direction:column; gap:12px; margin-bottom:14px; padding:12px 14px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; }
+  .digest-bar .dg-row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .digest-bar .dg-row + .dg-row { padding-top:11px; border-top:1px solid var(--accent-line); }
+  .digest-bar .dg-main { display:flex; flex-direction:column; gap:3px; flex:1; min-width:240px; }
+  .digest-bar .dgi { font-size:12.5px; color:var(--txt2); }
+  .digest-bar #digestLast, .digest-bar #dailyLast { font-size:11.5px; color:var(--muted); }
+  .digest-bar .sub { font-size:12px; white-space:nowrap; }
+  .wl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin:10px 0 4px; }
+  .wl-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:13px 14px; }
+  .wl-head { display:flex; align-items:center; gap:9px; }
+  .wl-name { font-weight:600; font-size:13.5px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wl-meta { font-size:11.5px; color:var(--muted); margin:7px 0 6px; }
+  .wl-bar { height:7px; border-radius:5px; background:var(--line2); overflow:hidden; }
+  .wl-bar i { display:block; height:100%; border-radius:5px; }
+  .wl-pill { font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:2px 8px; border-radius:999px; }
+  .wl-pill.free, .wl-bar i.free { background:#e7f7ee; color:#0e7a52; } .wl-bar i.free { background:#22c55e; }
+  .wl-pill.ok, .wl-bar i.ok { background:#e8f0fe; color:#1d4ed8; } .wl-bar i.ok { background:#3b82f6; }
+  .wl-pill.busy, .wl-bar i.busy { background:#fef3dc; color:#b45309; } .wl-bar i.busy { background:#f59e0b; }
+  .wl-pill.full, .wl-bar i.full { background:#fdeee3; color:#c2410c; } .wl-bar i.full { background:#ef4444; }
+  .asg-row { display:flex; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line2); }
+  .asg-row .dn { font-weight:550; font-size:13.5px; } .asg-row .dmeta { font-size:12px; color:var(--muted); }
+  .asg-act { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .asg-sel { font:inherit; font-size:12.5px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); }
+  .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
+  .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+  .ck-name { font-weight:650; font-size:15px; }
+  .ck-sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .ck-pct { font-size:13px; color:var(--txt2); white-space:nowrap; } .ck-pct b { color:#0e7a52; }
+  .ck-bar { height:6px; border-radius:4px; background:var(--line2); overflow:hidden; margin:10px 0 6px; }
+  .ck-bar i { display:block; height:100%; background:#22c55e; border-radius:4px; }
+  .ck-row { display:flex; gap:11px; align-items:flex-start; padding:11px 0; border-bottom:1px solid var(--line2); }
+  .ck-row:last-child { border-bottom:0; }
+  .ck-box { position:relative; flex:0 0 auto; width:20px; height:20px; margin-top:1px; cursor:pointer; }
+  .ck-box input { position:absolute; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+  .ck-mark { display:block; width:20px; height:20px; border:2px solid var(--line); border-radius:6px; background:var(--card); transition:.15s; }
+  .ck-box input:checked + .ck-mark { background:#22c55e; border-color:#22c55e; }
+  .ck-box input:checked + .ck-mark::after { content:'✓'; color:#fff; font-size:13px; font-weight:800; position:absolute; left:4px; top:-1px; }
+  .ck-main { flex:1; min-width:0; }
+  .ck-title { font-weight:550; font-size:13.5px; }
+  .ck-cat { font-size:9px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent); background:var(--accent-weak); border-radius:5px; padding:2px 6px; margin-right:7px; }
+  .ck-done .ck-title { text-decoration:line-through; color:var(--muted); }
+  .ck-text { font-size:12.5px; color:var(--txt2); margin:3px 0 6px; }
+  .ck-proof { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .ck-noproof { font-size:11.5px; color:var(--amber,#b4791e); font-style:italic; }
+  .pf-chip { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 4px 2px 9px; }
+  .pf-chip a { color:var(--accent); text-decoration:none; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pf-x { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; padding:0 3px; }
+  .btn.xs { font-size:11px; padding:3px 8px; }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
   .owner-card .rm:hover { color:var(--danger); border-color:var(--danger-line); }
   .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
@@ -484,7 +875,7 @@ function renderPage(data, opts) {
   .msg { font-size:12.5px; }
   .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
   /* KPI hero */
-  .kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; padding:18px 28px 4px; }
+  .kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; padding:18px 28px 4px; }
   @media (max-width:1100px){ .kpis { grid-template-columns:repeat(3,1fr); } }
   @media (max-width:680px){ .kpis { grid-template-columns:repeat(2,1fr); } }
   .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
@@ -557,6 +948,126 @@ function renderPage(data, opts) {
   .modal-form .panel-actions { margin-top:16px; }
   /* Priority filter button */
   .btn.prio-btn.on { background:linear-gradient(135deg,#f59e0b,#f97316); box-shadow:0 2px 10px rgba(245,158,11,.35); }
+  /* Stage progress bar on cards */
+  .prog { margin:2px 0 11px; }
+  .prog-top { display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:5px; }
+  .prog-stage { font-weight:680; }
+  .prog-pct { color:var(--muted); font-variant-numeric:tabular-nums; font-weight:700; }
+  .prog-track { display:flex; gap:3px; }
+  .prog-track .seg { flex:1; height:8px; border-radius:3px; background:var(--line2); transition:background .25s, outline .1s; }
+  .prog-track .seg.set { cursor:pointer; }
+  .prog-track .seg.set:hover { outline:2px solid var(--accent); outline-offset:1px; }
+  /* Labeled links on cards */
+  .links { margin-top:10px; }
+  .links .label { display:block; margin-bottom:3px; }
+  .links .lnk { display:inline-flex; align-items:center; gap:3px; font-size:11.5px; font-weight:550; margin:2px 9px 0 0; }
+  /* Priority badge in the title */
+  .pbadge { display:inline-block; font-size:10px; font-weight:800; letter-spacing:.02em; color:#92670b; background:#fef3c7; border-radius:6px; padding:1px 6px; margin-right:7px; vertical-align:middle; }
+  [data-theme="dark"] .pbadge { color:#fcd34d; background:#2a2410; }
+  /* Link rows in the form */
+  .link-row { display:flex; gap:6px; margin-bottom:6px; }
+  .link-row .f_llabel { flex:0 0 42%; min-width:0; }
+  .link-row .f_lurl { flex:1; min-width:0; }
+  /* Tabs */
+  .tabs { display:flex; gap:4px; margin-top:14px; }
+  .tab { font:inherit; font-size:13px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 14px; cursor:pointer; }
+  .tab:hover { color:var(--txt); }
+  .tab.on { color:var(--accent); border-bottom-color:var(--accent); }
+  .tabview[hidden] { display:none; }
+  .tabhead { padding:18px 28px 4px; }
+  .tabhead h2 { margin:0; font-size:20px; font-weight:720; }
+  .tabhead .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  /* Profile / client cards */
+  .profile-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; padding:8px 28px 64px; }
+  .profile-card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--shadow); cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
+  .profile-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); border-color:var(--accent); }
+  .profile-card .pc-head { display:flex; align-items:center; gap:11px; }
+  .profile-card .pc-name { font-weight:680; font-size:15px; }
+  .profile-card .pc-role { font-size:12px; color:var(--muted); margin-top:1px; }
+  .profile-card .pc-stats { display:flex; flex-wrap:wrap; gap:10px; margin-top:11px; font-size:12px; color:var(--muted); }
+  .profile-card .pc-stats b { color:var(--txt); }
+  .profile-card .rm { position:absolute; top:10px; right:10px; }
+  .warnpill { color:#b45309; background:#fef3c7; border-radius:999px; padding:1px 8px; font-weight:600; }
+  [data-theme="dark"] .warnpill { color:#fcd34d; background:#2a2410; }
+  .clogo { width:44px; height:44px; border-radius:11px; object-fit:contain; background:#fff; border:1px solid var(--line); flex:none; }
+  .clogo.lg { width:48px; height:48px; }
+  /* Sub-tabs in profile drawer */
+  .subtabs { display:flex; gap:4px; padding:10px 22px 0; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:2; }
+  .subtab { font:inherit; font-size:12.5px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 10px; cursor:pointer; }
+  .subtab.on { color:var(--accent); border-bottom-color:var(--accent); }
+  /* Profile fields */
+  .pf-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:4px 0 12px; }
+  .pf { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .pf.wide { grid-column:1 / -1; }
+  .pf input { font:inherit; font-size:13px; }
+  .pf-actions { display:flex; gap:8px; }
+  /* Detail modal */
+  .modal-detail { width:min(760px,96vw); max-height:92vh; }
+  .dh { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:18px 22px; border-bottom:1px solid var(--line); border-top:4px solid var(--cardc,var(--accent)); border-radius:14px 14px 0 0; }
+  .dh-title { font-size:19px; font-weight:740; letter-spacing:-.01em; }
+  .dh-sub { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
+  .dh-actions { display:flex; gap:7px; align-items:center; flex:none; }
+  .dbody { max-height:calc(92vh - 90px); overflow-y:auto; }
+  .dprog { margin-bottom:16px; }
+  .dprog .prog-track { gap:3px; } .dprog .seg { height:10px; border-radius:3px; background:var(--line2); flex:1; }
+  .dgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:6px; }
+  @media (max-width:560px){ .dgrid { grid-template-columns:repeat(2,1fr); } }
+  .fact { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:9px 11px; }
+  .fact .fl { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
+  .fact .fv { font-size:13.5px; font-weight:600; margin-top:3px; }
+  .dsec { margin-top:16px; }
+  .dsec h4 { margin:0 0 7px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
+  .dnote { font-size:13.5px; color:var(--txt2); white-space:pre-wrap; }
+  .dnote.big { font-size:14.5px; color:var(--txt); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:10px; padding:11px 13px; }
+  .dnote.muted { color:var(--muted); }
+  .dlinks { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin-top:4px; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+  .thumb img { width:84px; height:84px; object-fit:cover; border-radius:9px; border:1px solid var(--line); }
+  /* Feedback view (detail) */
+  .fbv { border:1px solid var(--line); border-radius:11px; padding:11px 13px; margin-bottom:9px; background:var(--surface2); }
+  .fbv-top { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+  .fbv-top b { font-size:13.5px; }
+  .fbcat { font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-weak); border-radius:5px; padding:2px 7px; }
+  .impl { font:inherit; font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px; border:1px solid transparent; cursor:pointer; margin-left:auto; }
+  .impl.yes { color:#15803d; background:#dcfce7; border-color:#86efac; }
+  .impl.no { color:#b42318; background:#fef3f2; border-color:#fda29b; }
+  [data-theme="dark"] .impl.yes { color:#7ef0ac; background:#0f2c1e; border-color:#1f6e46; }
+  [data-theme="dark"] .impl.no { color:#fcafa5; background:#2f1518; border-color:#7c2b30; }
+  .impl[disabled] { cursor:default; opacity:.85; }
+  /* To-do rows */
+  .todo { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-bottom:1px solid var(--line2); }
+  .todo .impl { margin:0; flex:none; width:30px; text-align:center; }
+  .todo-main { flex:1; }
+  .todo-top { font-size:13px; }
+  /* Feedback editor rows (form) */
+  .fb-row { border:1px solid var(--line); border-radius:11px; padding:10px; margin-bottom:9px; background:var(--surface2); }
+  .fb-top { display:flex; gap:8px; align-items:center; margin-bottom:7px; flex-wrap:wrap; }
+  .fb-top .fb-cat { flex:0 0 30%; min-width:110px; }
+  .fb-top .fb-label { flex:1; min-width:120px; }
+  .fb-top .fb-date { width:138px; }
+  .fb-bot { display:flex; gap:8px; margin-top:7px; }
+  .fb-bot .fb-link { flex:1; }
+  .fb-row textarea { width:100%; }
+  .ssrow { display:flex; align-items:center; gap:8px; margin:5px 0; }
+  .ssrow .fchip { flex:0 0 auto; max-width:30%; overflow:hidden; }
+  .ssrow .ss-inputs { flex:1; display:flex; gap:6px; min-width:0; }
+  .ssrow .sshdr { flex:0 0 38%; min-width:0; font-size:12px; font-weight:600; }
+  .ssrow .sscap { flex:1; min-width:0; font-size:12px; }
+  .fb-pp { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); white-space:nowrap; }
+  .fb-pp select { font:inherit; font-size:12px; padding:3px 6px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--txt); }
+  /* Toggle switch */
+  .toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:var(--muted); }
+  .toggle input { display:none; }
+  .toggle .track { width:34px; height:19px; border-radius:999px; background:var(--line); position:relative; transition:background .15s; flex:none; }
+  .toggle .track::after { content:""; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff; transition:transform .15s; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+  .toggle input:checked + .track { background:#22c55e; }
+  .toggle input:checked + .track::after { transform:translateX(15px); }
+  /* File chips + thumbnails */
+  .filebox { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .fchip { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; background:var(--line2); border:1px solid var(--line); border-radius:8px; padding:3px 8px; }
+  .fchip .fx { border:0; background:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0 0 0 2px; }
+  .fchip .fx:hover { color:var(--danger); }
+  .card.clickable { cursor:pointer; }
 </style>
 </head>
 <body>
@@ -572,8 +1083,6 @@ function renderPage(data, opts) {
     <div class="header-actions">
       <button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button>
       <button class="btn ghost prio-btn" id="prioToggle" title="Show only priority dashboards">⭐ Priority</button>
-      <button class="btn ghost" id="teamToggle">👤 Team</button>
-      <button class="btn ghost" id="clientsToggle">🏢 Clients</button>
       <div class="dropdown">
         <button class="btn ghost" id="exportToggle">⬇ Export ▾</button>
         <div class="menu" id="exportMenu">
@@ -586,8 +1095,17 @@ function renderPage(data, opts) {
       ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
     </div>
   </div>
-  <div class="legend" id="legend"></div>
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-tab="overview">📊 Overview</button>
+    <button class="tab" data-tab="team">👤 Team</button>
+    <button class="tab" data-tab="clients">🏢 Clients</button>
+    <button class="tab" data-tab="assign">⚖️ Assign</button>
+    <button class="tab" data-tab="checklist">✅ Checklist</button>
+  </nav>
 </header>
+
+<section class="tabview" id="tab-overview">
+<div class="legend" id="legend"></div>
 <div class="kpis" id="kpis"></div>
 <div class="insights" id="insights"></div>
 
@@ -603,14 +1121,28 @@ ${opts.manualEnabled ? `
         <button class="btn ghost sm" id="addClientRow" type="button">+ another client</button>
       </label>
       <label>Assigned to<input id="f_owner" list="owners" placeholder="e.g. Vipul"></label>
-      <label>Stage<select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
+      <label>Stage <span class="hint">(drives progress)</span><select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
-      <label>Meeting link (URL)<input id="f_meeting" placeholder="https://…"></label>
-      <label>Status note<input id="f_status" placeholder="optional, e.g. needs QA"></label>
-      <label>Client requirements<input id="f_req" placeholder="optional"></label>
+      <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
+      <label class="wide">Links <span class="hint">(meetings, feedback recordings — add as many as you like)</span>
+        <div id="linkRows"></div>
+        <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
+      </label>
+      <label>Due date<input type="date" id="f_due"></label>
+      <label class="wide">Manual status <span class="hint">(handwritten — where it really stands)</span><textarea id="f_manual" rows="2" placeholder="e.g. UI 80% done, waiting on Chiraag's data file"></textarea></label>
+      <label class="wide">Original client requirement <span class="hint">(summary + upload PDF / photo)</span>
+        <input id="f_req" placeholder="short requirement summary">
+        <div class="filebox" id="reqFiles"></div>
+        <button class="btn ghost sm" id="addReqFile" type="button">📎 Upload requirement file</button>
+      </label>
+      <label class="wide">Feedbacks <span class="hint">(upload many screenshots; give each its OWN description → each becomes its own PDF page)</span>
+        <div id="fbRows"></div>
+        <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
+      </label>
       <label>Improvements<input id="f_imp" placeholder="optional"></label>
-      <label>Feedback<input id="f_feedback" placeholder="optional"></label>
+      <label>Current status note<input id="f_status" placeholder="optional, e.g. needs QA"></label>
       <label class="wide">Notes<input id="f_note" placeholder="optional"></label>
+      <input type="hidden" id="f_meeting">
     </div>
     <div class="panel-actions">
       <button class="btn" id="saveBtn">Save dashboard</button>
@@ -623,7 +1155,6 @@ ${opts.manualEnabled ? `
 <datalist id="owners">${data.owners.map((o) => `<option value="${escapeHtml(o)}">`).join('')}</datalist>
 ` : ''}
 
-${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial numbers ${data.gaps.join(', ')} are missing (likely deleted rows). ${data.sheetCount} sheet entries counted.</div>` : ''}
 
 <div class="controls">
   <input type="search" id="q" placeholder="Search name, status, requirements…">
@@ -638,9 +1169,17 @@ ${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial n
   <label style="font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px"><input type="checkbox" id="liveonly"> Live only</label>
 </div>
 <div class="grid" id="grid"></div>
+</section>
+
+<section class="tabview" id="tab-team" hidden></section>
+<section class="tabview" id="tab-clients" hidden></section>
+<section class="tabview" id="tab-assign" hidden></section>
+<section class="tabview" id="tab-checklist" hidden></section>
 
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
+<div class="modal-bg" id="detailBg"><div class="modal modal-detail" id="detailModal"></div></div>
+<input type="file" id="filePick" hidden>
 
 <script>
 const DATA = ${payload};
@@ -696,33 +1235,47 @@ function renderLegend(){
   el.querySelectorAll('.pill').forEach(p => p.onclick = () => isolateState(p.dataset.id));
 }
 
-function card(d){
+// Stage progress bar. Segments are clickable (for editable cards) to set the
+// stage directly — the quick way to "bring a dashboard to its current level".
+function progressBar(d){
+  const cur = STATES.findIndex(x => x.id === d.state);
+  const pct = Math.round((cur<=0?0:cur/(STATES.length-1))*100);
+  const setty = d.source==='manual' && CFG.manualEnabled;
+  const segs = STATES.map((x,i) => \`<i class="seg \${i<=cur?'on':''} \${setty?'set':''}" style="\${i<=cur?'background:'+SMAP[d.state].color:''}" \${setty?\`data-setstage="\${esc(d.id)}" data-stage="\${x.id}"\`:''} title="\${i+1}. \${x.label}"></i>\`).join('');
+  return \`<div class="prog">
+    <div class="prog-top"><span class="prog-stage" style="color:\${SMAP[d.state].color}">Stage \${cur+1}/\${STATES.length} · \${SMAP[d.state].label}</span><span class="prog-pct">\${pct}%</span></div>
+    <div class="prog-track">\${segs}</div>
+  </div>\`;
+}
+function card(d, n){
   const s = SMAP[d.state];
   const fields = [['Requirements',d.requirements],['Improvements',d.improvement],['Feedback',d.feedback]].filter(([,v]) => v && v !== '-');
-  const meeting = d.meetingUrl ? \`<a href="\${esc(d.meetingUrl)}" target="_blank" rel="noopener">▶ Recording / link</a>\`
-                : d.meetingNote ? \`<span>\${esc(d.meetingNote)}</span>\` : '';
-  const title = d.serial ? '#'+d.serial+' · '+esc(d.name) : esc(d.name);
+  const links = (d.links && d.links.length) ? d.links : (d.meetingUrl ? [{label:'Recording / link', url:d.meetingUrl}] : []);
+  const title = (n ? '#'+n+' · ' : '') + esc(d.name);
   const editable = d.source==='manual' && CFG.manualEnabled;
-  const showManualTag = d.source==='manual' && !CFG.standalone; // once standalone, every card is "manual" — no point flagging it
-  const star = CFG.manualEnabled ? \`<button class="star \${d.priority?'on':''}" title="\${d.priority?'Remove priority':'Mark as priority'}" data-prio="\${esc(d.id)}">\${d.priority?'★':'☆'}</button>\` : (d.priority?'<span class="star on" style="cursor:default">★</span>':'');
+  const showManualTag = d.source==='manual' && !CFG.standalone;
+  const prioBadge = d.priorityLevel ? \`<span class="pbadge" title="Priority \${d.priorityLevel}">★ P\${d.priorityLevel}</span>\` : '';
+  const star = CFG.manualEnabled
+    ? \`<button class="star \${d.priorityLevel?'on':''}" title="\${d.priorityLevel?'Priority '+d.priorityLevel+' — click to clear':'Mark priority 1'}" data-prio="\${esc(d.id)}">\${d.priorityLevel?'★':'☆'}</button>\`
+    : '';
   const cardBtns = (star || editable) ? \`<div class="cardbtns">\${star}\${editable?\`<button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button>\`:''}</div>\` : '';
-  const stageNo = STATES.findIndex(x => x.id === d.state) + 1;
-  return \`<div class="card \${showManualTag?'manual':''} \${d.priority?'prio':''}" style="--cardc:\${s.color}">
+  return \`<div class="card clickable \${showManualTag?'manual':''} \${d.priorityLevel?'prio':''}" data-card="\${esc(d.id)}" style="--cardc:\${s.color}">
     \${cardBtns}
-    <h3>\${title}</h3>
+    <h3>\${prioBadge}\${title}</h3>
+    \${progressBar(d)}
     <div class="meta">
-      <span class="tag state" style="color:\${s.color};background:color-mix(in srgb, \${s.color} 13%, transparent);border-color:color-mix(in srgb, \${s.color} 28%, transparent)">\${stageNo?'<b>'+stageNo+'</b> ':''}\${s.label}</span>
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
       \${d.customers.map(c => clientTag(c)).join('')}
       \${ownerTag(d.owner)}
       \${showManualTag ? '<span class="tag src">Manual</span>' : ''}
     </div>
-    \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Status</span><br>\${esc(d.status)}</div>\` : ''}
+    \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Current status</span><br>\${esc(d.status)}</div>\` : ''}
     \${fields.map(([k,v]) => \`<div class="field"><span class="label">\${k}</span><div class="val">\${esc(v)}</div></div>\`).join('')}
+    \${links.length ? \`<div class="links"><span class="label">Links</span>\${links.map(l => \`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div>\` : ''}
     \${d.updates && d.updates.length ? \`<div class="upd"><span class="label">Latest update · \${esc(d.updates[d.updates.length-1].date||'')}</span><div class="val">\${esc(d.updates[d.updates.length-1].note || SMAP[d.updates[d.updates.length-1].state]?.label || '')}</div></div>\` : ''}
     <div class="foot">
-      <span>\${meeting}</span>
-      \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : \`<span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>\`}
+      <span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>
+      \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
     </div>
   </div>\`;
 }
@@ -748,18 +1301,24 @@ function renderKpis(){
   const el = document.getElementById('kpis'); if (!el) return;
   const liveOn = liveOnlyEl() ? liveOnlyEl().checked : false;
   const anyFilter = stateFilter.size > 0 || prioOnly || liveOn;
-  const tiles = [{ id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter }]
-    .concat(STATES.map(s => ({ id:s.id, label:s.label, n:DATA.counts[s.id]||0, color:s.color, icon:KPI_ICONS[s.id]||'•', on:stateFilter.has(s.id) })))
-    .concat([
-      { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
-      { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
-    ]);
+  // A tight, meaningful KPI row — the per-stage breakdown lives on the pill row
+  // and the Status Mix donut, so we don't repeat all 7 stages as tiles here.
+  const inprog = MID_STAGES.reduce((n,k) => n + (DATA.counts[k]||0), 0);
+  const tiles = [
+    { id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter },
+    { id:'not_started', label:'Not started', n:DATA.counts['not_started']||0, color:'#9ca3af', icon:'⏳', on:stateFilter.has('not_started') },
+    { id:'__inprog', label:'In progress', n:inprog, color:'#f59e0b', icon:'🔧', on:MID_STAGES.some(k => stateFilter.has(k)) },
+    { id:'completed', label:'Completed', n:DATA.counts['completed']||0, color:'#22c55e', icon:'✅', on:stateFilter.has('completed') },
+    { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
+    { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
+  ];
   el.innerHTML = tiles.map(t => \`<div class="kpi \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
       <div class="ic">\${t.icon}</div><div class="n" data-count="\${t.n}">0</div><div class="l">\${esc(t.label)}</div><div class="spark"></div>
     </div>\`).join('');
   el.querySelectorAll('[data-kpi]').forEach(k => k.onclick = () => {
     const id = k.dataset.kpi;
     if (id === '__all'){ clearAllFilters(); }
+    else if (id === '__inprog'){ const on = MID_STAGES.some(s => stateFilter.has(s)); clearAllFilters(); if (!on) MID_STAGES.forEach(s => stateFilter.add(s)); }
     else if (id === '__live'){ const on = !liveOnlyEl().checked; clearAllFilters(); liveOnlyEl().checked = on; }
     else if (id === '__prio'){ const on = !prioOnly; clearAllFilters(); prioOnly = on; }
     else { isolateState(id); return; }
@@ -829,13 +1388,18 @@ function render(){
     }
     return true;
   });
-  // Priority dashboards float to the top (stable within the rest).
-  list = list.slice().sort((a,b) => (b.priority?1:0) - (a.priority?1:0));
+  // Priority dashboards float to the top, ordered by level (P1, P2, …).
+  list = list.slice().sort((a,b) => {
+    const ap = a.priorityLevel||Infinity, bp = b.priorityLevel||Infinity;
+    return ap - bp;
+  });
 
   const grid = document.getElementById('grid');
-  if (!list.length){ grid.innerHTML = '<div class="empty">No dashboards match these filters.</div>'; bindDelete(); return; }
+  if (!list.length){ grid.innerHTML = '<div class="empty">No dashboards match these filters.</div>'; bindCards(); return; }
 
-  if (!groupby){ grid.innerHTML = list.map(card).join(''); bindDelete(); return; }
+  // Numbering is positional within the CURRENT view (1..n), not the dashboard's
+  // own id — so picking an owner shows their dashboards as 1,2,3…
+  if (!groupby){ grid.innerHTML = list.map((d,i) => card(d, i+1)).join(''); bindCards(); return; }
   let groups;
   if (groupby === 'state'){
     groups = STATES.map(s => [s.label, list.filter(d => d.state === s.id)]).filter(([,a]) => a.length);
@@ -846,8 +1410,8 @@ function render(){
     const keys = [...new Set(list.map(d => d.owner))].sort();
     groups = keys.map(k => [k, list.filter(d => d.owner === k)]);
   }
-  grid.innerHTML = groups.map(([t,items]) => \`<div class="group-h">\${esc(t)} · \${items.length}</div>\` + items.map(card).join('')).join('');
-  bindDelete();
+  grid.innerHTML = groups.map(([t,items]) => \`<div class="group-h">\${esc(t)} · \${items.length}</div>\` + items.map((d,i) => card(d, i+1)).join('')).join('');
+  bindCards();
 }
 
 // ── Manual entry: add + delete ────────────────────────────────────────────
@@ -864,15 +1428,25 @@ async function api(method, path, body){
   if (res.status === 401){ localStorage.removeItem('editToken'); }
   return res;
 }
-function bindCardButtons(){
+function bindCards(){
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
     if (!confirm('Delete this dashboard?')) return;
     const res = await api('DELETE', '/api/manual?id='+encodeURIComponent(b.dataset.del));
     if (res.ok) location.reload(); else alert('Delete failed: '+(await res.json()).error);
   });
-  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openEdit(b.dataset.edit));
+  // (edit is handled by the grid click delegation)
+  // Click a progress segment → set that stage on the dashboard.
+  document.querySelectorAll('[data-setstage]').forEach(b => b.onclick = async (e) => {
+    e.stopPropagation();
+    const id = b.dataset.setstage, stage = b.dataset.stage;
+    const d = DATA.dashboards.find(x => x.id === id); if (!d || d.state === stage) return;
+    const res = await api('POST', '/api/stage', { id, stage });
+    if (res.ok){ d.state = stage; d.progress = STATES.findIndex(x=>x.id===stage)/(STATES.length-1); DATA.counts = recount(); render(); }
+    else alert('Could not set stage: '+((await res.json()).error||res.status));
+  });
 }
-const bindDelete = bindCardButtons; // back-compat for render()
+const bindDelete = bindCards; // back-compat
+function recount(){ const c = Object.fromEntries(STATES.map(s => [s.id,0])); DATA.dashboards.forEach(d => c[d.state]!==undefined && c[d.state]++); return c; }
 
 const G = (id) => document.getElementById(id);
 function clientRowHtml(val){ return \`<div class="client-row"><input class="f_client" list="customers" placeholder="e.g. Beas Capital" value="\${esc(val||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`; }
@@ -883,23 +1457,108 @@ function setClients(arr){
   box.querySelectorAll('.rm-client').forEach(b => b.onclick = () => { if (box.children.length > 1) b.parentElement.remove(); else b.previousElementSibling.value=''; });
 }
 function getClients(){ return [...G('clientRows').querySelectorAll('.f_client')].map(i => i.value.trim()).filter(Boolean); }
+
+const DEFAULT_LINK_LABELS = ['First client meeting','First feedback meeting','Second feedback meeting','Third feedback meeting'];
+function linkRowHtml(label, url){
+  return \`<div class="link-row"><input class="f_llabel" placeholder="label, e.g. First client meeting" value="\${esc(label||'')}"><input class="f_lurl" placeholder="https://… (YouTube etc.)" value="\${esc(url||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`;
+}
+function setLinks(arr){
+  const box = G('linkRows');
+  const list = (arr && arr.length) ? arr : [{ label: DEFAULT_LINK_LABELS[0], url:'' }];
+  box.innerHTML = list.map(l => linkRowHtml(l.label, l.url)).join('');
+  box.querySelectorAll('.rm-client').forEach(b => b.onclick = () => { if (box.children.length > 1) b.parentElement.remove(); else { b.parentElement.querySelectorAll('input').forEach(i=>i.value=''); } });
+}
+function getLinks(){
+  return [...G('linkRows').querySelectorAll('.link-row')].map(r => ({
+    label: r.querySelector('.f_llabel').value.trim(),
+    url: r.querySelector('.f_lurl').value.trim(),
+  })).filter(l => l.url);
+}
+// ── File upload (PDF / image) → base64 in KV ───────────────────────────────
+function pickFiles(){
+  return new Promise((resolve) => { const inp = G('filePick'); inp.value=''; inp.multiple = true; inp.onchange = () => resolve([...inp.files]); inp.click(); });
+}
+function fileToB64(file){ return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(file); }); }
+// Upload one or more files at once → returns array of {id,name,type,url}.
+async function uploadFiles(){
+  const files = await pickFiles(); const out = [];
+  for (const file of files){
+    if (file.size > 4*1024*1024){ alert(file.name + ' is over 4 MB — skipped.'); continue; }
+    const data = await fileToB64(file);
+    const res = await api('POST', '/api/file', { name:file.name, type:file.type, data });
+    if (res.ok){ const j = await res.json(); out.push({ id:j.id, name:j.name, type:j.type, url:j.url }); }
+    else alert('Upload failed for ' + file.name);
+  }
+  return out;
+}
+async function uploadFile(){ const a = await uploadFiles(); return a[0] || null; }
+function fileChip(f, removable){
+  const img = (f.type||'').startsWith('image/');
+  return \`<span class="fchip"><a href="\${esc(f.url||('/api/file?id='+f.id))}" target="_blank" rel="noopener">\${img?'🖼':'📄'} \${esc(f.name||'file')}</a>\${removable?\`<button type="button" class="fx" data-fx="\${esc(f.id)}">×</button>\`:''}</span>\`;
+}
+
+// Requirement files + feedbacks: edited via in-memory state, saved on submit.
+let reqFilesState = [], fbState = [];
+function renderReqFiles(){
+  const box = G('reqFiles'); box.innerHTML = reqFilesState.map(f => fileChip(f,true)).join('');
+  box.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { reqFilesState = reqFilesState.filter(x => x.id !== b.dataset.fx); renderReqFiles(); });
+}
+function fbRowHtml(f, i){
+  return \`<div class="fb-row">
+    <div class="fb-top"><input class="fb-cat" placeholder="area, e.g. Data Audit" value="\${esc(f.category||'')}"><input class="fb-label" placeholder="headline / change \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
+      <label class="toggle"><input type="checkbox" class="fb-done" \${f.implemented?'checked':''}><span class="track"></span><span class="tlabel">implemented</span></label>
+      <button type="button" class="rm-client fb-rm" title="Remove">×</button></div>
+    <textarea class="fb-text" rows="2" placeholder="what the client asked / what you changed">\${esc(f.text||'')}</textarea>
+    <div class="fb-bot"><input class="fb-link" placeholder="https://… recording / message link" value="\${esc(f.link||'')}"><button type="button" class="btn ghost sm fb-file">📎 add screenshots (pick many)</button><label class="fb-pp" title="How many screenshots to place on each PDF page">per page <select class="fb-perpage"><option value="1"\${(f.perPage||1)==1?' selected':''}>1</option><option value="2"\${(f.perPage||1)==2?' selected':''}>2</option><option value="3"\${(f.perPage||1)==3?' selected':''}>3</option></select></label></div>
+    <div class="filebox fb-files"></div>
+  </div>\`;
+}
+function syncFbFromDom(){
+  [...G('fbRows').children].forEach((row,i) => { const f = fbState[i]; if(!f) return;
+    f.category = row.querySelector('.fb-cat').value;
+    f.label = row.querySelector('.fb-label').value; f.date = row.querySelector('.fb-date').value;
+    f.text = row.querySelector('.fb-text').value; f.link = row.querySelector('.fb-link').value;
+    f.implemented = row.querySelector('.fb-done').checked;
+    const pp = row.querySelector('.fb-perpage'); if (pp) f.perPage = +pp.value || 1;
+  });
+}
+function renderFbRows(){
+  const box = G('fbRows'); box.innerHTML = fbState.map((f,i) => fbRowHtml(f,i)).join('');
+  [...box.children].forEach((row,i) => {
+    const f = fbState[i];
+    const fb = row.querySelector('.fb-files');
+    fb.innerHTML = (f.files||[]).map((x,k) => '<div class="ssrow">'+fileChip(x,true)+'<div class="ss-inputs"><input class="sshdr" data-k="'+k+'" placeholder="page header (optional)" value="'+esc(x.header||'')+'"><input class="sscap" data-k="'+k+'" placeholder="description / caption (optional)" value="'+esc(x.caption||'')+'"></div></div>').join('');
+    fb.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { f.files = f.files.filter(x => x.id !== b.dataset.fx); renderFbRows(); });
+    fb.querySelectorAll('.sscap').forEach(inp => inp.oninput = () => { const fl=f.files[+inp.dataset.k]; if(fl) fl.caption = inp.value; });
+    fb.querySelectorAll('.sshdr').forEach(inp => inp.oninput = () => { const fl=f.files[+inp.dataset.k]; if(fl) fl.header = inp.value; });
+    row.querySelector('.fb-rm').onclick = () => { syncFbFromDom(); fbState.splice(i,1); renderFbRows(); };
+    row.querySelector('.fb-file').onclick = async () => { syncFbFromDom(); const ups = await uploadFiles(); if (ups.length){ fbState[i].files = (fbState[i].files||[]).concat(ups); renderFbRows(); } };
+  });
+}
+function getFeedbacks(){ syncFbFromDom(); return fbState.filter(f => f.label || f.text || f.link || (f.files && f.files.length)); }
+
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
   setClients(d ? (d.customers || []) : []);
+  setLinks(d ? (d.links || []) : []);
   G('f_owner').value = d ? d.owner : '';
   G('f_stage').value = d ? d.state : 'not_started';
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
+  G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
+  G('f_due').value = d ? (d.dueDate || '') : '';
+  G('f_manual').value = d ? (d.manualStatus || '') : '';
   G('f_status').value = d ? d.status : '';
-  G('f_meeting').value = d ? (d.meetingUrl || '') : '';
   G('f_req').value = d ? d.requirements : '';
   G('f_imp').value = d ? d.improvement : '';
-  G('f_feedback').value = d ? d.feedback : '';
   G('f_note').value = d ? (d.note || '') : '';
+  reqFilesState = d && Array.isArray(d.requirementFiles) ? d.requirementFiles.slice() : [];
+  fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
+  renderReqFiles(); renderFbRows();
   G('formMsg').textContent = '';
 }
-function openForm(){ G('formModalBg').classList.add('open'); }
-function closeForm(){ G('formModalBg').classList.remove('open'); }
+function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); }
+function closeForm(){ const b = G('formModalBg'); if (b) b.classList.remove('open'); }
 function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; openForm(); G('f_name').focus(); }
 function openEdit(id){
   const d = DATA.dashboards.find(x => x.id === id);
@@ -916,28 +1575,50 @@ if (CFG.manualEnabled){
   G('cancelBtn').onclick = closeForm;
   G('formX').onclick = closeForm;
   G('addClientRow').onclick = () => { setClients(getClients().concat('')); G('clientRows').lastElementChild.querySelector('.f_client').focus(); };
+  G('addLinkRow').onclick = () => {
+    const cur = getLinks();
+    const nextLabel = DEFAULT_LINK_LABELS[cur.length] || '';
+    setLinks(cur.concat({ label: nextLabel, url:'' }));
+    G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
+  };
+  G('addReqFile').onclick = async () => { const ups = await uploadFiles(); if (ups.length){ reqFilesState.push(...ups); renderReqFiles(); } };
+  G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
     const msg = G('formMsg');
     const id = G('f_id').value;
+    const links = getLinks();
     const body = {
       name: G('f_name').value,
       customer: getClients().join(' & '),
       owner: G('f_owner').value,
       stage: G('f_stage').value,
       liveRaw: G('f_live').value,
+      links,
+      meetingUrl: links[0] ? links[0].url : '',
       status: G('f_status').value,
-      meetingUrl: G('f_meeting').value,
       requirements: G('f_req').value,
       improvement: G('f_imp').value,
-      feedback: G('f_feedback').value,
       note: G('f_note').value,
+      dueDate: G('f_due').value,
+      manualStatus: G('f_manual').value,
+      requirementFiles: reqFilesState,
+      feedbacks: getFeedbacks(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
+    // New dashboard with no owner → auto-assign to the lightest-loaded teammate.
+    let autoOwner = '';
+    if (!id && !body.owner.trim()){ const a = (typeof recommendOwner==='function') ? recommendOwner({}) : ''; if (a){ body.owner = a; autoOwner = a; } }
     msg.className='msg'; msg.textContent='Saving…';
     const res = id ? await api('PUT', '/api/manual', { id, ...body }) : await api('POST', '/api/manual', body);
-    if (res.ok){ msg.className='msg ok'; msg.textContent='Saved.'; location.reload(); }
-    else { const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); }
+    if (!res.ok){ const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); return; }
+    const saved = await res.json().catch(() => ({}));
+    const savedId = id || (saved.dashboard && saved.dashboard.id);
+    const level = parseInt(G('f_prio').value, 10) || 0;
+    if (savedId) await api('POST', '/api/priority', { id: savedId, level });
+    msg.className='msg ok'; msg.textContent='Saved.';
+    if (autoOwner) alert('Auto-assigned to ' + autoOwner + ' — they had the lightest workload.');
+    location.reload();
   };
   const sa = G('standaloneBtn');
   if (sa) sa.onclick = async () => {
@@ -983,38 +1664,88 @@ function statRow(s){
 }
 function sectionsHtml(s, metaFn){
   return STATES.filter(x => s.byState[x.id].length).map(x => {
-    const rows = s.byState[x.id].map(d => \`<div class="drow"><span class="sn">\${d.serial?('#'+d.serial):'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div></div>\`).join('');
+    const rows = s.byState[x.id].map(d => {
+      const lks = (d.links||[]).filter(l => l && l.url);
+      const live = d.isLive ? \`<span class="dlink" style="background:#e7f7ee;border-color:#bfe6cf;color:#0e7a52">● Live</span>\` : '';
+      const linkHtml = (lks.length||live) ? \`<div class="dlinks">\${live}\${lks.map(l => \`<a class="dlink" href="\${esc(l.url)}" target="_blank" rel="noopener" title="\${esc(l.url)}">\${esc(l.label||'Open')} ↗</a>\`).join('')}</div>\` : '';
+      return \`<div class="drow clickable" data-open="\${esc(d.id)}"><span class="sn">\${d.priorityLevel?'★':'•'}</span><div><div class="dn">\${esc(d.name)}</div><div class="dmeta">\${metaFn(d)}</div></div>\${linkHtml}</div>\`;
+    }).join('');
     return \`<div class="section-t clk" data-states="\${x.id}"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
   }).join('');
 }
-// Wire up clickable stats / section headers (filter the board) and jump-chips.
-function wireDrawer(ctxKey, ctxName){
-  document.getElementById('drawerX').onclick = closeDrawer;
-  const back = document.getElementById('drawerBack'); if (back) back.onclick = () => (ctxKey==='owner'?openTeam():openClients());
-  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ [ctxKey]: ctxName, states: b.dataset.states.split(' ') }));
-  drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
-  drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
+let ownerSub = 'attendance';
+function ownerTodos(name){
+  const out = [];
+  DATA.dashboards.filter(d => d.owner === name).forEach(d => (d.feedbacks||[]).forEach(f => out.push({ d, f })));
+  return out;
 }
-
-function openOwner(name){
-  const s = ownerStats(name);
+function val(id){ const e = document.getElementById(id); return e ? e.value : ''; }
+function employeeProfileHtml(name){
+  const p = personData(name), ed = CFG.manualEnabled;
+  const f = (id,label,v,type) => \`<label class="pf"><span>\${label}</span><input id="\${id}" type="\${type||'text'}" value="\${esc(v||'')}" \${ed?'':'disabled'}></label>\`;
+  return \`<div class="emp"><div class="section-t">Profile</div>
+    <div class="pf-grid">
+      \${f('pf_role','Role at Munshot', p.role)}
+      \${f('pf_qual','Qualification', p.qualification)}
+      \${f('pf_phone','Phone', p.phone, 'tel')}
+      \${f('pf_email','Email', p.email, 'email')}
+      \${f('pf_cal','Google Calendar link', p.calendarUrl)}
+    </div>
+    \${ed?'<button class="btn sm" id="pfSave">Save profile</button>':''}
+    \${p.calendarUrl?\`<a class="lnk" style="margin-top:8px;display:inline-block" href="\${esc(p.calendarUrl)}" target="_blank">🗓 Open calendar</a>\`:''}
+  </div>\`;
+}
+function wireEmployeeProfile(name){
+  const btn = document.getElementById('pfSave'); if (!btn) return;
+  btn.onclick = async () => {
+    const res = await api('POST', '/api/person', { name, role:val('pf_role'), qualification:val('pf_qual'), phone:val('pf_phone'), email:val('pf_email'), calendarUrl:val('pf_cal') });
+    if (res.ok){ DATA.people[name] = (await res.json()).person; btn.textContent = 'Saved ✓'; setTimeout(()=>btn.textContent='Save profile',1500); } else alert('Save failed.');
+  };
+}
+function ownerBodyHtml(name, s){
+  if (ownerSub === 'work'){
+    return statRow(s) + \`<div class="bar">\${stateBar(s.c,s.total)}</div>\`
+      + (s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:'')
+      + sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''));
+  }
+  if (ownerSub === 'todo'){
+    const todos = ownerTodos(name);
+    if (!todos.length) return '<div class="empty">No feedbacks on this person\\'s dashboards yet.</div>';
+    const pending = todos.filter(t=>!t.f.implemented), done = todos.filter(t=>t.f.implemented);
+    const row = t => \`<div class="todo">\${CFG.manualEnabled?\`<button class="impl \${t.f.implemented?'yes':'no'}" data-fbtoggle="\${esc(t.d.id)}" data-fbid="\${esc(t.f.id)}">\${t.f.implemented?'✓':'✗'}</button>\`:\`<span class="impl \${t.f.implemented?'yes':'no'}">\${t.f.implemented?'✓':'✗'}</span>\`}<div class="todo-main"><div class="todo-top"><b>\${esc(t.f.label||'Feedback')}</b> <span class="muted">· \${esc(t.d.name)}</span>\${t.f.date?\`<span class="muted"> · \${esc(t.f.date)}</span>\`:''}</div>\${t.f.text?\`<div class="dnote">\${esc(t.f.text)}</div>\`:''}\${t.f.link?\`<a href="\${esc(t.f.link)}" target="_blank" class="lnk">▶ link</a>\`:''}</div><button class="btn ghost sm" data-open="\${esc(t.d.id)}">open</button></div>\`;
+    return \`<div class="section-t">Pending (\${pending.length})</div>\${pending.map(row).join('')||'<div class="dnote muted">All caught up 🎉</div>'}\${done.length?\`<div class="section-t">Implemented (\${done.length})</div>\${done.map(row).join('')}\`:''}\`;
+  }
+  return employeeProfileHtml(name) + employeeTerminalHtml(name);
+}
+function openOwner(name){ ownerSub = 'attendance'; renderOwner(name); overlay.classList.add('open'); }
+function renderOwner(name){
+  const s = ownerStats(name), p = personData(name);
+  const pending = ownerTodos(name).filter(t=>!t.f.implemented).length;
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="drawerBack">‹ Team view</button>
+      <div><button class="back" id="drawerBack">‹ Team</button>
       <div class="av-head">\${avatar(name,'lg')}<div><h2>\${esc(name)}</h2>
-      <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.clients.length} client\${s.clients.length!==1?'s':''}</div></div></div></div>
+      <div class="sub">\${esc(p.role||'Team member')} · \${s.total} dashboard\${s.total!==1?'s':''}</div></div></div></div>
       <button class="x" id="drawerX">×</button>
     </div>
-    <div class="drawer-body">
-      \${statRow(s)}
-      <div class="bar">\${stateBar(s.c,s.total)}</div>
-      \${employeeTerminalHtml(name)}
-      \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:''}
-      \${sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
-    </div>\`;
-  overlay.classList.add('open');
-  wireDrawer('owner', name);
-  wireEmployee(name);
+    <nav class="subtabs">
+      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance & profile</button>
+      <button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Work (\${s.total})</button>
+      <button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button>
+    </nav>
+    <div class="drawer-body">\${ownerBodyHtml(name, s)}</div>\`;
+  document.getElementById('drawerX').onclick = closeDrawer;
+  document.getElementById('drawerBack').onclick = () => { closeDrawer(); switchTab('team'); };
+  drawer.querySelectorAll('.subtab').forEach(b => b.onclick = () => { ownerSub = b.dataset.sub; renderOwner(name); });
+  drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
+  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ owner:name, states:b.dataset.states.split(' ') }));
+  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = (e) => { if (e.target.closest('a.dlink')) return; closeDrawer(); openDetail(b.dataset.open); });
+  drawer.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
+    const d = DATA.dashboards.find(x=>x.id===el.dataset.fbtoggle), f = (d.feedbacks||[]).find(x=>x.id===el.dataset.fbid); if(!f) return;
+    const res = await api('POST','/api/feedback',{ id:el.dataset.fbtoggle, fbId:el.dataset.fbid, implemented:!f.implemented });
+    if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else alert('Failed.');
+  });
+  if (ownerSub === 'attendance'){ wireEmployee(name); wireEmployeeProfile(name); }
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────
@@ -1053,8 +1784,8 @@ function calendarHtml(name){
 function employeeTerminalHtml(name){
   const es = employeeStats(name);
   const editable = CFG.manualEnabled;
-  return \`<div class="emp">
-    <div class="section-t">Employee terminal</div>
+  return \`<div class="emp emp-term">
+    <div class="section-t">Attendance</div>
     <div class="emp-stats">
       <div class="emp-stat"><div class="n">\${es.tenure!==''?es.tenure:'—'}</div><div class="l">days since joining</div></div>
       <div class="emp-stat"><div class="n">\${es.present}</div><div class="l">working days logged</div></div>
@@ -1064,7 +1795,7 @@ function employeeTerminalHtml(name){
     <div class="cal" id="empCal">\${calendarHtml(name)}</div>
   </div>\`;
 }
-function renderEmp(name){ const el = drawer.querySelector('.emp'); if (el){ el.outerHTML = employeeTerminalHtml(name); wireEmployee(name); } }
+function renderEmp(name){ const el = drawer.querySelector('.emp-term'); if (el){ el.outerHTML = employeeTerminalHtml(name); wireEmployee(name); } }
 function wireEmployee(name){
   if (!CFG.manualEnabled) return;
   const save = document.getElementById('empJoinSave');
@@ -1092,60 +1823,190 @@ function wireEmployee(name){
 
 function openClient(name){
   const s = clientStats(name);
+  const det = (DATA.clientDetails && DATA.clientDetails[name]) || {};
+  const ed = CFG.manualEnabled;
+  const logo = det.logo ? \`<img class="clogo lg" src="/api/file?id=\${esc(det.logo)}" alt="">\` : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span>\`;
+  const pf = (id,label,v,ph) => \`<label class="pf"><span>\${label}</span><input id="\${id}" value="\${esc(v||'')}" placeholder="\${ph||''}" \${ed?'':'disabled'}></label>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
-      <div><button class="back" id="drawerBack">‹ Clients view</button>
-      <div class="av-head"><span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span><div><h2>\${esc(name)}</h2>
+      <div><button class="back" id="drawerBack">‹ Clients</button>
+      <div class="av-head">\${logo}<div><h2>\${esc(name)}</h2>
       <div class="sub">\${s.total} dashboard\${s.total!==1?'s':''} · \${s.people.length} on the team</div></div></div></div>
       <button class="x" id="drawerX">×</button>
     </div>
     <div class="drawer-body">
+      <div class="emp"><div class="section-t">Client details</div>
+        <div class="pf-grid">
+          \${pf('cl_poc','Point of contact', det.poc)}
+          \${pf('cl_emails','Emails', Array.isArray(det.emails)?det.emails.join(', '):det.emails, 'comma separated')}
+          \${pf('cl_freq','Meeting frequency', det.meetingFreq, 'e.g. Every Thursday 4pm')}
+          \${pf('cl_web','Website', det.website)}
+          <label class="pf wide"><span>Notes</span><input id="cl_notes" value="\${esc(det.notes||'')}" \${ed?'':'disabled'}></label>
+        </div>
+        \${ed?'<div class="pf-actions"><button class="btn ghost sm" id="clLogo" type="button">🖼 Upload logo</button><button class="btn sm" id="clSave">Save details</button></div>':''}
+      </div>
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
       \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="av-tag owner-link" data-jump-owner="\${esc(o)}">\${avatar(o)}\${esc(o)}</span>\`).join('')}</div>\`:''}
       \${sectionsHtml(s, d => esc(d.owner)+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
-  wireDrawer('customer', name);
-}
-
-function overview(title, sub, items, jumpAttr, statsFn, rosterType){
-  const isOwner = rosterType === 'owner';
-  const cards = items.map(name => {
-    const s = statsFn(name);
-    const rm = (CFG.manualEnabled && s.total===0) ? \`<button class="rm" data-rm="\${esc(name)}" title="Remove">×</button>\` : '';
-    const mark = isOwner ? avatar(name,'lg') : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)};border-radius:13px">🏢</span>\`;
-    return \`<div class="owner-card" \${jumpAttr}="\${esc(name)}">
-      \${rm}<div class="av-head" style="margin-bottom:4px">\${mark}<div class="on">\${esc(name)}</div></div>
-      <div class="os">\${s.total} dashboards · \${s.completed} completed · \${s.inprogress} in progress · \${s.notstarted} not started\${s.live?' · '+s.live+' live':''}</div>
-      <div class="bar" style="margin:8px 0 0">\${stateBar(s.c,s.total)}</div>
-    </div>\`;
-  }).join('');
-  const addRow = (CFG.manualEnabled && rosterType) ? \`<div class="roster-add"><input id="rosterInput" placeholder="Add \${rosterType==='owner'?'team member':'client'} name…"><button class="btn" id="rosterAdd">Add</button></div>\` : '';
-  drawer.innerHTML = \`
-    <div class="drawer-head"><div><h2>\${title}</h2><div class="sub">\${sub}</div></div><button class="x" id="drawerX">×</button></div>
-    <div class="drawer-body">\${addRow}<div class="owner-grid">\${cards}</div></div>\`;
-  overlay.classList.add('open');
   document.getElementById('drawerX').onclick = closeDrawer;
-  drawer.querySelectorAll('[data-jump-owner]').forEach(el => el.onclick = () => openOwner(el.dataset.jumpOwner));
-  drawer.querySelectorAll('[data-jump-customer]').forEach(el => el.onclick = () => openClient(el.dataset.jumpCustomer));
-  if (CFG.manualEnabled && rosterType){
-    document.getElementById('rosterAdd').onclick = async () => {
-      const name = document.getElementById('rosterInput').value.trim();
-      if (!name) return;
-      const res = await api('POST', '/api/roster', { type: rosterType, name });
-      if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+  document.getElementById('drawerBack').onclick = () => { closeDrawer(); switchTab('clients'); };
+  drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
+  drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ customer:name, states:b.dataset.states.split(' ') }));
+  drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = (e) => { if (e.target.closest('a.dlink')) return; closeDrawer(); openDetail(b.dataset.open); });
+  if (ed){
+    document.getElementById('clSave').onclick = async () => {
+      const emails = val('cl_emails').split(',').map(x=>x.trim()).filter(Boolean);
+      const res = await api('POST','/api/client',{ name, poc:val('cl_poc'), emails, meetingFreq:val('cl_freq'), website:val('cl_web'), notes:val('cl_notes') });
+      if (res.ok){ DATA.clientDetails[name] = (await res.json()).client; const b=document.getElementById('clSave'); b.textContent='Saved ✓'; setTimeout(()=>b.textContent='Save details',1500); } else alert('Save failed.');
     };
-    drawer.querySelectorAll('[data-rm]').forEach(b => b.onclick = async (e) => {
-      e.stopPropagation();
-      if (!confirm('Remove '+b.dataset.rm+'?')) return;
-      const res = await api('DELETE', \`/api/roster?type=\${rosterType}&name=\${encodeURIComponent(b.dataset.rm)}\`);
-      if (res.ok) location.reload();
-    });
+    document.getElementById('clLogo').onclick = async () => {
+      const up = await uploadFile(); if (!up) return;
+      const res = await api('POST','/api/client',{ name, logo:up.id });
+      if (res.ok){ DATA.clientDetails[name] = (await res.json()).client; openClient(name); }
+    };
   }
 }
-function openTeam(){ overview('Team', DATA.owners.length+' people · click anyone for their full track', DATA.owners, 'data-jump-owner', ownerStats, 'owner'); }
-function openClients(){ overview('Clients', DATA.customers.length+' clients · click any to see their dashboards & team', DATA.customers, 'data-jump-customer', clientStats, 'customer'); }
+
+// ── Team & Clients tabs ────────────────────────────────────────────────────
+function rosterDelete(type, name, total){
+  return async (e) => {
+    e.stopPropagation();
+    const what = type === 'owner' ? 'team member' : 'client';
+    const warn = total > 0
+      ? \`Delete \${what} "\${name}"?\\n\\nOn \${total} dashboard\${total!==1?'s':''}. \${type==='owner'?'Those become Unassigned.':'Removed from those dashboards.'}\`
+      : \`Delete \${what} "\${name}"?\`;
+    if (!confirm(warn)) return;
+    const res = await api('DELETE', \`/api/roster?type=\${type}&name=\${encodeURIComponent(name)}\`);
+    if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+  };
+}
+function renderTeamTab(){
+  const el = G('tab-team');
+  const add = CFG.manualEnabled ? \`<div class="roster-add"><input id="memInput" placeholder="New team member name…"><button class="btn" id="memAdd">+ Add member</button></div>\` : '';
+  const cards = DATA.owners.map(name => {
+    const s = ownerStats(name), p = (DATA.people&&DATA.people[name])||{};
+    const pend = ownerTodos(name).filter(t=>!t.f.implemented).length;
+    return \`<div class="profile-card" data-member="\${esc(name)}">
+      \${CFG.manualEnabled?\`<button class="rm" data-rmown="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
+      <div class="pc-head">\${avatar(name,'lg')}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${esc(p.role||'Team member')}</div></div></div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboards</span><span><b>\${s.completed}</b> done</span>\${pend?\`<span class="warnpill">\${pend} to-do</span>\`:''}</div>
+      <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
+    </div>\`;
+  }).join('');
+  el.innerHTML = \`<div class="tabhead"><h2>👤 Team</h2><div class="sub">\${DATA.owners.length} members · open anyone for profile, attendance & to-dos</div></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No team members yet.</div>'}</div>\`;
+  if (CFG.manualEnabled){
+    G('memAdd').onclick = async () => { const n = G('memInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'owner',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
+    el.querySelectorAll('[data-rmown]').forEach(b => b.onclick = rosterDelete('owner', b.dataset.rmown, +b.dataset.total));
+  }
+  el.querySelectorAll('[data-member]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openOwner(c.dataset.member); });
+}
+function renderClientsTab(){
+  const el = G('tab-clients');
+  const add = CFG.manualEnabled ? \`<div class="roster-add"><input id="cliInput" placeholder="New client name…"><button class="btn" id="cliAdd">+ Add client</button></div>\` : '';
+  const cards = DATA.customers.map(name => {
+    const s = clientStats(name), det = (DATA.clientDetails&&DATA.clientDetails[name])||{};
+    const logo = det.logo ? \`<img class="clogo" src="/api/file?id=\${esc(det.logo)}" alt="">\` : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span>\`;
+    return \`<div class="profile-card" data-client="\${esc(name)}">
+      \${CFG.manualEnabled?\`<button class="rm" data-rmcli="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
+      <div class="pc-head">\${logo}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${det.poc?('POC: '+esc(det.poc)):(s.people.length+' on team')}</div></div></div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboards</span><span><b>\${s.completed}</b> done</span>\${det.meetingFreq?\`<span>🗓 \${esc(det.meetingFreq)}</span>\`:''}</div>
+      <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
+    </div>\`;
+  }).join('');
+  const digest = CFG.manualEnabled ? \`<div class="digest-bar">
+    <div class="dg-row"><div class="dg-main"><span class="dgi">🗓 <b>Weekly PDF digest</b> — every Build Update PDF this week → founder, <b>Wednesday 9pm IST</b> (one email, each tagged with its client).</span><span class="dgi" id="digestLast">…</span></div><span class="sub" id="digestCount">…</span><button class="btn ghost sm" id="digestNow">Send now</button></div>
+    <div class="dg-row"><div class="dg-main"><span class="dgi">📊 <b>Daily status</b> — per-member & per-dashboard progress (done / pending / %) → founder, <b>every day 9pm IST</b>.</span><span class="dgi" id="dailyLast">…</span></div><span class="sub"></span><button class="btn ghost sm" id="dailyNow">Send now</button></div>
+  </div>\` : '';
+  el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${digest}\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
+  if (CFG.manualEnabled){
+    G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
+    el.querySelectorAll('[data-rmcli]').forEach(b => b.onclick = rosterDelete('customer', b.dataset.rmcli, +b.dataset.total));
+    const dn = document.getElementById('digestNow'); if (dn) dn.onclick = () => sendDigestNow(dn);
+    const dl = document.getElementById('dailyNow'); if (dl) dl.onclick = () => sendDailyNow(dl);
+    const lastTxt = (l, emptyMsg) => { if (!l) return '⏳ Has not run yet — set MUNS_TOKEN, then test with “Send now”.';
+      const when = new Date(l.at).toLocaleString();
+      if (l.skipped) return '🕗 Last ran '+when+' ('+(l.trigger||'')+') — '+emptyMsg;
+      return l.ok ? ('✅ Last sent '+when+' ('+(l.trigger||'')+') → '+(l.to||'')) : ('⚠️ Last run '+when+' FAILED: '+String(l.error||'').slice(0,70)); };
+    api('GET','/api/digest').then(async r => { if(!r.ok) return; const j = await r.json();
+      const c = document.getElementById('digestCount'); if (c) c.textContent = j.count ? (j.count+' queued → '+j.to) : ('nothing queued yet → '+j.to);
+      const L = document.getElementById('digestLast'); if (L) L.textContent = lastTxt(j.last, 'nothing was queued');
+      const D2 = document.getElementById('dailyLast'); if (D2) D2.textContent = lastTxt(j.dailyLast, 'no dashboards had feedback');
+    }).catch(()=>{});
+  }
+  el.querySelectorAll('[data-client]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openClient(c.dataset.client); });
+}
+
+// ── Dashboard detail modal (the rich, click-to-open view) ──────────────────
+const detailBg = G('detailBg'), detailModal = G('detailModal');
+function closeDetail(){ detailBg.classList.remove('open'); }
+detailBg.addEventListener('click', (e) => { if (e.target === detailBg) closeDetail(); });
+function fileGrid(files){
+  return (files||[]).map(f => {
+    const u = f.url || ('/api/file?id='+f.id);
+    return (f.type||'').startsWith('image/')
+      ? \`<a href="\${esc(u)}" target="_blank" rel="noopener" class="thumb"><img src="\${esc(u)}" alt="\${esc(f.name||'')}"></a>\`
+      : \`<a href="\${esc(u)}" target="_blank" rel="noopener" class="fchip">📄 \${esc(f.name||'file')}</a>\`;
+  }).join('');
+}
+function factCell(label, val){ return \`<div class="fact"><div class="fl">\${label}</div><div class="fv">\${val}</div></div>\`; }
+function fbView(did, f, editable){
+  const u = f.link;
+  return \`<div class="fbv">
+    <div class="fbv-top">\${f.category?\`<span class="fbcat">\${esc(f.category)}</span>\`:''}<b>\${esc(f.label||'Feedback')}</b>\${f.date?\`<span class="muted"> · \${esc(f.date)}</span>\`:''}
+      <button class="impl \${f.implemented?'yes':'no'}" \${editable?\`data-fbtoggle="\${esc(did)}" data-fbid="\${esc(f.id)}"\`:'disabled'}>\${f.implemented?'✓ implemented':'✗ pending'}</button></div>
+    \${f.text?\`<div class="dnote">\${esc(f.text)}</div>\`:''}
+    \${(u||(f.files&&f.files.length))?\`<div class="dlinks">\${u?\`<a href="\${esc(u)}" target="_blank" rel="noopener" class="lnk">▶ recording / message</a>\`:''}\${fileGrid(f.files)}</div>\`:''}
+  </div>\`;
+}
+function openDetail(id){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const s = SMAP[d.state], cur = STATES.findIndex(x => x.id === d.state);
+  const pct = Math.round((cur<=0?0:cur/(STATES.length-1))*100);
+  const editable = d.source==='manual' && CFG.manualEnabled;
+  const links = d.links || [], fbs = d.feedbacks || [];
+  detailModal.innerHTML = \`
+    <div class="dh" style="--cardc:\${s.color}">
+      <div class="dh-main">
+        <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
+        <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
+      </div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+    </div>
+    <div class="modal-body dbody">
+      <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
+      <div class="dgrid">
+        \${factCell('Owner', esc(d.owner))}
+        \${factCell('Client(s)', esc(d.customer))}
+        \${factCell('Due date', d.dueDate?esc(d.dueDate):'—')}
+        \${factCell('Priority', d.priorityLevel?('P'+d.priorityLevel):'—')}
+        \${factCell('Live on Munshot', d.isLive?'Yes':'No')}
+        \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
+      </div>
+      \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
+      \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
+      \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
+      \${links.length?\`<div class="dsec"><h4>Meetings & links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
+      <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
+      \${d.improvement&&d.improvement!=='-'?\`<div class="dsec"><h4>Improvements</h4><div class="dnote">\${esc(d.improvement)}</div></div>\`:''}
+      \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
+    </div>\`;
+  detailBg.classList.add('open');
+  G('dX').onclick = closeDetail;
+  if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
+  const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
+  const pdfBtn = document.getElementById('dPdf'); if (pdfBtn) pdfBtn.onclick = () => genBuildUpdate(id, pdfBtn);
+  const mailBtn = document.getElementById('dMail'); if (mailBtn) mailBtn.onclick = () => emailBuildUpdate(id, mailBtn);
+  detailModal.querySelectorAll('[data-owner]').forEach(b => b.onclick = () => { closeDetail(); openOwner(b.dataset.owner); });
+  detailModal.querySelectorAll('[data-customer]').forEach(b => b.onclick = () => { closeDetail(); openClient(b.dataset.customer); });
+  detailModal.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
+    const f = (d.feedbacks||[]).find(x => x.id === el.dataset.fbid); if (!f) return;
+    const res = await api('POST','/api/feedback',{ id, fbId:el.dataset.fbid, implemented:!f.implemented });
+    if (res.ok){ f.implemented = !f.implemented; openDetail(id); } else alert('Failed.');
+  });
+}
 
 // ── Daily status update modal ──────────────────────────────────────────────
 const updModalBg = document.getElementById('updModalBg');
@@ -1204,23 +2065,150 @@ function applyFilter({ owner='', customer='', states=null }){
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-document.getElementById('teamToggle').onclick = openTeam;
-document.getElementById('clientsToggle').onclick = openClients;
-// Click an owner/client chip, or the Update button, on any card
+// ── Tabs (Overview / Team / Clients) ───────────────────────────────────────
+let activeTab = 'overview';
+function switchTab(tab){
+  activeTab = tab;
+  document.querySelectorAll('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  ['overview','team','clients','assign','checklist'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  if (tab === 'team') renderTeamTab();
+  if (tab === 'clients') renderClientsTab();
+  if (tab === 'assign') renderAssignTab();
+  if (tab === 'checklist') renderChecklistTab();
+}
+// ── Checklist / proof tab: every client feedback as a tick-off item with proof ──
+async function toggleFbDone(id, fbId, checked, el){
+  const r = await api('POST','/api/feedback',{ id, fbId, implemented: checked });
+  if (!r.ok){ alert('Could not update.'); if(el) el.checked = !checked; return; }
+  const d = DATA.dashboards.find(x=>x.id===id); if(d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.implemented=checked; }
+  renderChecklistTab();
+}
+async function addProof(id, fbId){
+  const up = await uploadFile(); if (!up) return;
+  const r = await api('POST','/api/feedback',{ id, fbId, addFile: up });
+  if (!r.ok){ alert('Upload failed.'); return; }
+  const j = await r.json().catch(()=>({})); const d = DATA.dashboards.find(x=>x.id===id);
+  if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||f.files; }
+  renderChecklistTab();
+}
+async function removeProof(id, fbId, fileId){
+  const r = await api('POST','/api/feedback',{ id, fbId, removeFile: fileId });
+  if (!r.ok){ alert('Could not remove.'); return; }
+  const j = await r.json().catch(()=>({})); const d = DATA.dashboards.find(x=>x.id===id);
+  if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||[]; }
+  renderChecklistTab();
+}
+function renderChecklistTab(){
+  const el = G('tab-checklist');
+  const dashes = DATA.dashboards.filter(d => (d.feedbacks||[]).length).sort((a,b)=>{
+    const pa=a.feedbacks.filter(f=>!f.implemented).length, pb=b.feedbacks.filter(f=>!f.implemented).length; return pb-pa;
+  });
+  const ed = CFG.manualEnabled;
+  const cards = dashes.map(d => {
+    const fbs = d.feedbacks||[], done = fbs.filter(f=>f.implemented).length, pct = fbs.length?Math.round(done/fbs.length*100):0;
+    const editable = ed && d.source === 'manual';
+    const rows = fbs.map(f => {
+      const proof = (f.files||[]).map(x => '<span class="pf-chip"><a href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener">'+((x.type||'').startsWith('image/')?'🖼':'📄')+' '+esc((x.name||'proof').slice(0,22))+'</a>'+(editable?'<button class="pf-x" data-rmproof="'+esc(f.id)+'" data-file="'+esc(x.id)+'">×</button>':'')+'</span>').join('');
+      return '<div class="ck-row'+(f.implemented?' ck-done':'')+'">'
+        + '<label class="ck-box"><input type="checkbox" '+(f.implemented?'checked':'')+' '+(editable?'':'disabled')+' data-ck="'+esc(f.id)+'"><span class="ck-mark"></span></label>'
+        + '<div class="ck-main"><div class="ck-title">'+(f.category?'<span class="ck-cat">'+esc(f.category)+'</span>':'')+esc(f.label||'Change')+'</div>'
+        + (f.text?'<div class="ck-text">'+esc(f.text)+'</div>':'')
+        + '<div class="ck-proof">'+(proof||'<span class="ck-noproof">no proof yet</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'">📎 add proof</button>':'')+'</div></div></div>';
+    }).join('');
+    return '<div class="ck-card" data-dash="'+esc(d.id)+'"><div class="ck-head"><div><div class="ck-name">'+esc(d.name)+'</div><div class="ck-sub">'+esc(d.customer||'—')+' · '+esc(d.owner||'Unassigned')+(editable?'':' · <i>read-only (from sheet)</i>')+'</div></div><div class="ck-pct">'+done+'/'+fbs.length+' <b>'+pct+'%</b></div></div>'
+      + '<div class="ck-bar"><i style="width:'+pct+'%"></i></div>'+rows+'</div>';
+  }).join('');
+  el.innerHTML = '<div class="tabhead"><h2>✅ Checklist</h2><div class="sub">Every client change with proof · tick each off as your team completes it</div></div>'
+    + (cards || '<div class="empty">No client feedback yet. Add feedbacks (client changes) to a dashboard and they\\'ll appear here as a checklist.</div>');
+  if (ed){
+    el.querySelectorAll('[data-ck]').forEach(c => c.onchange = () => toggleFbDone(c.closest('.ck-card').dataset.dash, c.dataset.ck, c.checked, c));
+    el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.closest('.ck-card').dataset.dash, b.dataset.addproof));
+    el.querySelectorAll('[data-rmproof]').forEach(b => b.onclick = () => removeProof(b.closest('.ck-card').dataset.dash, b.dataset.rmproof, b.dataset.file));
+  }
+}
+
+// ── Workload-balanced auto-assignment ──────────────────────────────────────
+// How much a dashboard weighs on its owner, by stage. A finished/late-stage
+// dashboard barely counts, so whoever wrapped one up is "free" for a new one.
+const LOAD_W = { not_started:1, ui_ux:1, data_integration:0.85, final_check:0.4, feedback_open:0.7, feedback_incorp:0.6, completed:0 };
+const CAP = 3; // ~2-3 active dashboards is a full plate
+function dashLoad(d){ if (d.isLive && d.state==='completed') return 0; return LOAD_W[d.state]!=null ? LOAD_W[d.state] : 1; }
+function ownerLoad(name, overrides){
+  let load=0, active=0;
+  DATA.dashboards.forEach(d => { const own = (overrides && overrides[d.id]) || d.owner; if (own!==name) return; const w=dashLoad(d); if (w>0){ load+=w; active++; } });
+  return { load, active };
+}
+function loadStatus(load, active){ if (active===0) return ['free','Free']; if (load>=CAP||active>=3) return ['full','Full']; if (load>=1.6) return ['busy','Busy']; return ['ok','Open']; }
+function assignOwners(){ return DATA.owners.filter(o => o && o!=='Unassigned'); }
+function unassignedDashboards(){ return DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned'); }
+function recommendOwner(overrides){
+  const owners = assignOwners(); if (!owners.length) return null;
+  let best=null, bestLoad=Infinity;
+  owners.forEach(o => { const { load } = ownerLoad(o, overrides); if (load<bestLoad){ bestLoad=load; best=o; } });
+  return best;
+}
+// Greedy least-loaded distribution of every unassigned dashboard.
+function planAutoAssign(){
+  const un = unassignedDashboards().slice().sort((a,b)=>(b.priorityLevel-a.priorityLevel) || ((a.serial||1e9)-(b.serial||1e9)));
+  const overrides = {};
+  un.forEach(d => { const o = recommendOwner(overrides); if (o) overrides[d.id]=o; });
+  return overrides;
+}
+async function autoAssignAll(btn){
+  if (!assignOwners().length){ alert('Add at least one team member first (Team tab).'); return; }
+  const plan = planAutoAssign();
+  if (!Object.keys(plan).length){ alert('No unassigned dashboards. 🎉'); return; }
+  if (btn){ btn.disabled=true; btn.textContent='Assigning…'; }
+  const r = await api('POST','/api/assign',{ assignments: plan });
+  if (r.ok) location.reload(); else { alert('Assign failed.'); if(btn){ btn.disabled=false; btn.textContent='⚡ Auto-assign all'; } }
+}
+async function assignOne(id, owner){ const r = await api('POST','/api/assign',{ id, owner }); if (r.ok) location.reload(); else alert('Assign failed.'); }
+function renderAssignTab(){
+  const el = G('tab-assign'), owners = assignOwners(), un = unassignedDashboards();
+  const board = owners.length ? owners.map(o => { const { load, active } = ownerLoad(o); const [cls,lab] = loadStatus(load,active); const pct = Math.min(100, load/CAP*100);
+    return \`<div class="wl-card"><div class="wl-head">\${avatar(o)}<div class="wl-name">\${esc(o)}</div><span class="wl-pill \${cls}">\${lab}</span></div>
+      <div class="wl-meta">\${active} active · load \${load.toFixed(1)} / \${CAP}</div><div class="wl-bar"><i class="\${cls}" style="width:\${pct}%"></i></div></div>\`;
+    }).join('') : '<div class="empty">No team members yet — add them in the Team tab.</div>';
+  const rec = planAutoAssign();
+  const queue = un.length ? un.slice().sort((a,b)=>(b.priorityLevel-a.priorityLevel)||((a.serial||1e9)-(b.serial||1e9))).map(d => {
+    const opts = owners.map(o => \`<option \${o===rec[d.id]?'selected':''}>\${esc(o)}</option>\`).join('');
+    const sel = CFG.manualEnabled ? \`<select class="asg-sel">\${opts}</select><button class="btn sm" data-assign="\${esc(d.id)}">Assign</button>\` : \`<span class="wl-pill ok">→ \${esc(rec[d.id]||'—')}</span>\`;
+    return \`<div class="asg-row"><div><div class="dn">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</div><div class="dmeta">\${esc(d.customer||'—')} · \${SMAP[d.state]?SMAP[d.state].label:esc(d.state)}</div></div><div class="asg-act">\${sel}</div></div>\`;
+  }).join('') : '<div class="empty">Everything is assigned. 🎉</div>';
+  el.innerHTML = \`<div class="tabhead"><h2>⚖️ Assign</h2><div class="sub">Workload-balanced · \${un.length} unassigned · least-loaded teammate gets the next one</div></div>
+    \${CFG.manualEnabled && un.length ? \`<div class="roster-add"><button class="btn" id="autoAll">⚡ Auto-assign all \${un.length}</button><span class="sub" style="align-self:center">picks the lightest plate for each dashboard</span></div>\` : ''}
+    <div class="section-t">Team workload</div><div class="wl-grid">\${board}</div>
+    <div class="section-t" style="margin-top:18px">Unassigned dashboards</div>\${queue}\`;
+  if (CFG.manualEnabled){
+    const aa = G('autoAll'); if (aa) aa.onclick = () => autoAssignAll(aa);
+    el.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => { const row=b.closest('.asg-row'), sel=row.querySelector('.asg-sel'); assignOne(b.dataset.assign, sel?sel.value:''); });
+  }
+}
+document.querySelectorAll('#tabs .tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+
+// Click a card → open its detail modal (buttons/chips handled first).
 document.getElementById('grid').addEventListener('click', (e) => {
   const p = e.target.closest('[data-prio]'); if (p){ togglePriority(p.dataset.prio); return; }
   const u = e.target.closest('[data-update]'); if (u){ openUpdate(u.dataset.update, u.dataset.name); return; }
+  const ed = e.target.closest('[data-edit]'); if (ed){ openEdit(ed.dataset.edit); return; }
+  if (e.target.closest('[data-setstage]') || e.target.closest('[data-del]')) return;
   const o = e.target.closest('[data-owner]'); if (o){ openOwner(o.dataset.owner); return; }
-  const c = e.target.closest('[data-customer]'); if (c) openClient(c.dataset.customer);
+  const c = e.target.closest('[data-customer]'); if (c){ openClient(c.dataset.customer); return; }
+  const a = e.target.closest('a'); if (a) return; // let links work
+  const card = e.target.closest('[data-card]'); if (card){ openDetail(card.dataset.card); }
 });
-async function togglePriority(id){
+async function setPriority(id, level){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
-  const on = !d.priority;
-  const res = await api('POST', '/api/priority', { id, on });
-  if (res.ok){ d.priority = on; DATA.priorityCount = DATA.dashboards.filter(x => x.priority).length; render(); }
+  const res = await api('POST', '/api/priority', { id, level });
+  if (res.ok){ d.priorityLevel = level||0; d.priority = d.priorityLevel>0; DATA.priorityCount = DATA.dashboards.filter(x => x.priority).length; render(); }
   else alert('Could not update priority (need edit access?).');
 }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUpd(); });
+// Star quick-toggle: off → P1, any level → cleared. Exact rank is set in Edit.
+function togglePriority(id){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  setPriority(id, d.priorityLevel ? 0 : 1);
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape'){ closeUpd(); closeDetail(); if (typeof closeForm==='function') closeForm(); } });
 
 // ── Export to Excel (styled, multi-sheet .xlsx via ExcelJS) ────────────────
 function loadScript(src){
@@ -1238,6 +2226,322 @@ async function loadExcelJS(){
   ];
   for (const url of cdns){ try { await loadScript(url); if (window.ExcelJS) return; } catch(e){} }
   throw new Error('Could not load the Excel library (network blocked?).');
+}
+
+// ── Build-Update PDF deck (client report for the next meeting) ──────────────
+async function loadPdfLib(){
+  if (!window.PDFLib){
+    const cdns = [
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
+      'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
+    ];
+    for (const url of cdns){ try { await loadScript(url); if (window.PDFLib) break; } catch(e){} }
+    if (!window.PDFLib) throw new Error('Could not load the PDF library (network blocked?).');
+  }
+  // fontkit lets us embed the Didone fonts — optional (deck falls back to Times).
+  if (!window.fontkit){
+    const fk = [
+      'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js',
+      'https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js',
+    ];
+    for (const url of fk){ try { await loadScript(url); if (window.fontkit) break; } catch(e){} }
+  }
+}
+function downloadBytes(bytes, filename, type){
+  const blob = new Blob([bytes], { type }); const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function fetchImg(f){
+  try {
+    const r = await fetch(f.url || ('/api/file?id='+f.id)); const buf = new Uint8Array(await r.arrayBuffer());
+    const isPng = (f.type||'').includes('png') || (buf[0]===0x89 && buf[1]===0x50);
+    const isJpg = (f.type||'').includes('jpeg') || (f.type||'').includes('jpg') || (buf[0]===0xFF && buf[1]===0xD8);
+    if (!isPng && !isJpg) return null;
+    return { bytes: buf, png: isPng };
+  } catch(e){ return null; }
+}
+// Elegant "Weekly Update" deck (cream / Didone serif / dark screenshot panel) —
+// matches the Tybourne reference format exactly. Embeds Playfair Display via
+// fontkit; falls back to Times if the fonts can't be fetched.
+async function buildDeck(PDFLib, report){
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const doc = await PDFDocument.create();
+  let SER, ITA;
+  try {
+    if (!window.fontkit) throw new Error('no fontkit');
+    doc.registerFontkit(window.fontkit);
+    const fonts = await loadFonts();
+    SER = await doc.embedFont(fonts.serif, { subset:true });
+    ITA = await doc.embedFont(fonts.serifItalic, { subset:true });
+  } catch(e){ SER = await doc.embedFont(StandardFonts.TimesRomanBold); ITA = await doc.embedFont(StandardFonts.TimesRomanItalic); }
+  const SAN = await doc.embedFont(StandardFonts.Helvetica);
+  const SANB = await doc.embedFont(StandardFonts.HelveticaBold);
+  const W = 960, H = 540, M = 64;
+  const C = (h) => rgb(parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255);
+  const CREAM='#f0e9d8', INK='#1a1712', GOLD='#a87f2e', DARK='#1c1813', MUTE='#8c8472', LINE='#d8cfb4';
+  const san = (s) => String(s==null?'':s).replace(/[‘’′]/g,"'").replace(/[“”″]/g,'"').replace(/[–—]/g,'-').replace(/…/g,'...').replace(/[^\\x20-\\x7E]/g,'');
+  const sp  = (s) => san(s).toUpperCase().split('').join(' ');
+  const D = (pg,t,x,y,f,s,c) => pg.drawText(san(t), { x, y, size:s, font:f, color:C(c) });
+  const tw = (t,f,s) => f.widthOfTextAtSize(san(t), s);
+  const wrap = (t,f,s,mw) => { const w = san(t).split(/\\s+/).filter(Boolean), L=[]; let c=''; for (const x of w){ const nn = c?c+' '+x:x; if (f.widthOfTextAtSize(nn,s) > mw && c){ L.push(c); c = x; } else c = nn; } if (c) L.push(c); return L; };
+  function badges(pg, client){
+    const by = H-94, bs = 44;
+    pg.drawRectangle({ x:M, y:by, width:bs, height:bs, borderColor:C(LINE), borderWidth:1.2, color:C(CREAM) });
+    const ini = (client||'C').split(/\\s+/).map(w => w[0]||'').join('').slice(0,2).toUpperCase();
+    D(pg, ini, M+bs/2-tw(ini,SER,17)/2, by+bs/2-6, SER, 17, INK);
+    D(pg, 'x', W/2-3, by+bs/2-5, SAN, 12, MUTE);
+    pg.drawRectangle({ x:W-M-bs, y:by, width:bs, height:bs, color:C(DARK) });
+    D(pg, 'm', W-M-bs/2-tw('m',ITA,22)/2, by+bs/2-7, ITA, 22, '#c3851a');
+  }
+  function splitHead(lead, emph){
+    lead = san(lead||''); emph = san(emph||'');
+    if (!emph && /\\s-\\s/.test(lead)){ const i = lead.indexOf(' - '); emph = lead.slice(i+3); lead = lead.slice(0,i); }
+    return { lead: lead.trim(), emph: emph.trim() };
+  }
+  function drawHead(pg, lead, emph, size, x, yTop){
+    const maxW = W - M - x, lh = size*1.06, words = [];
+    san(lead).split(/\\s+/).filter(Boolean).forEach(w => words.push({ w, f:SER, c:INK }));
+    san(emph).split(/\\s+/).filter(Boolean).forEach(w => words.push({ w, f:ITA, c:GOLD }));
+    const lines = [[]]; let cw = 0;
+    for (const t of words){ const ww = t.f.widthOfTextAtSize(t.w+' ', size);
+      if (cw+ww > maxW && lines[lines.length-1].length){ lines.push([]); cw = 0; }
+      lines[lines.length-1].push(t); cw += ww; }
+    lines.slice(0,2).forEach((ln, li) => { let cx = x; const y = yTop - li*lh;
+      ln.forEach(t => { D(pg, t.w, cx, y, t.f, size, t.c); cx += t.f.widthOfTextAtSize(t.w+' ', size); }); });
+  }
+  function footer(pg, leftTxt, rightTxt){
+    D(pg, sp(leftTxt), M, 36, SAN, 7, MUTE);
+    pg.drawCircle({ x:M+tw(sp(leftTxt),SAN,7)+10, y:39, size:1.5, color:C(GOLD) });
+    D(pg, sp(rightTxt), W-M-tw(sp(rightTxt),SAN,7), 36, SAN, 7, MUTE);
+  }
+  // COVER
+  let pg = doc.addPage([W,H]); pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+  badges(pg, report.client);
+  D(pg, sp('The Weekly'), M, H-152, SANB, 8, GOLD);
+  D(pg, report.titleTop||'Weekly', M-4, H-250, SER, 92, INK);
+  D(pg, report.titleBot||'Update', M-2, H-330, ITA, 92, GOLD);
+  pg.drawRectangle({ x:M, y:H-372, width:70, height:2, color:C(GOLD) });
+  D(pg, 'Week of '+(report.dateLong||report.date||''), M, H-405, ITA, 17, INK);
+  D(pg, sp('Prepared for '+(report.client||'the client')), M, 50, SAN, 7.5, MUTE);
+  D(pg, sp('By Munshot AI'), W-M-tw(sp('By Munshot AI'),SAN,7.5), 50, SAN, 7.5, MUTE);
+  // CONTENT — one page per screenshot
+  const items = report.items || [], total = String(items.length+2).padStart(2,'0');
+  for (let idx=0; idx<items.length; idx++){
+    const it = items[idx];
+    pg = doc.addPage([W,H]); pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+    const nn = String(idx+1).padStart(2,'0');
+    D(pg, sp('Highlights'), M, H-42, SAN, 7, MUTE);
+    pg.drawCircle({ x:M+tw(sp('Highlights'),SAN,7)+9, y:H-39, size:1.5, color:C(GOLD) });
+    D(pg, nn, M+tw(sp('Highlights'),SAN,7)+18, H-42, SAN, 7, GOLD);
+    const dts = sp(report.dateShort||report.date||'');
+    D(pg, dts, W-M-tw(dts,SAN,7), H-42, SAN, 7, MUTE);
+    const ey = H-84;
+    if (it.category) D(pg, sp(it.category), M, ey, SANB, 7.5, GOLD);
+    const sh = splitHead(it.headline, it.emph);
+    // HEADER — the change title, big serif (up to 2 lines).
+    const headY = it.category ? ey-38 : H-104;
+    const headLines = wrap(sh.lead || 'Change', SER, 28, W-2*M).slice(0,2);
+    headLines.forEach((ln,i) => D(pg, ln, M, headY - i*30, SER, 28, INK));
+    let ty = headY - (headLines.length-1)*30 - 26;   // just under the header
+    const imgs = (it.imgs||[]).filter(g => g && g.bytes).slice(0,3), n = imgs.length;
+    // DESCRIPTION — full text under the header on single/no-screenshot pages
+    // (multi-screenshot pages carry their own per-shot captions instead).
+    if (n<=1 && sh.emph.trim()){
+      const dl = wrap(sh.emph, ITA, 13, W-2*M).slice(0,5);
+      dl.forEach((ln,i) => D(pg, ln, M, ty - i*17, ITA, 13, GOLD));
+      ty -= dl.length*17 + 4;
+    }
+    const panelBot = 70, panelX = M-24, panelW = W - panelX - 18;
+    const panelTop = Math.max(panelBot+150, Math.min(H-176, ty - 10));
+    const panelH = panelTop - panelBot;
+    pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelH, color:C(DARK) });
+    if (n){
+      const pad = n>1 ? 28 : 40, botMargin = 14, capSize = n>2 ? 8 : 9, lineH = capSize + 3;
+      const slotW = (panelW - pad*(n+1)) / n;
+      // Wrap each caption to its slot (no truncation) so the full text shows.
+      const wrapC = (t, mw) => { const w = san(t).split(/\\s+/), L = []; let c=''; for (const x of w){ const nn = c?c+' '+x:x; if (SAN.widthOfTextAtSize(nn, capSize) > mw && c){ L.push(c); c = x; } else c = nn; } if (c) L.push(c); return L; };
+      const capLines = imgs.map(g => (n>1 && (g.caption||'').trim()) ? wrapC(g.caption, slotW-4).slice(0,4) : []);
+      const maxCap = Math.max(0, ...capLines.map(l => l.length));
+      const capH = maxCap ? maxCap*lineH + 6 : 0;
+      const imgBot = panelBot + botMargin + capH + (capH?10:0), availH = (panelTop - pad) - imgBot;
+      for (let k=0;k<n;k++){ try {
+        const g = imgs[k], slotX = panelX + pad + k*(slotW+pad);
+        const im = g.png===false ? await doc.embedJpg(g.bytes) : await doc.embedPng(g.bytes);
+        let dw = im.width, dh = im.height; const r = Math.min(slotW/dw, availH/dh); dw*=r; dh*=r;
+        const cx = slotX + (slotW-dw)/2, cy = imgBot + (availH-dh)/2;
+        pg.drawRectangle({ x:cx-5, y:cy-5, width:dw+10, height:dh+10, color:rgb(1,1,1) });
+        pg.drawImage(im, { x:cx, y:cy, width:dw, height:dh });
+        const first = panelBot + botMargin + capH - lineH + 1;
+        capLines[k].forEach((ln, li) => { const cw = Math.min(SAN.widthOfTextAtSize(ln, capSize), slotW); D(pg, ln, slotX + (slotW-cw)/2, first - li*lineH, SAN, capSize, '#e7dec8'); });
+      } catch(e){} }
+    }
+    footer(pg, report.client||'Client', nn+' / '+total);
+  }
+  // CLOSING
+  pg = doc.addPage([W,H]); pg.drawRectangle({ x:0, y:0, width:W, height:H, color:C(CREAM) });
+  badges(pg, report.client);
+  D(pg, sp('- Thank you -'), M, H-256, SANB, 8, GOLD);
+  D(pg, report.closeTop||'Until ', M-4, H-340, SER, 84, INK);
+  D(pg, report.closeEmph||'next', M-4+tw(report.closeTop||'Until ',SER,84), H-340, ITA, 84, GOLD);
+  D(pg, report.closeBot||'week.', M-4, H-420, SER, 84, INK);
+  D(pg, sp('Prepared by Munshot AI for '+(report.client||'the client')), M, 50, SAN, 7.5, MUTE);
+  const nu = 'Next update - '+(report.nextUpdate||'next week');
+  D(pg, nu, W-M-tw(nu,ITA,14), 50, ITA, 14, INK);
+  return await doc.save();
+}
+// Fetch + cache the Didone fonts (served same-origin by /api/font, edge-cached).
+let _deckFonts = null;
+async function loadFonts(){
+  if (_deckFonts) return _deckFonts;
+  const get = async (f) => new Uint8Array(await (await fetch('/api/font?f='+f)).arrayBuffer());
+  _deckFonts = { serif: await get('serif'), serifItalic: await get('italic') };
+  return _deckFonts;
+}
+// Map a dashboard's feedbacks → deck items. Screenshots are grouped
+// f.perPage-at-a-time (1/2/3 per page). One image → its caption is the gold
+// emphasis; multiple → each screenshot shows its own caption under it.
+async function buildItems(fbs){
+  const items = [];
+  for (const f of (fbs||[])){
+    const firstSent = String(f.text||'').split(/(?<=[.!?])\\s/)[0] || String(f.text||'');
+    const files = (f.files||[]);
+    if (!files.length){ items.push({ category:f.category||'', headline:f.label||'Change', emph:firstSent, imgs:[] }); continue; }
+    const per = Math.min(3, Math.max(1, f.perPage||1));
+    for (let i=0;i<files.length;i+=per){
+      const group = files.slice(i, i+per), imgs = [];
+      for (const file of group){ const im = await fetchImg(file); imgs.push({ bytes: im?im.bytes:null, png: im?im.png:true, caption: file.caption||'' }); }
+      items.push({ category:f.category||'',
+        headline: (per===1 ? (group[0].header||f.label) : (group[0].header||f.label)) || 'Change',
+        emph: per===1 ? (group[0].caption||firstSent||'') : firstSent, imgs });
+    }
+  }
+  return items;
+}
+function makeReport(d, items){
+  const t = new Date(), nx = new Date(t.getTime()+7*864e5);
+  const longD = (dt) => dt.toLocaleDateString('en-US',{ month:'long', day:'numeric', year:'numeric' });
+  return { client: d.customer||'Client', date: t.toISOString().slice(0,10),
+    dateLong: longD(t), dateShort: t.toLocaleDateString('en-GB',{ day:'numeric', month:'long', year:'numeric' }),
+    titleTop:'Weekly', titleBot:'Update', closeTop:'Until ', closeEmph:'next', closeBot:'week.', nextUpdate: longD(nx), items };
+}
+async function genBuildUpdate(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const fbs = d.feedbacks || [];
+  if (!fbs.length){ alert('Add at least one feedback/change (with screenshots) first.'); return; }
+  if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  try {
+    await loadPdfLib();
+    const report = makeReport(d, await buildItems(fbs));
+    const bytes = await buildDeck(window.PDFLib, report);
+    const fname = (d.name||'dashboard').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-build-update.pdf';
+    downloadBytes(bytes, fname, 'application/pdf');
+    // Auto-queue this PDF for tonight's single 8pm digest to the founder.
+    let queued = false;
+    try {
+      const up = await api('POST','/api/file',{ name:fname, type:'application/pdf', data: bytesToB64(new Uint8Array(bytes)) });
+      if (up.ok){ const j = await up.json(); const url = location.origin + (j.url || ('/api/file?id='+j.id));
+        const q = await api('POST','/api/digest',{ action:'enqueue', item:{ dashboardId:d.id, name:(d.name||'Build Update'), client:(d.customer||''), count:fbs.length, url } });
+        queued = q.ok; }
+    } catch(e){}
+    if (btn && queued){ btn.textContent = 'Saved · queued for Wed digest ✓'; setTimeout(()=>{ if(btn) btn.textContent='📑 Build update PDF'; }, 2200); }
+  } catch (e){ alert(e.message || 'Could not build the PDF.'); }
+  finally { if (btn){ btn.disabled = false; if (btn.textContent==='Generating…') btn.textContent = '📑 Build update PDF'; } }
+}
+// Manually fire tonight's digest now — used to test the 8pm flow without waiting.
+async function sendDigestNow(btn){
+  if (btn){ btn.disabled = true; const o=btn.textContent; btn.dataset.o=o; btn.textContent='Sending…'; }
+  try {
+    const r = await api('POST','/api/digest',{ action:'send' });
+    const j = await r.json().catch(()=>({}));
+    if (j.skipped==='empty') alert('Nothing queued.\\n\\nGenerate a Build Update PDF first — every PDF auto-queues for the weekly founder email.');
+    else if (j.ok) alert('✅ Sent the PDF digest ('+j.count+' update'+(j.count===1?'':'s')+') to '+j.to+'.');
+    else alert('Digest send failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
+  } catch(e){ alert('Digest error: '+e.message); }
+  finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'Send now'; } }
+}
+// Manually fire the daily status email now — to test it without waiting for 9pm.
+async function sendDailyNow(btn){
+  if (btn){ btn.disabled = true; const o=btn.textContent; btn.dataset.o=o; btn.textContent='Sending…'; }
+  try {
+    const r = await api('POST','/api/digest',{ action:'daily' });
+    const j = await r.json().catch(()=>({}));
+    if (j.skipped==='no-feedback') alert('No dashboards have feedback yet — add some client changes (feedbacks) first, then the daily status will have something to report.');
+    else if (j.ok) alert('✅ Sent the daily status to '+j.to+'.\\n\\n+'+(j.doneToday||0)+' done since last · '+(j.pending||0)+' pending.');
+    else alert('Daily status failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
+  } catch(e){ alert('Daily status error: '+e.message); }
+  finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'Send now'; } }
+}
+// Plain-text summary of a dashboard's changes (the raw email API sends text only).
+function buildUpdateText(d){
+  const fbs = d.feedbacks || [], impl = fbs.filter(f => f.implemented).length;
+  const L = [];
+  L.push(d.name + ' — Build Update');
+  L.push('Client: ' + (d.customer || '-') + '   ·   Owner: ' + d.owner);
+  L.push(fbs.length + ' changes  ·  ' + impl + ' implemented  ·  ' + (fbs.length - impl) + ' pending');
+  L.push('');
+  fbs.forEach((f, i) => {
+    L.push((i+1) + '. [' + (f.implemented ? 'IMPLEMENTED' : 'PENDING') + '] ' + (f.category ? '['+f.category+'] ' : '') + (f.label || 'Change'));
+    if (f.text) L.push('    ' + f.text);
+    if (f.link) L.push('    link: ' + f.link);
+    (f.files||[]).forEach(fl => L.push('    file: ' + location.origin + (fl.url || ('/api/file?id='+fl.id))));
+    L.push('');
+  });
+  L.push('— Munshot Tracker');
+  return L.join('\\n');
+}
+// Rich HTML email — header, each change as a card with badge + inline screenshots.
+function buildUpdateHtml(d, pdfUrl){
+  const fbs = d.feedbacks || [], impl = fbs.filter(f => f.implemented).length, O = location.origin;
+  const badge = ok => '<span style="font:700 11px Arial;color:'+(ok?'#15803d':'#b91c1c')+';background:'+(ok?'#dcfce7':'#fee2e2')+';border-radius:999px;padding:3px 10px;white-space:nowrap">'+(ok?'IMPLEMENTED':'PENDING')+'</span>';
+  const cta = pdfUrl ? '<div style="text-align:center;margin:2px 0 18px"><a href="'+esc(pdfUrl)+'" style="display:inline-block;background:#4f46e5;color:#fff;font:700 14px Arial;text-decoration:none;padding:13px 26px;border-radius:10px">📑 Open the full Build Update (PDF)</a></div>' : '';
+  const cards = fbs.map((f,i) => {
+    const imgs = (f.files||[]).filter(x => (x.type||'').startsWith('image/'))
+      .map(x => '<img src="'+O+esc(x.url||('/api/file?id='+x.id))+'" alt="" style="max-width:100%;border:1px solid #e5e8ef;border-radius:8px;margin:8px 0 0;display:block">').join('');
+    return '<div style="border:1px solid #e5e8ef;border-radius:12px;padding:16px;margin:0 0 14px">'
+      + (f.category?'<div style="font:800 10px Arial;letter-spacing:.06em;text-transform:uppercase;color:#4f46e5">'+esc(f.category)+'</div>':'')
+      + '<div style="font:700 16px Arial;color:#141925;margin:4px 0 8px">'+esc(f.label||('Change '+(i+1)))+' &nbsp; '+badge(f.implemented)+'</div>'
+      + (f.text?'<div style="font:14px/1.55 Arial;color:#48505f">'+esc(f.text)+'</div>':'')
+      + (f.link?'<div style="margin-top:8px"><a href="'+esc(f.link)+'" style="color:#4f46e5;font:13px Arial;text-decoration:none">▶ recording / message</a></div>':'')
+      + imgs + '</div>';
+  }).join('');
+  return '<div style="max-width:640px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#141925">'
+    + '<div style="background:#4f46e5;background:linear-gradient(135deg,#4f46e5,#9333ea);color:#fff;padding:22px;border-radius:14px 14px 0 0">'
+      + '<div style="font:800 17px Arial">◆ Munshot</div>'
+      + '<div style="font:800 21px Arial;margin-top:8px">'+esc(d.name)+' — Build Update</div>'
+      + '<div style="font:13px Arial;opacity:.92;margin-top:4px">For '+esc(d.customer||'the client')+' &nbsp;·&nbsp; '+fbs.length+' changes &nbsp;·&nbsp; '+impl+' implemented &nbsp;·&nbsp; '+(fbs.length-impl)+' pending</div>'
+    + '</div>'
+    + '<div style="padding:18px 2px">'+cta+cards+'</div>'
+    + '<div style="color:#727a8a;font:12px Arial;text-align:center;padding:8px 0 18px">Auto-generated by Munshot Tracker</div>'
+  + '</div>';
+}
+function bytesToB64(bytes){ let bin=''; const ch=0x8000; for (let i=0;i<bytes.length;i+=ch) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+ch)); return btoa(bin); }
+async function emailBuildUpdate(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  if (!(d.feedbacks||[]).length){ alert('Add at least one feedback/change first.'); return; }
+  const def = 'aashita1619@gmail.com'; // test recipient — change to ceekay@muns.io + team once verified
+  const to = prompt('Email this Build Update to (comma-separated):', def);
+  if (to === null || !to.trim()) return;
+  if (btn){ btn.disabled = true; btn.textContent = 'Building PDF…'; }
+  try {
+    // 1) generate the polished PDF deck
+    await loadPdfLib();
+    const report = makeReport(d, await buildItems(d.feedbacks||[]));
+    const bytes = await buildDeck(window.PDFLib, report);
+    // 2) host it so the email can link to the real deck
+    let pdfUrl = '';
+    try {
+      const up = await api('POST', '/api/file', { name: (d.name||'build-update').replace(/[^a-z0-9]+/gi,'-').toLowerCase()+'.pdf', type:'application/pdf', data: bytesToB64(new Uint8Array(bytes)) });
+      if (up.ok){ const j = await up.json(); pdfUrl = location.origin + (j.url || ('/api/file?id='+j.id)); }
+    } catch(e){}
+    // 3) send: branded preview + a button to the full PDF
+    if (btn) btn.textContent = 'Sending…';
+    const res = await api('POST', '/api/email', { to, subject: 'Build Update — ' + d.name, html: buildUpdateHtml(d, pdfUrl), text: buildUpdateText(d) });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok && j.ok) alert('✅ Email sent to ' + j.sent + ' recipient(s):\\n' + to + (pdfUrl?'\\n\\nWith a link to the full PDF.':'\\n\\n(PDF link unavailable — sent preview only.)'));
+    else alert('Email failed:\\n' + (j.error || JSON.stringify(j.results || j)).slice(0, 400));
+  } catch (e){ alert('Email error: ' + e.message); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = '📧 Email update'; } }
 }
 const ARGB = { not_started:'FF9CA3AF', ui_ux:'FF8B5CF6', data_integration:'FF3B82F6', final_check:'FF06B6D4', feedback_open:'FFF59E0B', feedback_incorp:'FFF97316', completed:'FF22C55E' };
 const ARGB_SOFT = { not_started:'FFF0F1F4', ui_ux:'FFF1ECFE', data_integration:'FFE8F0FE', final_check:'FFE3F8FB', feedback_open:'FFFEF3DC', feedback_incorp:'FFFDEEE3', completed:'FFE7F8EE' };
@@ -1260,7 +2564,7 @@ function uniqueName(wb, base){
 // Add a styled worksheet. cols: [{header,key,width,wrap}]; stateKey marks the
 // column whose cell should be tinted with the dashboard's state colour.
 function styledSheet(wb, base, cols, rows, stateKey){
-  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1 }] });
+  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1, showGridLines:false }] });
   ws.columns = cols.map(c => ({ header:c.header, key:c.key, width:c.width || 16 }));
   rows.forEach(r => ws.addRow(r));
   const head = ws.getRow(1);
@@ -1318,13 +2622,13 @@ function detailRows(ws, list){
       owner: d.owner,
       state: (STATES.findIndex(x => x.id === d.state)+1) + '. ' + SMAP[d.state].label,
       live: d.isLive ? 'Live on Munshot' : 'No',
-      prio: d.priority ? '★ Yes' : '',
+      prio: d.priorityLevel ? 'P'+d.priorityLevel : '',
       status: d.status,
       req: d.requirements,
       imp: d.improvement,
       fb: d.feedback,
       update: u ? ((u.date?u.date+': ':'') + (u.note || (SMAP[u.state]?SMAP[u.state].label:''))) : '',
-      link: d.meetingUrl || d.meetingNote || '',
+      link: (d.links && d.links.length) ? d.links.map(l => l.label+': '+l.url).join('\\n') : (d.meetingUrl || d.meetingNote || ''),
       lastUpdated: d.lastUpdated,
       source: d.source,
     });
@@ -1333,7 +2637,7 @@ function detailRows(ws, list){
 }
 // Build a detail sheet with per-sheet sequential numbering (1,2,3…).
 function detailSheet(wb, base, list){
-  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1 }] });
+  const ws = wb.addWorksheet(uniqueName(wb, base), { views:[{ state:'frozen', ySplit:1, showGridLines:false }] });
   ws.columns = DETAIL_COLS.map(c => ({ header:c.header, key:c.key, width:c.width }));
   detailRows(ws, list);
   styleExisting(ws, DETAIL_COLS, 'state');
@@ -1473,6 +2777,71 @@ async function saveWb(wb, filename){
   a.href = URL.createObjectURL(blob); a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+// All feedbacks across dashboards — with the implemented status.
+function feedbacksSheet(wb){
+  const cols = [
+    { header:'Dashboard', key:'dash', width:28, wrap:true },
+    { header:'Owner', key:'owner', width:14 },
+    { header:'Client', key:'client', width:20, wrap:true },
+    { header:'Feedback', key:'label', width:18, wrap:true },
+    { header:'Date', key:'date', width:12 },
+    { header:'What the client said', key:'text', width:46, wrap:true },
+    { header:'Link', key:'link', width:26, wrap:true },
+    { header:'Implemented', key:'impl', width:13 },
+  ];
+  const rows = [];
+  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => rows.push({
+    dash:d.name, owner:d.owner, client:d.customer, label:f.label, date:f.date, text:f.text, link:f.link, impl: f.implemented ? 'Yes' : 'No',
+  })));
+  if (!rows.length) return;
+  const ws = styledSheet(wb, 'Feedbacks', cols, rows);
+  // Colour the Implemented cell (col 8) green/red.
+  ws.eachRow((row, rn) => { if (rn===1) return; const c = row.getCell(8);
+    const yes = String(c.value).toLowerCase()==='yes';
+    c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb: yes ? 'FFE7F8EE' : 'FFFDE8E8' } };
+    c.font = { bold:true, color:{ argb: yes ? 'FF15803D' : 'FFB91C1C' } };
+    c.alignment = { horizontal:'center', vertical:'top' };
+  });
+}
+function teamSheet(wb){
+  const cols = [
+    { header:'Team Member', key:'name', width:18, wrap:true },
+    { header:'Role', key:'role', width:18, wrap:true },
+    { header:'Qualification', key:'qual', width:16, wrap:true },
+    { header:'Email', key:'email', width:24 },
+    { header:'Phone', key:'phone', width:14 },
+    { header:'Joined', key:'joined', width:13 },
+    { header:'Dashboards', key:'total', width:12, num:true },
+    { header:'Completed', key:'done', width:11, num:true },
+    { header:'Live', key:'live', width:8, num:true },
+    { header:'Open feedbacks', key:'todo', width:14, num:true },
+  ];
+  const rows = DATA.owners.map(name => {
+    const s = ownerStats(name), p = (DATA.people&&DATA.people[name])||{};
+    const todo = DATA.dashboards.filter(d=>d.owner===name).reduce((n,d)=>n+(d.feedbacks||[]).filter(f=>!f.implemented).length,0);
+    return { name, role:p.role||'', qual:p.qualification||'', email:p.email||'', phone:p.phone||'', joined:p.joinDate||'', total:s.total, done:s.completed, live:s.live, todo };
+  });
+  if (rows.length) styledSheet(wb, 'Team', cols, rows);
+}
+function clientsSheet(wb){
+  const cols = [
+    { header:'Client', key:'name', width:22, wrap:true },
+    { header:'Point of contact', key:'poc', width:18, wrap:true },
+    { header:'Emails', key:'emails', width:28, wrap:true },
+    { header:'Meeting frequency', key:'freq', width:20, wrap:true },
+    { header:'Website', key:'web', width:22, wrap:true },
+    { header:'Dashboards', key:'total', width:12, num:true },
+    { header:'Completed', key:'done', width:11, num:true },
+    { header:'Live', key:'live', width:8, num:true },
+    { header:'Team', key:'people', width:9, num:true },
+  ];
+  const rows = DATA.customers.map(name => {
+    const s = clientStats(name), det = (DATA.clientDetails&&DATA.clientDetails[name])||{};
+    return { name, poc:det.poc||'', emails:Array.isArray(det.emails)?det.emails.join(', '):(det.emails||''), freq:det.meetingFreq||'', web:det.website||'', total:s.total, done:s.completed, live:s.live, people:s.people.length };
+  });
+  if (rows.length) styledSheet(wb, 'Clients', cols, rows);
+}
+
 async function doExport(kind){
   try {
     await loadExcelJS();
@@ -1483,6 +2852,9 @@ async function doExport(kind){
       detailSheet(wb, 'All Dashboards', all);
       ownerSummary(wb);
       clientSummary(wb);
+      feedbacksSheet(wb);
+      teamSheet(wb);
+      clientsSheet(wb);
       DATA.customers.forEach(c => detailSheet(wb, 'Client - '+c, all.filter(d => d.customers.includes(c))));
       DATA.owners.forEach(o => detailSheet(wb, 'Owner - '+o, all.filter(d => d.owner === o)));
       await saveWb(wb, 'dashboard-tracker-all.xlsx');
