@@ -1,4 +1,4 @@
-name = "dashboard-tracker"
+name = "tracker"
 main = "src/index.js"
 compatibility_date = "2026-06-22"
 
