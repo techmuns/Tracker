@@ -875,7 +875,7 @@ function renderPage(data, opts) {
   .msg { font-size:12.5px; }
   .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
   /* KPI hero */
-  .kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; padding:18px 28px 4px; }
+  .kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; padding:18px 28px 4px; }
   @media (max-width:1100px){ .kpis { grid-template-columns:repeat(3,1fr); } }
   @media (max-width:680px){ .kpis { grid-template-columns:repeat(2,1fr); } }
   .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
@@ -1155,7 +1155,6 @@ ${opts.manualEnabled ? `
 <datalist id="owners">${data.owners.map((o) => `<option value="${escapeHtml(o)}">`).join('')}</datalist>
 ` : ''}
 
-${data.gaps.length && !opts.standalone ? `<div class="warn">Note: sheet serial numbers ${data.gaps.join(', ')} are missing (likely deleted rows). ${data.sheetCount} sheet entries counted.</div>` : ''}
 
 <div class="controls">
   <input type="search" id="q" placeholder="Search name, status, requirements…">
@@ -1302,18 +1301,24 @@ function renderKpis(){
   const el = document.getElementById('kpis'); if (!el) return;
   const liveOn = liveOnlyEl() ? liveOnlyEl().checked : false;
   const anyFilter = stateFilter.size > 0 || prioOnly || liveOn;
-  const tiles = [{ id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter }]
-    .concat(STATES.map(s => ({ id:s.id, label:s.label, n:DATA.counts[s.id]||0, color:s.color, icon:KPI_ICONS[s.id]||'•', on:stateFilter.has(s.id) })))
-    .concat([
-      { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
-      { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
-    ]);
+  // A tight, meaningful KPI row — the per-stage breakdown lives on the pill row
+  // and the Status Mix donut, so we don't repeat all 7 stages as tiles here.
+  const inprog = MID_STAGES.reduce((n,k) => n + (DATA.counts[k]||0), 0);
+  const tiles = [
+    { id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter },
+    { id:'not_started', label:'Not started', n:DATA.counts['not_started']||0, color:'#9ca3af', icon:'⏳', on:stateFilter.has('not_started') },
+    { id:'__inprog', label:'In progress', n:inprog, color:'#f59e0b', icon:'🔧', on:MID_STAGES.some(k => stateFilter.has(k)) },
+    { id:'completed', label:'Completed', n:DATA.counts['completed']||0, color:'#22c55e', icon:'✅', on:stateFilter.has('completed') },
+    { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
+    { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
+  ];
   el.innerHTML = tiles.map(t => \`<div class="kpi \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
       <div class="ic">\${t.icon}</div><div class="n" data-count="\${t.n}">0</div><div class="l">\${esc(t.label)}</div><div class="spark"></div>
     </div>\`).join('');
   el.querySelectorAll('[data-kpi]').forEach(k => k.onclick = () => {
     const id = k.dataset.kpi;
     if (id === '__all'){ clearAllFilters(); }
+    else if (id === '__inprog'){ const on = MID_STAGES.some(s => stateFilter.has(s)); clearAllFilters(); if (!on) MID_STAGES.forEach(s => stateFilter.add(s)); }
     else if (id === '__live'){ const on = !liveOnlyEl().checked; clearAllFilters(); liveOnlyEl().checked = on; }
     else if (id === '__prio'){ const on = !prioOnly; clearAllFilters(); prioOnly = on; }
     else { isolateState(id); return; }
