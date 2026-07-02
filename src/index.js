@@ -2193,6 +2193,7 @@ async function buildDeck(PDFLib, report){
   const sp  = (s) => san(s).toUpperCase().split('').join(' ');
   const D = (pg,t,x,y,f,s,c) => pg.drawText(san(t), { x, y, size:s, font:f, color:C(c) });
   const tw = (t,f,s) => f.widthOfTextAtSize(san(t), s);
+  const wrap = (t,f,s,mw) => { const w = san(t).split(/\\s+/).filter(Boolean), L=[]; let c=''; for (const x of w){ const nn = c?c+' '+x:x; if (f.widthOfTextAtSize(nn,s) > mw && c){ L.push(c); c = x; } else c = nn; } if (c) L.push(c); return L; };
   function badges(pg, client){
     const by = H-94, bs = 44;
     pg.drawRectangle({ x:M, y:by, width:bs, height:bs, borderColor:C(LINE), borderWidth:1.2, color:C(CREAM) });
@@ -2247,10 +2248,23 @@ async function buildDeck(PDFLib, report){
     const ey = H-84;
     if (it.category) D(pg, sp(it.category), M, ey, SANB, 7.5, GOLD);
     const sh = splitHead(it.headline, it.emph);
-    drawHead(pg, sh.lead, sh.emph, 30, M, it.category ? ey-38 : H-104);
-    const panelTop = H-188, panelBot = 70, panelX = M-24, panelW = W - panelX - 18, panelH = panelTop-panelBot;
-    pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelH, color:C(DARK) });
+    // HEADER — the change title, big serif (up to 2 lines).
+    const headY = it.category ? ey-38 : H-104;
+    const headLines = wrap(sh.lead || 'Change', SER, 28, W-2*M).slice(0,2);
+    headLines.forEach((ln,i) => D(pg, ln, M, headY - i*30, SER, 28, INK));
+    let ty = headY - (headLines.length-1)*30 - 26;   // just under the header
     const imgs = (it.imgs||[]).filter(g => g && g.bytes).slice(0,3), n = imgs.length;
+    // DESCRIPTION — full text under the header on single/no-screenshot pages
+    // (multi-screenshot pages carry their own per-shot captions instead).
+    if (n<=1 && sh.emph.trim()){
+      const dl = wrap(sh.emph, ITA, 13, W-2*M).slice(0,5);
+      dl.forEach((ln,i) => D(pg, ln, M, ty - i*17, ITA, 13, GOLD));
+      ty -= dl.length*17 + 4;
+    }
+    const panelBot = 70, panelX = M-24, panelW = W - panelX - 18;
+    const panelTop = Math.max(panelBot+150, Math.min(H-176, ty - 10));
+    const panelH = panelTop - panelBot;
+    pg.drawRectangle({ x:panelX, y:panelBot, width:panelW, height:panelH, color:C(DARK) });
     if (n){
       const pad = n>1 ? 28 : 40, botMargin = 14, capSize = n>2 ? 8 : 9, lineH = capSize + 3;
       const slotW = (panelW - pad*(n+1)) / n;
