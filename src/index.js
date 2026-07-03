@@ -850,7 +850,10 @@ function renderPage(data, opts) {
   .ck-done .ck-title { text-decoration:line-through; color:var(--muted); }
   .ck-text { font-size:12.5px; color:var(--txt2); margin:3px 0 6px; }
   .ck-proof { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
-  .ck-noproof { font-size:11.5px; color:var(--amber,#b4791e); font-style:italic; }
+  .ck-noproof { font-size:11.5px; color:#b4791e; font-style:italic; }
+  .ck-help { font-size:12.5px; color:var(--txt2); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; padding:11px 14px; margin-bottom:14px; line-height:1.5; }
+  .ck-plabel { font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); margin-right:2px; }
+  .ck-pend { color:#b4791e; }
   .pf-chip { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 4px 2px 9px; }
   .pf-chip a { color:var(--accent); text-decoration:none; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pf-x { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; padding:0 3px; }
@@ -1307,7 +1310,7 @@ function renderKpis(){
   const tiles = [
     { id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter },
     { id:'not_started', label:'Not started', n:DATA.counts['not_started']||0, color:'#9ca3af', icon:'⏳', on:stateFilter.has('not_started') },
-    { id:'__inprog', label:'In progress', n:inprog, color:'#f59e0b', icon:'🔧', on:MID_STAGES.some(k => stateFilter.has(k)) },
+    { id:'__inprog', label:'In progress', n:inprog, color:'#f59e0b', icon:'🔧', on:stateFilter.size===MID_STAGES.length && MID_STAGES.every(k => stateFilter.has(k)) },
     { id:'completed', label:'Completed', n:DATA.counts['completed']||0, color:'#22c55e', icon:'✅', on:stateFilter.has('completed') },
     { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
     { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
@@ -1673,7 +1676,7 @@ function sectionsHtml(s, metaFn){
     return \`<div class="section-t clk" data-states="\${x.id}"><span class="dot" style="background:\${x.color}"></span>\${x.label} · \${s.c[x.id]}</div>\${rows}\`;
   }).join('');
 }
-let ownerSub = 'attendance';
+let ownerSub = 'work';
 function ownerTodos(name){
   const out = [];
   DATA.dashboards.filter(d => d.owner === name).forEach(d => (d.feedbacks||[]).forEach(f => out.push({ d, f })));
@@ -1717,7 +1720,7 @@ function ownerBodyHtml(name, s){
   }
   return employeeProfileHtml(name) + employeeTerminalHtml(name);
 }
-function openOwner(name){ ownerSub = 'attendance'; renderOwner(name); overlay.classList.add('open'); }
+function openOwner(name){ ownerSub = 'work'; renderOwner(name); overlay.classList.add('open'); }
 function renderOwner(name){
   const s = ownerStats(name), p = personData(name);
   const pending = ownerTodos(name).filter(t=>!t.f.implemented).length;
@@ -1729,9 +1732,9 @@ function renderOwner(name){
       <button class="x" id="drawerX">×</button>
     </div>
     <nav class="subtabs">
-      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance & profile</button>
-      <button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Work (\${s.total})</button>
+      <button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button>
       <button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button>
+      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance & profile</button>
     </nav>
     <div class="drawer-body">\${ownerBodyHtml(name, s)}</div>\`;
   document.getElementById('drawerX').onclick = closeDrawer;
@@ -2113,13 +2116,15 @@ function renderChecklistTab(){
         + '<label class="ck-box"><input type="checkbox" '+(f.implemented?'checked':'')+' '+(editable?'':'disabled')+' data-ck="'+esc(f.id)+'"><span class="ck-mark"></span></label>'
         + '<div class="ck-main"><div class="ck-title">'+(f.category?'<span class="ck-cat">'+esc(f.category)+'</span>':'')+esc(f.label||'Change')+'</div>'
         + (f.text?'<div class="ck-text">'+esc(f.text)+'</div>':'')
-        + '<div class="ck-proof">'+(proof||'<span class="ck-noproof">no proof yet</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'">📎 add proof</button>':'')+'</div></div></div>';
+        + '<div class="ck-proof"><span class="ck-plabel">Proof:</span>'+(proof||'<span class="ck-noproof">⚠ not attached</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'">📎 attach proof</button>':'')+'</div></div></div>';
     }).join('');
-    return '<div class="ck-card" data-dash="'+esc(d.id)+'"><div class="ck-head"><div><div class="ck-name">'+esc(d.name)+'</div><div class="ck-sub">'+esc(d.customer||'—')+' · '+esc(d.owner||'Unassigned')+(editable?'':' · <i>read-only (from sheet)</i>')+'</div></div><div class="ck-pct">'+done+'/'+fbs.length+' <b>'+pct+'%</b></div></div>'
+    const pend = fbs.length-done;
+    return '<div class="ck-card" data-dash="'+esc(d.id)+'"><div class="ck-head"><div><div class="ck-name">'+esc(d.name)+'</div><div class="ck-sub">'+esc(d.customer||'—')+' · '+esc(d.owner||'Unassigned')+(editable?'':' · <i>read-only (from sheet)</i>')+'</div></div><div class="ck-pct">'+done+' of '+fbs.length+' done'+(pend?' · <span class="ck-pend">'+pend+' pending</span>':'')+' <b>'+pct+'%</b></div></div>'
       + '<div class="ck-bar"><i style="width:'+pct+'%"></i></div>'+rows+'</div>';
   }).join('');
-  el.innerHTML = '<div class="tabhead"><h2>✅ Checklist</h2><div class="sub">Every client change with proof · tick each off as your team completes it</div></div>'
-    + (cards || '<div class="empty">No client feedback yet. Add feedbacks (client changes) to a dashboard and they\\'ll appear here as a checklist.</div>');
+  el.innerHTML = '<div class="tabhead"><h2>✅ Checklist</h2><div class="sub">Every change your clients asked for — tick each off when done and attach proof</div></div>'
+    + '<div class="ck-help"><b>📋 How this works:</b> each row is one change a client requested. When your teammate finishes it, they <b>tick the box ✓</b> and <b>attach a proof screenshot</b> of the fix. The green bar shows how far each client\\'s dashboard is done.</div>'
+    + (cards || '<div class="empty">No client changes yet.<br>Open a dashboard → add a feedback (the client\\'s requested change) → it shows up here as a tick-off item with proof.</div>');
   if (ed){
     el.querySelectorAll('[data-ck]').forEach(c => c.onchange = () => toggleFbDone(c.closest('.ck-card').dataset.dash, c.dataset.ck, c.checked, c));
     el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.closest('.ck-card').dataset.dash, b.dataset.addproof));
