@@ -922,11 +922,19 @@ function renderPage(data, opts) {
   .step-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.02em; white-space:nowrap; }
   /* Needs attention cards */
   .att-list { display:flex; flex-direction:column; gap:9px; }
-  .att-row { display:flex; align-items:center; gap:13px; padding:11px 13px; border-radius:11px; background:var(--surface2); border:1px solid var(--line2); }
-  .att-big { font-size:23px; font-weight:760; min-width:28px; text-align:center; line-height:1; font-variant-numeric:tabular-nums; }
+  .att-row { display:flex; align-items:center; gap:12px; padding:11px 13px; border-radius:11px; background:var(--surface2); border:1px solid var(--line2); font:inherit; text-align:left; width:100%; cursor:pointer; transition:background .12s,border-color .12s,box-shadow .12s; }
+  .att-row[disabled] { cursor:default; }
+  .att-row:not([disabled]):hover { background:var(--surface); border-color:var(--accent-line); box-shadow:var(--shadow); }
+  .att-ic { flex:0 0 auto; width:34px; height:34px; border-radius:10px; display:grid; place-items:center; }
+  .att-ic svg { width:17px; height:17px; }
+  .att-warn .att-ic { background:#fdf1e3; color:#c2701c; } .att-accent .att-ic { background:var(--accent-weak); color:var(--accent); } .att-muted .att-ic { background:var(--line2); color:var(--muted); } .att-good .att-ic { background:#e6f7ef; color:#0e9f6e; }
+  .att-big { font-size:22px; font-weight:760; min-width:26px; text-align:center; line-height:1; font-variant-numeric:tabular-nums; }
   .att-warn .att-big { color:#c2701c; } .att-accent .att-big { color:var(--accent); } .att-muted .att-big { color:var(--muted); } .att-good .att-big { color:#0e9f6e; }
+  .att-txt { flex:1; min-width:0; }
   .att-main { font-size:13.5px; font-weight:600; }
   .att-sub { font-size:11.5px; color:var(--muted); margin-top:1px; }
+  .att-arrow { width:17px; height:17px; color:var(--muted); flex:0 0 auto; transition:transform .12s,color .12s; }
+  .att-row:hover .att-arrow { transform:translateX(3px); color:var(--accent); }
   .ins-card h4 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
   .donut-wrap { display:flex; align-items:center; gap:16px; }
   .donut { position:relative; width:132px; height:132px; flex:none; }
@@ -1400,26 +1408,37 @@ function barChart(items, statsFn, attr, useAvatar){
 }
 let insightsOpen = true;
 const STAGE_SHORT = { not_started:'Not started', ui_ux:'UI/UX', data_integration:'Data', final_check:'QA', feedback_open:'Feedback', feedback_incorp:'Incorp', completed:'Done' };
-// Data-driven "what needs attention" callouts.
+const SVG = (p) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
+const ATT_ICN = {
+  user: SVG('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>'),
+  star: SVG('<polygon points="12 2 15 9 22 9 16 14 18 21 12 17 6 21 8 14 2 9 9 9"/>'),
+  load: SVG('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
+  msg: SVG('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
+  circle: SVG('<circle cx="12" cy="12" r="9"/>'),
+  check: SVG('<path d="M20 6L9 17l-5-5"/>'),
+};
+// Data-driven, clickable "what needs attention" callouts.
 function attentionItems(){
   const un = DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned').length;
   const load = {};
   DATA.dashboards.forEach(d => { if (!d.owner || d.owner==='Unassigned' || d.state==='completed') return; load[d.owner]=(load[d.owner]||0)+1; });
   let busy=null, busyN=0; Object.keys(load).forEach(o => { if (load[o]>busyN){ busyN=load[o]; busy=o; } });
   const awaiting = DATA.counts['feedback_open']||0, notStarted = DATA.counts['not_started']||0;
+  const prio = DATA.dashboards.filter(d => d.priorityLevel>0 && d.state!=='completed').length;
   const out = [];
-  if (un) out.push({ tone:'warn', big:un, main:'Unassigned', sub:'need an owner — open Assign' });
-  if (busy && busyN>=3) out.push({ tone:'accent', big:busyN, main:esc(busy)+' is busiest', sub:busyN+' active dashboards — rebalance?' });
-  if (awaiting) out.push({ tone:'accent', big:awaiting, main:'Awaiting client feedback', sub:'follow up with the client' });
-  if (notStarted && out.length<3) out.push({ tone:'muted', big:notStarted, main:'Not started yet', sub:'kick these off soon' });
-  if (!out.length) out.push({ tone:'good', big:'✓', main:'All clear', sub:'nothing needs attention right now' });
+  if (un) out.push({ tone:'warn', icon:ATT_ICN.user, big:un, main:'Unassigned dashboards', sub:'give them an owner', act:'assign' });
+  if (prio) out.push({ tone:'warn', icon:ATT_ICN.star, big:prio, main:'Priority still open', sub:'high-priority, not done yet', act:'prio' });
+  if (busy && busyN>=3) out.push({ tone:'accent', icon:ATT_ICN.load, big:busyN, main:esc(busy)+' is busiest', sub:busyN+' active — rebalance?', act:'owner:'+busy });
+  if (awaiting) out.push({ tone:'accent', icon:ATT_ICN.msg, big:awaiting, main:'Awaiting client feedback', sub:'follow up with the client', act:'state:feedback_open' });
+  if (out.length<3 && notStarted) out.push({ tone:'muted', icon:ATT_ICN.circle, big:notStarted, main:'Not started yet', sub:'kick these off soon', act:'state:not_started' });
+  if (!out.length) out.push({ tone:'good', icon:ATT_ICN.check, big:'✓', main:'All clear', sub:'nothing needs attention', act:'' });
   return out.slice(0,3);
 }
 function renderInsights(){
   const el = document.getElementById('insights'); if (!el) return;
   const total = DATA.total||1, done = DATA.counts['completed']||0, pct = Math.round(done/total*100);
   const stepper = STATES.map(s => \`<div class="step" data-leg="\${s.id}" title="\${esc(s.label)}: \${DATA.counts[s.id]||0}"><div class="step-n">\${DATA.counts[s.id]||0}</div><span class="step-bar" style="background:\${s.color}"></span><div class="step-lbl">\${STAGE_SHORT[s.id]}</div></div>\`).join('');
-  const att = attentionItems().map(a => \`<div class="att-row att-\${a.tone}"><div class="att-big">\${a.big}</div><div><div class="att-main">\${a.main}</div><div class="att-sub">\${a.sub}</div></div></div>\`).join('');
+  const att = attentionItems().map(a => \`<button class="att-row att-\${a.tone}"\${a.act?' data-act="'+esc(a.act)+'"':' disabled'}><span class="att-ic">\${a.icon}</span><div class="att-big">\${a.big}</div><div class="att-txt"><div class="att-main">\${a.main}</div><div class="att-sub">\${a.sub}</div></div>\${a.act?'<svg class="att-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>':''}</button>\`).join('');
   const body = insightsOpen ? \`<div class="ins-grid">
     <div class="ins-card"><h4>Overall progress</h4>
       <div class="ov-head"><span class="ov-pct">\${pct}%</span><span class="ov-cap">\${done} of \${total} dashboards completed</span></div>
@@ -1436,6 +1455,13 @@ function renderInsights(){
     el.querySelectorAll('[data-leg]').forEach(li => li.onclick = () => { isolateState(li.dataset.leg); window.scrollTo({top:0,behavior:'smooth'}); });
     el.querySelectorAll('[data-bc-owner]').forEach(b => b.onclick = () => openOwner(b.getAttribute('data-bc-owner')));
     el.querySelectorAll('[data-bc-customer]').forEach(b => b.onclick = () => openClient(b.getAttribute('data-bc-customer')));
+    el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+      const a = b.dataset.act;
+      if (a === 'assign') switchTab('assign');
+      else if (a === 'prio'){ clearAllFilters(); prioOnly = true; render(); window.scrollTo({top:0,behavior:'smooth'}); }
+      else if (a.slice(0,6) === 'owner:') openOwner(a.slice(6));
+      else if (a.slice(0,6) === 'state:'){ isolateState(a.slice(6)); window.scrollTo({top:0,behavior:'smooth'}); }
+    });
   }
 }
 
