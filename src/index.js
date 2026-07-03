@@ -1186,7 +1186,7 @@ ${opts.manualEnabled ? `
         <div id="linkRows"></div>
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
       </label>
-      <label>Due date<input type="date" id="f_due"></label>
+      <label>Due date <span class="hint">(pick from calendar)</span><input type="date" id="f_due" onclick="try{this.showPicker()}catch(e){}" onfocus="try{this.showPicker()}catch(e){}"></label>
       <label class="wide">Manual status <span class="hint">(handwritten — where it really stands)</span><textarea id="f_manual" rows="2" placeholder="e.g. UI 80% done, waiting on Chiraag's data file"></textarea></label>
       <label class="wide">Original client requirement <span class="hint">(summary + upload PDF / photo)</span>
         <input id="f_req" placeholder="short requirement summary">
@@ -1810,7 +1810,8 @@ function ownerBodyHtml(name, s){
     const row = t => \`<div class="todo">\${CFG.manualEnabled?\`<button class="impl \${t.f.implemented?'yes':'no'}" data-fbtoggle="\${esc(t.d.id)}" data-fbid="\${esc(t.f.id)}">\${t.f.implemented?'✓':'✗'}</button>\`:\`<span class="impl \${t.f.implemented?'yes':'no'}">\${t.f.implemented?'✓':'✗'}</span>\`}<div class="todo-main"><div class="todo-top"><b>\${esc(t.f.label||'Feedback')}</b> <span class="muted">· \${esc(t.d.name)}</span>\${t.f.date?\`<span class="muted"> · \${esc(t.f.date)}</span>\`:''}</div>\${t.f.text?\`<div class="dnote">\${esc(t.f.text)}</div>\`:''}\${t.f.link?\`<a href="\${esc(t.f.link)}" target="_blank" class="lnk">▶ link</a>\`:''}</div><button class="btn ghost sm" data-open="\${esc(t.d.id)}">open</button></div>\`;
     return \`<div class="section-t">Pending (\${pending.length})</div>\${pending.map(row).join('')||'<div class="dnote muted">All caught up 🎉</div>'}\${done.length?\`<div class="section-t">Implemented (\${done.length})</div>\${done.map(row).join('')}\`:''}\`;
   }
-  return employeeProfileHtml(name) + employeeTerminalHtml(name);
+  if (ownerSub === 'profile') return employeeProfileHtml(name);
+  return employeeTerminalHtml(name); // attendance
 }
 function openOwner(name){ ownerSub = 'work'; renderOwner(name); overlay.classList.add('open'); }
 function renderOwner(name){
@@ -1826,7 +1827,8 @@ function renderOwner(name){
     <nav class="subtabs">
       <button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button>
       <button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button>
-      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance & profile</button>
+      <button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button>
+      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance</button>
     </nav>
     <div class="drawer-body">\${ownerBodyHtml(name, s)}</div>\`;
   document.getElementById('drawerX').onclick = closeDrawer;
@@ -1840,7 +1842,8 @@ function renderOwner(name){
     const res = await api('POST','/api/feedback',{ id:el.dataset.fbtoggle, fbId:el.dataset.fbid, implemented:!f.implemented });
     if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else alert('Failed.');
   });
-  if (ownerSub === 'attendance'){ wireEmployee(name); wireEmployeeProfile(name); }
+  if (ownerSub === 'profile') wireEmployeeProfile(name);
+  if (ownerSub === 'attendance') wireEmployee(name);
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────
