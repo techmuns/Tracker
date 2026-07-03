@@ -634,10 +634,13 @@ function renderPage(data, opts) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:#f3f5fb; --surface:#ffffff; --surface2:#fafbff;
-    --line:#e5e8ef; --line2:#eef1f6;
+    --bg:#f7f8fa; --surface:#ffffff; --surface2:#fbfcfd;
+    --line:#eaecef; --line2:#f0f2f5;
     --txt:#141925; --txt2:#48505f; --muted:#727a8a;
     --accent:#4f46e5; --accent2:#9333ea; --accent-weak:#eef0ff;
     --good:#067647; --good-bg:#ecfdf3; --good-line:#abefc6;
@@ -646,9 +649,9 @@ function renderPage(data, opts) {
     --leave-bg:#fee2e2; --leave-line:#fca5a5; --leave-txt:#991b1b;
     --accent-line:var(--accent-line); --danger:#b42318; --danger-bg:#fef3f2; --danger-line:#fda29b;
     --overlay:rgba(16,24,40,.45);
-    --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
-    --shadow-md:0 4px 14px rgba(16,24,40,.08);
-    --shadow-lg:0 14px 40px rgba(16,24,40,.14);
+    --shadow:0 1px 2px rgba(16,24,40,.04);
+    --shadow-md:0 2px 8px rgba(16,24,40,.06);
+    --shadow-lg:0 12px 34px rgba(16,24,40,.12);
     --grad:linear-gradient(135deg,#4f46e5 0%,#9333ea 100%);
     --grad-soft:linear-gradient(135deg,#eef0ff 0%,#f6eefe 100%);
     --radius:14px;
@@ -672,7 +675,7 @@ function renderPage(data, opts) {
   }
   html { color-scheme:light dark; }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; -webkit-font-smoothing:antialiased; transition:background .25s,color .25s; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; -webkit-font-smoothing:antialiased; letter-spacing:-.005em; transition:background .25s,color .25s; }
   header { padding:16px 28px 14px; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; box-shadow:var(--shadow); }
   .row { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
   .brand { display:flex; align-items:center; gap:12px; }
@@ -986,6 +989,24 @@ function renderPage(data, opts) {
   .tab:hover { color:var(--txt); }
   .tab.on { color:var(--accent); border-bottom-color:var(--accent); }
   .tabview[hidden] { display:none; }
+  /* ── App shell: fixed sidebar + workspace ─────────────────────────── */
+  .app { display:grid; grid-template-columns:230px minmax(0,1fr); min-height:100vh; }
+  .sidebar { background:var(--surface); border-right:1px solid var(--line); padding:16px 12px; display:flex; flex-direction:column; gap:4px; position:sticky; top:0; height:100vh; }
+  .side-brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; letter-spacing:-.01em; padding:6px 10px 16px; }
+  .side-brand .logo { width:30px; height:30px; border-radius:9px; background:var(--grad); color:#fff; display:grid; place-items:center; font-size:15px; box-shadow:var(--shadow); }
+  .side-nav { display:flex; flex-direction:column; gap:2px; }
+  .side-item { display:flex; align-items:center; gap:11px; font:inherit; font-size:13.5px; font-weight:500; color:var(--txt2); background:none; border:0; border-radius:9px; padding:9px 11px; cursor:pointer; text-align:left; width:100%; transition:background .12s,color .12s; }
+  .side-item:hover { background:var(--accent-weak); color:var(--txt); }
+  .side-item.on { background:var(--accent-weak); color:var(--accent); font-weight:600; }
+  .side-item .ico { width:18px; height:18px; flex:0 0 auto; opacity:.9; }
+  .side-foot { margin-top:auto; padding-top:12px; display:flex; }
+  .workspace { min-width:0; display:flex; flex-direction:column; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:15px 30px; background:color-mix(in srgb, var(--surface) 85%, transparent); backdrop-filter:saturate(1.2) blur(8px); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:6; }
+  .tb-title h1 { font-size:17px; font-weight:650; margin:0; letter-spacing:-.01em; }
+  .tb-title .sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .tb-actions { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+  .content { min-width:0; }
+  @media (max-width:860px){ .app { grid-template-columns:1fr; } .sidebar { position:static; height:auto; flex-direction:row; align-items:center; flex-wrap:wrap; gap:6px; } .side-brand { padding:6px 10px; } .side-nav { flex-direction:row; flex-wrap:wrap; } .side-item span { display:none; } .side-foot { margin:0; } }
   .tabhead { padding:18px 28px 4px; }
   .tabhead h2 { margin:0; font-size:20px; font-weight:720; }
   .tabhead .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
@@ -1083,38 +1104,36 @@ function renderPage(data, opts) {
 </style>
 </head>
 <body>
-<header>
-  <div class="row">
-    <div class="brand">
-      <div class="logo">◆</div>
-      <div>
-        <h1>Dashboard Tracker</h1>
-        <div class="sub">${data.total} dashboards${opts.standalone ? ` · standalone (sheet disconnected)` : ` · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''}`} · updated ${escapeHtml(fresh)}</div>
-      </div>
-    </div>
-    <div class="header-actions">
-      <button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button>
-      <button class="btn ghost prio-btn" id="prioToggle" title="Show only priority dashboards">⭐ Priority</button>
-      <div class="dropdown">
-        <button class="btn ghost" id="exportToggle">⬇ Export ▾</button>
-        <div class="menu" id="exportMenu">
-          <button data-export="all">All — full workbook (cover + per-client + per-owner sheets)</button>
-          <button data-export="client">Client-wise — one sheet per client</button>
-          <button data-export="owner">Owner-wise — one sheet per owner</button>
+<div class="app">
+  <aside class="sidebar">
+    <div class="side-brand"><div class="logo">◆</div><span>Tracker</span></div>
+    <nav class="side-nav" id="tabs">
+      <button class="side-item on" data-tab="overview"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span>Overview</span></button>
+      <button class="side-item" data-tab="team"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Team</span></button>
+      <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
+      <button class="side-item" data-tab="assign"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0zM7 8h10"/></svg><span>Assign</span></button>
+      <button class="side-item" data-tab="checklist"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L20 6"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Requests</span></button>
+    </nav>
+    <div class="side-foot"><button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button></div>
+  </aside>
+  <main class="workspace">
+    <div class="topbar">
+      <div class="tb-title"><h1>Dashboard Tracker</h1><div class="sub">${data.total} dashboards${opts.standalone ? ` · standalone (sheet disconnected)` : ` · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''}`} · updated ${escapeHtml(fresh)}</div></div>
+      <div class="tb-actions">
+        <button class="btn ghost prio-btn" id="prioToggle" title="Show only priority dashboards">⭐ Priority</button>
+        <div class="dropdown">
+          <button class="btn ghost" id="exportToggle">⬇ Export ▾</button>
+          <div class="menu" id="exportMenu">
+            <button data-export="all">All — full workbook (cover + per-client + per-owner sheets)</button>
+            <button data-export="client">Client-wise — one sheet per client</button>
+            <button data-export="owner">Owner-wise — one sheet per owner</button>
+          </div>
         </div>
+        ${opts.manualEnabled && opts.hasSheet && !opts.standalone ? `<button class="btn ghost" id="standaloneBtn" title="Import the sheet's dashboards into the app and stop reading the Google Sheet">⤓ Go standalone</button>` : ''}
+        ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
       </div>
-      ${opts.manualEnabled && opts.hasSheet && !opts.standalone ? `<button class="btn ghost" id="standaloneBtn" title="Import the sheet's dashboards into the app and stop reading the Google Sheet">⤓ Go standalone</button>` : ''}
-      ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
     </div>
-  </div>
-  <nav class="tabs" id="tabs">
-    <button class="tab on" data-tab="overview">📊 Overview</button>
-    <button class="tab" data-tab="team">👤 Team</button>
-    <button class="tab" data-tab="clients">🏢 Clients</button>
-    <button class="tab" data-tab="assign">⚖️ Assign</button>
-    <button class="tab" data-tab="checklist">📋 Requests</button>
-  </nav>
-</header>
+    <div class="content">
 
 <section class="tabview" id="tab-overview">
 <div class="legend" id="legend"></div>
@@ -1188,6 +1207,7 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-assign" hidden></section>
 <section class="tabview" id="tab-checklist" hidden></section>
 
+</div></main></div>
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
 <div class="modal-bg" id="detailBg"><div class="modal modal-detail" id="detailModal"></div></div>
@@ -2081,7 +2101,7 @@ function applyFilter({ owner='', customer='', states=null }){
 let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
-  document.querySelectorAll('#tabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   ['overview','team','clients','assign','checklist'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
@@ -2214,7 +2234,7 @@ function renderAssignTab(){
     el.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => { const row=b.closest('.asg-row'), sel=row.querySelector('.asg-sel'); assignOne(b.dataset.assign, sel?sel.value:''); });
   }
 }
-document.querySelectorAll('#tabs .tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
 
 // Click a card → open its detail modal (buttons/chips handled first).
 document.getElementById('grid').addEventListener('click', (e) => {
