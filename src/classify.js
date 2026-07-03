@@ -18,14 +18,16 @@
 // legacy sheet rows that only have free-text status, we map the status text to
 // the closest stage with the keyword lists below.
 
+// One cohesive, calm scale (muted slate → soft indigo/violet → emerald) instead
+// of a 7-colour rainbow — reads as steady progress toward "done".
 export const STATES = [
-  { id: 'not_started',      label: 'Not Started Yet',        color: '#9ca3af', desc: 'Not started yet / not assigned' },
-  { id: 'ui_ux',            label: 'UI/UX Creation',         color: '#8b5cf6', desc: 'Designing the dashboard UI/UX' },
-  { id: 'data_integration', label: 'Data Integration',       color: '#3b82f6', desc: 'Wiring live data into the dashboard' },
-  { id: 'final_check',      label: 'Final Check',            color: '#06b6d4', desc: 'Internal QA / final verification' },
-  { id: 'feedback_open',    label: 'Open for Feedbacks',     color: '#f59e0b', desc: 'Shared with the client, awaiting feedback' },
-  { id: 'feedback_incorp',  label: 'Feedback Incorporation', color: '#f97316', desc: 'Incorporating client feedback' },
-  { id: 'completed',        label: 'Completed',              color: '#22c55e', desc: 'Finished' },
+  { id: 'not_started',      label: 'Not Started Yet',        color: '#cdd3de', desc: 'Not started yet / not assigned' },
+  { id: 'ui_ux',            label: 'UI/UX Creation',         color: '#aeb8f2', desc: 'Designing the dashboard UI/UX' },
+  { id: 'data_integration', label: 'Data Integration',       color: '#8f9bec', desc: 'Wiring live data into the dashboard' },
+  { id: 'final_check',      label: 'Final Check',            color: '#7381e6', desc: 'Internal QA / final verification' },
+  { id: 'feedback_open',    label: 'Open for Feedbacks',     color: '#8f74e8', desc: 'Shared with the client, awaiting feedback' },
+  { id: 'feedback_incorp',  label: 'Feedback Incorporation', color: '#7a5ee0', desc: 'Incorporating client feedback' },
+  { id: 'completed',        label: 'Completed',              color: '#21ba72', desc: 'Finished' },
 ];
 
 export const STATE_BY_ID = Object.fromEntries(STATES.map((s) => [s.id, s]));

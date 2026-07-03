@@ -905,9 +905,19 @@ function renderPage(data, opts) {
   .insights { padding:8px 28px 4px; }
   .ins-toggle { display:inline-flex; align-items:center; gap:7px; font:inherit; font-size:12.5px; font-weight:600; color:var(--muted); background:none; border:0; cursor:pointer; padding:6px 0; }
   .ins-toggle:hover { color:var(--accent); }
-  .ins-grid { display:grid; grid-template-columns:auto 1fr 1fr; gap:14px; margin-top:8px; }
+  .ins-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:8px; }
   @media (max-width:900px){ .ins-grid { grid-template-columns:1fr; } }
   .ins-card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
+  .pipe-head { display:flex; align-items:baseline; gap:8px; margin-bottom:10px; }
+  .pipe-total { font-size:26px; font-weight:740; letter-spacing:-.02em; line-height:1; }
+  .pipe-cap { font-size:12px; color:var(--muted); }
+  .pipe-bar { display:flex; height:12px; border-radius:7px; overflow:hidden; background:var(--line2); margin-bottom:14px; }
+  .pipe-bar i { height:100%; transition:width .5s; }
+  .pipe-legend { display:flex; flex-direction:column; gap:1px; }
+  .pl-row { display:flex; align-items:center; gap:10px; font:inherit; font-size:13px; color:var(--txt2); background:none; border:0; padding:6px 8px; border-radius:8px; cursor:pointer; text-align:left; width:100%; transition:background .12s; }
+  .pl-row:hover { background:var(--accent-weak); }
+  .pl-row .sw { width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
+  .pl-name { flex:1; } .pl-v { font-weight:650; color:var(--txt); font-variant-numeric:tabular-nums; }
   .ins-card h4 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
   .donut-wrap { display:flex; align-items:center; gap:16px; }
   .donut { position:relative; width:132px; height:132px; flex:none; }
@@ -1339,7 +1349,7 @@ function renderKpis(){
   const tiles = [
     { id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter },
     { id:'not_started', label:'Not started', n:DATA.counts['not_started']||0, color:'#9ca3af', icon:'⏳', on:stateFilter.has('not_started') },
-    { id:'__inprog', label:'In progress', n:inprog, color:'#f59e0b', icon:'🔧', on:stateFilter.size===MID_STAGES.length && MID_STAGES.every(k => stateFilter.has(k)) },
+    { id:'__inprog', label:'In progress', n:inprog, color:'#7381e6', icon:'🔧', on:stateFilter.size===MID_STAGES.length && MID_STAGES.every(k => stateFilter.has(k)) },
     { id:'completed', label:'Completed', n:DATA.counts['completed']||0, color:'#22c55e', icon:'✅', on:stateFilter.has('completed') },
     { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
     { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
@@ -1383,10 +1393,11 @@ let insightsOpen = true;
 function renderInsights(){
   const el = document.getElementById('insights'); if (!el) return;
   const body = insightsOpen ? \`<div class="ins-grid">
-    <div class="ins-card"><h4>Status mix</h4><div class="donut-wrap">
-      <div class="donut">\${donutSvg()}<div class="center"><div class="big">\${DATA.total}</div><div class="small">total</div></div></div>
-      <div class="leg2">\${STATES.map(s => \`<div class="li" data-leg="\${s.id}"><span class="sw" style="background:\${s.color}"></span>\${s.label}<span class="v">\${DATA.counts[s.id]||0}</span></div>\`).join('')}</div>
-    </div></div>
+    <div class="ins-card"><h4>Pipeline</h4>
+      <div class="pipe-head"><span class="pipe-total">\${DATA.total}</span><span class="pipe-cap">dashboards across 7 stages</span></div>
+      <div class="pipe-bar">\${STATES.map(s => { const v=DATA.counts[s.id]||0; return v?\`<i style="width:\${v/(DATA.total||1)*100}%;background:\${s.color}" title="\${esc(s.label)}: \${v}"></i>\`:''; }).join('')}</div>
+      <div class="pipe-legend">\${STATES.map(s => \`<button class="pl-row" data-leg="\${s.id}"><span class="sw" style="background:\${s.color}"></span><span class="pl-name">\${s.label}</span><span class="pl-v">\${DATA.counts[s.id]||0}</span></button>\`).join('')}</div>
+    </div>
     <div class="ins-card"><h4>Top team members</h4>\${barChart(DATA.owners, ownerStats, 'data-bc-owner', true)}</div>
     <div class="ins-card"><h4>Top clients</h4>\${barChart(DATA.customers, clientStats, 'data-bc-customer', false)}</div>
   </div>\` : '';
