@@ -872,6 +872,48 @@ function renderPage(data, opts) {
   .pf-chip a { color:var(--accent); text-decoration:none; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pf-x { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; padding:0 3px; }
   .btn.xs { font-size:11px; padding:3px 8px; }
+  /* ── Client Requests board ─────────────────────────────────────────── */
+  .rq-hero { display:flex; gap:18px; align-items:center; justify-content:space-between; flex-wrap:wrap; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 22px; box-shadow:var(--shadow); margin-bottom:14px; }
+  .rq-heroL { flex:1; min-width:220px; }
+  .rq-pct { font-size:34px; font-weight:770; letter-spacing:-.02em; line-height:1; }
+  .rq-pcap { font-size:12.5px; color:var(--muted); margin:4px 0 10px; }
+  .rq-hbar { height:8px; border-radius:6px; background:var(--line2); overflow:hidden; max-width:440px; }
+  .rq-hbar i { display:block; height:100%; background:linear-gradient(90deg,#7381e6,#21ba72); border-radius:6px; transition:width .6s; }
+  .rq-kpis { display:flex; gap:24px; }
+  .rq-k { text-align:center; } .rq-k b { display:block; font-size:22px; font-weight:750; } .rq-k b.ok { color:#0e9f6e; } .rq-k b.warn { color:#c2701c; }
+  .rq-k span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .rq-tools { display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .rq-srch { flex:1; min-width:200px; font:inherit; font-size:13.5px; padding:9px 13px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); }
+  .rq-sel { font:inherit; font-size:13.5px; padding:9px 11px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--txt); }
+  .rq-board { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  @media (max-width:820px){ .rq-board { grid-template-columns:1fr; } }
+  .rq-col { background:var(--surface2); border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .rq-ch { display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); padding:4px 6px 11px; }
+  .rq-ch b { font-size:12px; color:var(--txt); background:var(--line2); border-radius:20px; padding:1px 9px; }
+  .rq-ch.done { color:#0e9f6e; }
+  .rq-list { display:flex; flex-direction:column; gap:10px; }
+  .rq-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:13px 14px; box-shadow:var(--shadow); transition:box-shadow .12s,transform .12s; }
+  .rq-card:hover { box-shadow:var(--shadow-md); transform:translateY(-1px); }
+  .rq-done { opacity:.72; }
+  .rq-ctop { display:flex; align-items:center; justify-content:space-between; margin-bottom:7px; }
+  .rq-cl { display:inline-flex; align-items:center; gap:6px; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--txt2); }
+  .rq-dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+  .rq-av .avatar { width:22px; height:22px; font-size:10px; }
+  .rq-ttl { font-size:14px; font-weight:600; }
+  .rq-done .rq-ttl { text-decoration:line-through; color:var(--muted); }
+  .rq-txt { font-size:12.5px; color:var(--txt2); margin:3px 0; }
+  .rq-dash { font-size:11.5px; color:var(--muted); margin:5px 0 11px; }
+  .rq-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .rq-pfs { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+  .rq-pf { text-decoration:none; font-size:13px; width:26px; height:26px; display:grid; place-items:center; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:7px; }
+  .rq-np { font-size:11px; color:#c2701c; font-style:italic; }
+  .rq-add { width:26px; height:26px; border:1px dashed var(--line); border-radius:7px; background:none; color:var(--muted); cursor:pointer; font-size:15px; line-height:1; }
+  .rq-add:hover { border-color:var(--accent); color:var(--accent); }
+  .rq-btn { font:inherit; font-size:12px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; white-space:nowrap; }
+  .rq-btn.undo { background:none; color:#0e9f6e; border-color:#bfe6cf; }
+  .rq-tag { font-size:11px; font-weight:700; color:#c2701c; background:#fdf1e3; border-radius:20px; padding:3px 10px; }
+  .rq-tag.ok { color:#0e9f6e; background:#e6f7ef; }
+  .rq-empty { font-size:12.5px; color:var(--muted); text-align:center; padding:18px; }
   .owner-card .rm { float:right; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:6px; cursor:pointer; font-size:13px; width:22px; height:22px; }
   .owner-card .rm:hover { color:var(--danger); border-color:var(--danger-line); }
   .cardbtns { position:absolute; top:10px; right:10px; display:flex; gap:5px; }
@@ -2198,50 +2240,42 @@ async function removeProof(id, fbId, fileId){
   if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||[]; }
   renderChecklistTab();
 }
-let ckPending = false;
+let ckSearch = '', ckClient = '';
 function renderChecklistTab(){
-  const el = G('tab-checklist');
-  const ed = CFG.manualEnabled;
-  // Group every client-requested change (feedback) under its client.
-  const groups = {};
-  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => {
-    (d.customers && d.customers.length ? d.customers : ['Unassigned']).forEach(cl => { (groups[cl] = groups[cl]||[]).push({ d, f }); });
-  }));
-  let total = 0, doneAll = 0;
-  Object.values(groups).forEach(arr => arr.forEach(x => { total++; if (x.f.implemented) doneAll++; }));
-  const pendingAll = total - doneAll;
-  const clients = Object.keys(groups).sort((a,b) => (groups[b].filter(x=>!x.f.implemented).length - groups[a].filter(x=>!x.f.implemented).length) || a.localeCompare(b));
+  const el = G('tab-checklist'), ed = CFG.manualEnabled;
+  const reqs = [];
+  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => reqs.push({ d, f, client:(d.customers && d.customers[0]) || 'Unassigned', owner:d.owner||'Unassigned' })));
+  const clients = [...new Set(reqs.map(r => r.client))].sort();
+  const q = ckSearch.trim().toLowerCase();
+  const fil = reqs.filter(r => (!ckClient || r.client===ckClient) && (!q || ((r.f.label||'')+' '+(r.f.text||'')+' '+r.client+' '+r.d.name).toLowerCase().indexOf(q)>=0));
+  const total = fil.length, done = fil.filter(r=>r.f.implemented).length, pending = total-done, noProof = fil.filter(r=>!r.f.implemented && !(r.f.files||[]).length).length, pct = total?Math.round(done/total*100):0;
 
-  const cards = clients.map(cl => {
-    const items = groups[cl], cdone = items.filter(x=>x.f.implemented).length, cpct = items.length?Math.round(cdone/items.length*100):0, cpend = items.length-cdone;
-    const shown = ckPending ? items.filter(x=>!x.f.implemented) : items;
-    if (!shown.length) return '';
-    const rows = shown.map(({d,f}) => {
-      const editable = ed && d.source === 'manual';
-      const proof = (f.files||[]).map(x => '<span class="pf-chip"><a href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener">'+((x.type||'').startsWith('image/')?'🖼':'📄')+' '+esc((x.name||'proof').slice(0,18))+'</a>'+(editable?'<button class="pf-x" data-rmproof="'+esc(f.id)+'" data-file="'+esc(x.id)+'" data-dash="'+esc(d.id)+'">×</button>':'')+'</span>').join('');
-      return '<div class="ck-row'+(f.implemented?' ck-done':'')+'" data-dash="'+esc(d.id)+'">'
-        + '<label class="ck-box"><input type="checkbox" '+(f.implemented?'checked':'')+' '+(editable?'':'disabled')+' data-ck="'+esc(f.id)+'"><span class="ck-mark"></span></label>'
-        + '<div class="ck-main"><div class="ck-title">'+esc(f.label||'Change')+(f.implemented?'':'<span class="ck-badge">pending</span>')+'</div>'
-        + (f.text?'<div class="ck-text">'+esc(f.text)+'</div>':'')
-        + '<div class="ck-meta">📊 '+esc(d.name)+' · '+esc(d.owner||'Unassigned')+'</div>'
-        + '<div class="ck-proof"><span class="ck-plabel">Proof</span>'+(proof||'<span class="ck-noproof">⚠ not attached</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'" data-dash="'+esc(d.id)+'">📎 attach</button>':'')+'</div></div></div>';
-    }).join('');
-    const det = (DATA.clientDetails&&DATA.clientDetails[cl])||{};
-    const logo = det.logo ? '<img class="clogo" src="/api/file?id='+esc(det.logo)+'" alt="">' : '<span class="avatar" style="background:'+nameColor('c·'+cl)+'">🏢</span>';
-    return '<div class="ck-card"><div class="ck-head"><div class="ck-client">'+logo+'<div><div class="ck-name">'+esc(cl)+'</div><div class="ck-sub">'+items.length+' request'+(items.length!==1?'s':'')+'</div></div></div>'
-      + '<div class="ck-pct">'+cdone+' of '+items.length+' done'+(cpend?' · <span class="ck-pend">'+cpend+' pending</span>':'')+' <b>'+cpct+'%</b></div></div>'
-      + '<div class="ck-bar"><i style="width:'+cpct+'%"></i></div>'+rows+'</div>';
-  }).filter(Boolean).join('');
+  const card = (r) => {
+    const f=r.f, d=r.d, editable = ed && d.source==='manual';
+    const proof = (f.files||[]).slice(0,5).map(x => '<a class="rq-pf" href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener" title="'+esc(x.name||'proof')+'">'+((x.type||'').startsWith('image/')?'🖼':'📄')+'</a>').join('');
+    return '<div class="rq-card'+(f.implemented?' rq-done':'')+'">'
+      + '<div class="rq-ctop"><span class="rq-cl"><span class="rq-dot" style="background:'+nameColor('c·'+r.client)+'"></span>'+esc(r.client)+'</span><span class="rq-av" title="'+esc(r.owner)+'">'+avatar(r.owner)+'</span></div>'
+      + '<div class="rq-ttl">'+esc(f.label||'Change')+'</div>'
+      + (f.text?'<div class="rq-txt">'+esc(f.text)+'</div>':'')
+      + '<div class="rq-dash">📊 '+esc(d.name)+'</div>'
+      + '<div class="rq-foot"><div class="rq-pfs">'+(proof||'<span class="rq-np">no proof yet</span>')+(editable?'<button class="rq-add" data-addproof="'+esc(f.id)+'" data-dash="'+esc(d.id)+'" title="Attach proof">＋</button>':'')+'</div>'
+      + (editable ? '<button class="rq-btn'+(f.implemented?' undo':'')+'" data-ck="'+esc(f.id)+'" data-dash="'+esc(d.id)+'" data-cur="'+(f.implemented?1:0)+'">'+(f.implemented?'✓ Done':'Mark done')+'</button>' : '<span class="rq-tag'+(f.implemented?' ok':'')+'">'+(f.implemented?'Done':'Pending')+'</span>')
+      + '</div></div>';
+  };
+  const col = (title, arr, cls) => '<div class="rq-col"><div class="rq-ch '+cls+'"><span>'+title+'</span><b>'+arr.length+'</b></div><div class="rq-list">'+(arr.map(card).join('')||'<div class="rq-empty">— none —</div>')+'</div></div>';
 
-  el.innerHTML = '<div class="tabhead"><h2>📋 Client Requests</h2><div class="sub">Every change each client asked for — who\\'s on it, done or pending, with proof</div></div>'
-    + (total ? '<div class="ck-toolbar"><div class="ck-stats"><span><b>'+total+'</b> requests</span><span class="ck-ok"><b>'+doneAll+'</b> done</span><span class="ck-warn"><b>'+pendingAll+'</b> pending</span></div><label class="ck-filter"><input type="checkbox" id="ckPendingOnly" '+(ckPending?'checked':'')+'> show pending only</label></div>' : '')
-    + (cards || (total ? '<div class="empty">🎉 Nothing pending — every client request is done.</div>' : '<div class="empty">No client requests yet.<br>Open a dashboard → add a feedback (the client\\'s requested change) → it appears here grouped by client, with proof.</div>'));
+  el.innerHTML = '<div class="tabhead"><h2>📋 Client Requests</h2><div class="sub">Every change each client asked for — track it to done, with proof</div></div>'
+    + '<div class="rq-hero"><div class="rq-heroL"><div class="rq-pct">'+pct+'%</div><div class="rq-pcap">'+done+' of '+total+' client requests done</div><div class="rq-hbar"><i style="width:'+pct+'%"></i></div></div>'
+      + '<div class="rq-kpis"><div class="rq-k"><b>'+pending+'</b><span>pending</span></div><div class="rq-k"><b class="ok">'+done+'</b><span>done</span></div><div class="rq-k"><b class="warn">'+noProof+'</b><span>no proof</span></div></div></div>'
+    + '<div class="rq-tools"><input id="ckSearch" class="rq-srch" placeholder="Search requests, clients, dashboards…" value="'+esc(ckSearch)+'"><select id="ckClient" class="rq-sel"><option value="">All clients</option>'+clients.map(c=>'<option'+(c===ckClient?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></div>'
+    + (reqs.length ? '<div class="rq-board">'+col('🕓 Pending', fil.filter(r=>!r.f.implemented), 'pend')+col('✅ Completed', fil.filter(r=>r.f.implemented), 'done')+'</div>'
+        : '<div class="empty">No client requests yet.<br>Open a dashboard → add a feedback (the client\\'s requested change) → it appears here.</div>');
 
-  const po = document.getElementById('ckPendingOnly'); if (po) po.onchange = () => { ckPending = po.checked; renderChecklistTab(); };
-  if (ed){
-    el.querySelectorAll('[data-ck]').forEach(c => c.onchange = () => toggleFbDone(c.closest('.ck-row').dataset.dash, c.dataset.ck, c.checked, c));
+  const sb=G('ckSearch'); if(sb) sb.oninput=()=>{ const p=sb.selectionStart; ckSearch=sb.value; renderChecklistTab(); const s2=G('ckSearch'); if(s2){ s2.focus(); try{ s2.setSelectionRange(p,p); }catch(e){} } };
+  const cs=G('ckClient'); if(cs) cs.onchange=()=>{ ckClient=cs.value; renderChecklistTab(); };
+  if(ed){
+    el.querySelectorAll('[data-ck]').forEach(b => b.onclick = () => toggleFbDone(b.dataset.dash, b.dataset.ck, b.dataset.cur!=='1', b));
     el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.dataset.dash, b.dataset.addproof));
-    el.querySelectorAll('[data-rmproof]').forEach(b => b.onclick = () => removeProof(b.dataset.dash, b.dataset.rmproof, b.dataset.file));
   }
 }
 
