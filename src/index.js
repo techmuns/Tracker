@@ -905,19 +905,28 @@ function renderPage(data, opts) {
   .insights { padding:8px 28px 4px; }
   .ins-toggle { display:inline-flex; align-items:center; gap:7px; font:inherit; font-size:12.5px; font-weight:600; color:var(--muted); background:none; border:0; cursor:pointer; padding:6px 0; }
   .ins-toggle:hover { color:var(--accent); }
-  .ins-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:8px; }
+  .ins-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:8px; }
   @media (max-width:900px){ .ins-grid { grid-template-columns:1fr; } }
   .ins-card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
-  .pipe-head { display:flex; align-items:baseline; gap:8px; margin-bottom:10px; }
-  .pipe-total { font-size:26px; font-weight:740; letter-spacing:-.02em; line-height:1; }
-  .pipe-cap { font-size:12px; color:var(--muted); }
-  .pipe-bar { display:flex; height:12px; border-radius:7px; overflow:hidden; background:var(--line2); margin-bottom:14px; }
-  .pipe-bar i { height:100%; transition:width .5s; }
-  .pipe-legend { display:flex; flex-direction:column; gap:1px; }
-  .pl-row { display:flex; align-items:center; gap:10px; font:inherit; font-size:13px; color:var(--txt2); background:none; border:0; padding:6px 8px; border-radius:8px; cursor:pointer; text-align:left; width:100%; transition:background .12s; }
-  .pl-row:hover { background:var(--accent-weak); }
-  .pl-row .sw { width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
-  .pl-name { flex:1; } .pl-v { font-weight:650; color:var(--txt); font-variant-numeric:tabular-nums; }
+  /* Overall progress + pipeline stepper */
+  .ov-head { display:flex; align-items:baseline; gap:10px; margin-bottom:9px; }
+  .ov-pct { font-size:30px; font-weight:760; letter-spacing:-.02em; line-height:1; }
+  .ov-cap { font-size:12.5px; color:var(--muted); }
+  .ov-bar { height:8px; border-radius:6px; background:var(--line2); overflow:hidden; margin-bottom:16px; }
+  .ov-bar i { display:block; height:100%; background:linear-gradient(90deg,#7381e6,#21ba72); border-radius:6px; transition:width .6s; }
+  .stepper { display:flex; gap:5px; }
+  .step { flex:1; text-align:center; cursor:pointer; padding:6px 2px; border-radius:9px; transition:background .12s; }
+  .step:hover { background:var(--accent-weak); }
+  .step-n { font-size:17px; font-weight:720; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+  .step-bar { display:block; width:20px; height:3px; border-radius:2px; margin:5px auto; }
+  .step-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.02em; white-space:nowrap; }
+  /* Needs attention cards */
+  .att-list { display:flex; flex-direction:column; gap:9px; }
+  .att-row { display:flex; align-items:center; gap:13px; padding:11px 13px; border-radius:11px; background:var(--surface2); border:1px solid var(--line2); }
+  .att-big { font-size:23px; font-weight:760; min-width:28px; text-align:center; line-height:1; font-variant-numeric:tabular-nums; }
+  .att-warn .att-big { color:#c2701c; } .att-accent .att-big { color:var(--accent); } .att-muted .att-big { color:var(--muted); } .att-good .att-big { color:#0e9f6e; }
+  .att-main { font-size:13.5px; font-weight:600; }
+  .att-sub { font-size:11.5px; color:var(--muted); margin-top:1px; }
   .ins-card h4 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
   .donut-wrap { display:flex; align-items:center; gap:16px; }
   .donut { position:relative; width:132px; height:132px; flex:none; }
@@ -1390,14 +1399,34 @@ function barChart(items, statsFn, attr, useAvatar){
   </div>\`).join('')}</div>\`;
 }
 let insightsOpen = true;
+const STAGE_SHORT = { not_started:'Not started', ui_ux:'UI/UX', data_integration:'Data', final_check:'QA', feedback_open:'Feedback', feedback_incorp:'Incorp', completed:'Done' };
+// Data-driven "what needs attention" callouts.
+function attentionItems(){
+  const un = DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned').length;
+  const load = {};
+  DATA.dashboards.forEach(d => { if (!d.owner || d.owner==='Unassigned' || d.state==='completed') return; load[d.owner]=(load[d.owner]||0)+1; });
+  let busy=null, busyN=0; Object.keys(load).forEach(o => { if (load[o]>busyN){ busyN=load[o]; busy=o; } });
+  const awaiting = DATA.counts['feedback_open']||0, notStarted = DATA.counts['not_started']||0;
+  const out = [];
+  if (un) out.push({ tone:'warn', big:un, main:'Unassigned', sub:'need an owner — open Assign' });
+  if (busy && busyN>=3) out.push({ tone:'accent', big:busyN, main:esc(busy)+' is busiest', sub:busyN+' active dashboards — rebalance?' });
+  if (awaiting) out.push({ tone:'accent', big:awaiting, main:'Awaiting client feedback', sub:'follow up with the client' });
+  if (notStarted && out.length<3) out.push({ tone:'muted', big:notStarted, main:'Not started yet', sub:'kick these off soon' });
+  if (!out.length) out.push({ tone:'good', big:'✓', main:'All clear', sub:'nothing needs attention right now' });
+  return out.slice(0,3);
+}
 function renderInsights(){
   const el = document.getElementById('insights'); if (!el) return;
+  const total = DATA.total||1, done = DATA.counts['completed']||0, pct = Math.round(done/total*100);
+  const stepper = STATES.map(s => \`<div class="step" data-leg="\${s.id}" title="\${esc(s.label)}: \${DATA.counts[s.id]||0}"><div class="step-n">\${DATA.counts[s.id]||0}</div><span class="step-bar" style="background:\${s.color}"></span><div class="step-lbl">\${STAGE_SHORT[s.id]}</div></div>\`).join('');
+  const att = attentionItems().map(a => \`<div class="att-row att-\${a.tone}"><div class="att-big">\${a.big}</div><div><div class="att-main">\${a.main}</div><div class="att-sub">\${a.sub}</div></div></div>\`).join('');
   const body = insightsOpen ? \`<div class="ins-grid">
-    <div class="ins-card"><h4>Pipeline</h4>
-      <div class="pipe-head"><span class="pipe-total">\${DATA.total}</span><span class="pipe-cap">dashboards across 7 stages</span></div>
-      <div class="pipe-bar">\${STATES.map(s => { const v=DATA.counts[s.id]||0; return v?\`<i style="width:\${v/(DATA.total||1)*100}%;background:\${s.color}" title="\${esc(s.label)}: \${v}"></i>\`:''; }).join('')}</div>
-      <div class="pipe-legend">\${STATES.map(s => \`<button class="pl-row" data-leg="\${s.id}"><span class="sw" style="background:\${s.color}"></span><span class="pl-name">\${s.label}</span><span class="pl-v">\${DATA.counts[s.id]||0}</span></button>\`).join('')}</div>
+    <div class="ins-card"><h4>Overall progress</h4>
+      <div class="ov-head"><span class="ov-pct">\${pct}%</span><span class="ov-cap">\${done} of \${total} dashboards completed</span></div>
+      <div class="ov-bar"><i style="width:\${pct}%"></i></div>
+      <div class="stepper">\${stepper}</div>
     </div>
+    <div class="ins-card"><h4>Needs attention</h4><div class="att-list">\${att}</div></div>
     <div class="ins-card"><h4>Top team members</h4>\${barChart(DATA.owners, ownerStats, 'data-bc-owner', true)}</div>
     <div class="ins-card"><h4>Top clients</h4>\${barChart(DATA.customers, clientStats, 'data-bc-customer', false)}</div>
   </div>\` : '';
