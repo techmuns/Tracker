@@ -851,9 +851,18 @@ function renderPage(data, opts) {
   .ck-text { font-size:12.5px; color:var(--txt2); margin:3px 0 6px; }
   .ck-proof { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
   .ck-noproof { font-size:11.5px; color:#b4791e; font-style:italic; }
-  .ck-help { font-size:12.5px; color:var(--txt2); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:11px; padding:11px 14px; margin-bottom:14px; line-height:1.5; }
   .ck-plabel { font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); margin-right:2px; }
   .ck-pend { color:#b4791e; }
+  .ck-toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px; padding:11px 16px; background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .ck-stats { display:flex; gap:18px; font-size:13px; color:var(--txt2); }
+  .ck-stats b { font-size:16px; color:var(--txt); margin-right:3px; } .ck-stats .ck-ok b { color:#0e7a52; } .ck-stats .ck-warn b { color:#b4791e; }
+  .ck-filter { display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--txt2); cursor:pointer; }
+  .ck-client { display:flex; align-items:center; gap:11px; }
+  .ck-client .avatar, .ck-client .clogo { width:34px; height:34px; border-radius:9px; font-size:16px; flex:0 0 auto; }
+  .ck-client .clogo { object-fit:cover; }
+  .ck-meta { font-size:11.5px; color:var(--muted); margin:4px 0 6px; }
+  .ck-badge { font-size:9px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:#b4791e; background:#fef3dc; border-radius:5px; padding:2px 6px; margin-left:8px; vertical-align:middle; }
+  .ck-done .ck-badge { display:none; }
   .pf-chip { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 4px 2px 9px; }
   .pf-chip a { color:var(--accent); text-decoration:none; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pf-x { border:0; background:none; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; padding:0 3px; }
@@ -1103,7 +1112,7 @@ function renderPage(data, opts) {
     <button class="tab" data-tab="team">👤 Team</button>
     <button class="tab" data-tab="clients">🏢 Clients</button>
     <button class="tab" data-tab="assign">⚖️ Assign</button>
-    <button class="tab" data-tab="checklist">✅ Checklist</button>
+    <button class="tab" data-tab="checklist">📋 Requests</button>
   </nav>
 </header>
 
@@ -2101,34 +2110,50 @@ async function removeProof(id, fbId, fileId){
   if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||[]; }
   renderChecklistTab();
 }
+let ckPending = false;
 function renderChecklistTab(){
   const el = G('tab-checklist');
-  const dashes = DATA.dashboards.filter(d => (d.feedbacks||[]).length).sort((a,b)=>{
-    const pa=a.feedbacks.filter(f=>!f.implemented).length, pb=b.feedbacks.filter(f=>!f.implemented).length; return pb-pa;
-  });
   const ed = CFG.manualEnabled;
-  const cards = dashes.map(d => {
-    const fbs = d.feedbacks||[], done = fbs.filter(f=>f.implemented).length, pct = fbs.length?Math.round(done/fbs.length*100):0;
-    const editable = ed && d.source === 'manual';
-    const rows = fbs.map(f => {
-      const proof = (f.files||[]).map(x => '<span class="pf-chip"><a href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener">'+((x.type||'').startsWith('image/')?'🖼':'📄')+' '+esc((x.name||'proof').slice(0,22))+'</a>'+(editable?'<button class="pf-x" data-rmproof="'+esc(f.id)+'" data-file="'+esc(x.id)+'">×</button>':'')+'</span>').join('');
-      return '<div class="ck-row'+(f.implemented?' ck-done':'')+'">'
+  // Group every client-requested change (feedback) under its client.
+  const groups = {};
+  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => {
+    (d.customers && d.customers.length ? d.customers : ['Unassigned']).forEach(cl => { (groups[cl] = groups[cl]||[]).push({ d, f }); });
+  }));
+  let total = 0, doneAll = 0;
+  Object.values(groups).forEach(arr => arr.forEach(x => { total++; if (x.f.implemented) doneAll++; }));
+  const pendingAll = total - doneAll;
+  const clients = Object.keys(groups).sort((a,b) => (groups[b].filter(x=>!x.f.implemented).length - groups[a].filter(x=>!x.f.implemented).length) || a.localeCompare(b));
+
+  const cards = clients.map(cl => {
+    const items = groups[cl], cdone = items.filter(x=>x.f.implemented).length, cpct = items.length?Math.round(cdone/items.length*100):0, cpend = items.length-cdone;
+    const shown = ckPending ? items.filter(x=>!x.f.implemented) : items;
+    if (!shown.length) return '';
+    const rows = shown.map(({d,f}) => {
+      const editable = ed && d.source === 'manual';
+      const proof = (f.files||[]).map(x => '<span class="pf-chip"><a href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener">'+((x.type||'').startsWith('image/')?'🖼':'📄')+' '+esc((x.name||'proof').slice(0,18))+'</a>'+(editable?'<button class="pf-x" data-rmproof="'+esc(f.id)+'" data-file="'+esc(x.id)+'" data-dash="'+esc(d.id)+'">×</button>':'')+'</span>').join('');
+      return '<div class="ck-row'+(f.implemented?' ck-done':'')+'" data-dash="'+esc(d.id)+'">'
         + '<label class="ck-box"><input type="checkbox" '+(f.implemented?'checked':'')+' '+(editable?'':'disabled')+' data-ck="'+esc(f.id)+'"><span class="ck-mark"></span></label>'
-        + '<div class="ck-main"><div class="ck-title">'+(f.category?'<span class="ck-cat">'+esc(f.category)+'</span>':'')+esc(f.label||'Change')+'</div>'
+        + '<div class="ck-main"><div class="ck-title">'+esc(f.label||'Change')+(f.implemented?'':'<span class="ck-badge">pending</span>')+'</div>'
         + (f.text?'<div class="ck-text">'+esc(f.text)+'</div>':'')
-        + '<div class="ck-proof"><span class="ck-plabel">Proof:</span>'+(proof||'<span class="ck-noproof">⚠ not attached</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'">📎 attach proof</button>':'')+'</div></div></div>';
+        + '<div class="ck-meta">📊 '+esc(d.name)+' · '+esc(d.owner||'Unassigned')+'</div>'
+        + '<div class="ck-proof"><span class="ck-plabel">Proof</span>'+(proof||'<span class="ck-noproof">⚠ not attached</span>')+(editable?'<button class="btn ghost xs" data-addproof="'+esc(f.id)+'" data-dash="'+esc(d.id)+'">📎 attach</button>':'')+'</div></div></div>';
     }).join('');
-    const pend = fbs.length-done;
-    return '<div class="ck-card" data-dash="'+esc(d.id)+'"><div class="ck-head"><div><div class="ck-name">'+esc(d.name)+'</div><div class="ck-sub">'+esc(d.customer||'—')+' · '+esc(d.owner||'Unassigned')+(editable?'':' · <i>read-only (from sheet)</i>')+'</div></div><div class="ck-pct">'+done+' of '+fbs.length+' done'+(pend?' · <span class="ck-pend">'+pend+' pending</span>':'')+' <b>'+pct+'%</b></div></div>'
-      + '<div class="ck-bar"><i style="width:'+pct+'%"></i></div>'+rows+'</div>';
-  }).join('');
-  el.innerHTML = '<div class="tabhead"><h2>✅ Checklist</h2><div class="sub">Every change your clients asked for — tick each off when done and attach proof</div></div>'
-    + '<div class="ck-help"><b>📋 How this works:</b> each row is one change a client requested. When your teammate finishes it, they <b>tick the box ✓</b> and <b>attach a proof screenshot</b> of the fix. The green bar shows how far each client\\'s dashboard is done.</div>'
-    + (cards || '<div class="empty">No client changes yet.<br>Open a dashboard → add a feedback (the client\\'s requested change) → it shows up here as a tick-off item with proof.</div>');
+    const det = (DATA.clientDetails&&DATA.clientDetails[cl])||{};
+    const logo = det.logo ? '<img class="clogo" src="/api/file?id='+esc(det.logo)+'" alt="">' : '<span class="avatar" style="background:'+nameColor('c·'+cl)+'">🏢</span>';
+    return '<div class="ck-card"><div class="ck-head"><div class="ck-client">'+logo+'<div><div class="ck-name">'+esc(cl)+'</div><div class="ck-sub">'+items.length+' request'+(items.length!==1?'s':'')+'</div></div></div>'
+      + '<div class="ck-pct">'+cdone+' of '+items.length+' done'+(cpend?' · <span class="ck-pend">'+cpend+' pending</span>':'')+' <b>'+cpct+'%</b></div></div>'
+      + '<div class="ck-bar"><i style="width:'+cpct+'%"></i></div>'+rows+'</div>';
+  }).filter(Boolean).join('');
+
+  el.innerHTML = '<div class="tabhead"><h2>📋 Client Requests</h2><div class="sub">Every change each client asked for — who\\'s on it, done or pending, with proof</div></div>'
+    + (total ? '<div class="ck-toolbar"><div class="ck-stats"><span><b>'+total+'</b> requests</span><span class="ck-ok"><b>'+doneAll+'</b> done</span><span class="ck-warn"><b>'+pendingAll+'</b> pending</span></div><label class="ck-filter"><input type="checkbox" id="ckPendingOnly" '+(ckPending?'checked':'')+'> show pending only</label></div>' : '')
+    + (cards || (total ? '<div class="empty">🎉 Nothing pending — every client request is done.</div>' : '<div class="empty">No client requests yet.<br>Open a dashboard → add a feedback (the client\\'s requested change) → it appears here grouped by client, with proof.</div>'));
+
+  const po = document.getElementById('ckPendingOnly'); if (po) po.onchange = () => { ckPending = po.checked; renderChecklistTab(); };
   if (ed){
-    el.querySelectorAll('[data-ck]').forEach(c => c.onchange = () => toggleFbDone(c.closest('.ck-card').dataset.dash, c.dataset.ck, c.checked, c));
-    el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.closest('.ck-card').dataset.dash, b.dataset.addproof));
-    el.querySelectorAll('[data-rmproof]').forEach(b => b.onclick = () => removeProof(b.closest('.ck-card').dataset.dash, b.dataset.rmproof, b.dataset.file));
+    el.querySelectorAll('[data-ck]').forEach(c => c.onchange = () => toggleFbDone(c.closest('.ck-row').dataset.dash, c.dataset.ck, c.checked, c));
+    el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.dataset.dash, b.dataset.addproof));
+    el.querySelectorAll('[data-rmproof]').forEach(b => b.onclick = () => removeProof(b.dataset.dash, b.dataset.rmproof, b.dataset.file));
   }
 }
 
