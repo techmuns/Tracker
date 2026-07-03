@@ -1420,16 +1420,13 @@ const ATT_ICN = {
 // Data-driven, clickable "what needs attention" callouts.
 function attentionItems(){
   const un = DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned').length;
-  const load = {};
-  DATA.dashboards.forEach(d => { if (!d.owner || d.owner==='Unassigned' || d.state==='completed') return; load[d.owner]=(load[d.owner]||0)+1; });
-  let busy=null, busyN=0; Object.keys(load).forEach(o => { if (load[o]>busyN){ busyN=load[o]; busy=o; } });
-  const awaiting = DATA.counts['feedback_open']||0, notStarted = DATA.counts['not_started']||0;
+  const awaiting = DATA.counts['feedback_open']||0, incorp = DATA.counts['feedback_incorp']||0, notStarted = DATA.counts['not_started']||0;
   const prio = DATA.dashboards.filter(d => d.priorityLevel>0 && d.state!=='completed').length;
   const out = [];
   if (un) out.push({ tone:'warn', icon:ATT_ICN.user, big:un, main:'Unassigned dashboards', sub:'give them an owner', act:'assign' });
   if (prio) out.push({ tone:'warn', icon:ATT_ICN.star, big:prio, main:'Priority still open', sub:'high-priority, not done yet', act:'prio' });
-  if (busy && busyN>=3) out.push({ tone:'accent', icon:ATT_ICN.load, big:busyN, main:esc(busy)+' is busiest', sub:busyN+' active — rebalance?', act:'owner:'+busy });
   if (awaiting) out.push({ tone:'accent', icon:ATT_ICN.msg, big:awaiting, main:'Awaiting client feedback', sub:'follow up with the client', act:'state:feedback_open' });
+  if (out.length<3 && incorp) out.push({ tone:'accent', icon:ATT_ICN.load, big:incorp, main:'Feedback to incorporate', sub:'client changes in progress', act:'state:feedback_incorp' });
   if (out.length<3 && notStarted) out.push({ tone:'muted', icon:ATT_ICN.circle, big:notStarted, main:'Not started yet', sub:'kick these off soon', act:'state:not_started' });
   if (!out.length) out.push({ tone:'good', icon:ATT_ICN.check, big:'✓', main:'All clear', sub:'nothing needs attention', act:'' });
   return out.slice(0,3);
