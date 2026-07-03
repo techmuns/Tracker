@@ -900,7 +900,7 @@ function renderPage(data, opts) {
   .rq-dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
   .rq-av .avatar { width:22px; height:22px; font-size:10px; }
   .rq-ttl { font-size:14px; font-weight:600; }
-  .rq-done .rq-ttl { text-decoration:line-through; color:var(--muted); }
+  .rq-done .rq-ttl { color:var(--muted); }
   .rq-txt { font-size:12.5px; color:var(--txt2); margin:3px 0; }
   .rq-dash { font-size:11.5px; color:var(--muted); margin:5px 0 11px; }
   .rq-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; }
