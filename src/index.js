@@ -711,6 +711,8 @@ function renderPage(data, opts) {
   .drawer-head { position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--line); padding:18px 22px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
   .drawer-head h2 { margin:0; font-size:20px; font-weight:650; }
   .drawer-head .sub { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .dh-right { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  .subtab.back-sub { color:var(--accent); font-weight:600; }
   .x { border:1px solid var(--line); background:var(--surface); width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:17px; color:var(--muted); flex:none; }
   .x:hover { background:var(--line2); }
   .drawer-body { padding:18px 22px 60px; }
@@ -1817,22 +1819,22 @@ function openOwner(name){ ownerSub = 'work'; renderOwner(name); overlay.classLis
 function renderOwner(name){
   const s = ownerStats(name), p = personData(name);
   const pending = ownerTodos(name).filter(t=>!t.f.implemented).length;
+  const hr = ownerSub==='profile' || ownerSub==='attendance';
+  const nav = hr
+    ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button><button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance</button></nav>\`
+    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Team</button>
       <div class="av-head">\${avatar(name,'lg')}<div><h2>\${esc(name)}</h2>
       <div class="sub">\${esc(p.role||'Team member')} · \${s.total} dashboard\${s.total!==1?'s':''}</div></div></div></div>
-      <button class="x" id="drawerX">×</button>
+      <div class="dh-right">\${hr?'':'<button class="btn ghost sm" id="hrBtn">👤 Profile &amp; Attendance</button>'}<button class="x" id="drawerX">×</button></div>
     </div>
-    <nav class="subtabs">
-      <button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button>
-      <button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button>
-      <button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button>
-      <button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance</button>
-    </nav>
+    \${nav}
     <div class="drawer-body">\${ownerBodyHtml(name, s)}</div>\`;
   document.getElementById('drawerX').onclick = closeDrawer;
   document.getElementById('drawerBack').onclick = () => { closeDrawer(); switchTab('team'); };
+  { const hb = document.getElementById('hrBtn'); if (hb) hb.onclick = () => { ownerSub = 'profile'; renderOwner(name); }; }
   drawer.querySelectorAll('.subtab').forEach(b => b.onclick = () => { ownerSub = b.dataset.sub; renderOwner(name); });
   drawer.querySelectorAll('[data-jump-customer]').forEach(b => b.onclick = () => openClient(b.dataset.jumpCustomer));
   drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ owner:name, states:b.dataset.states.split(' ') }));
