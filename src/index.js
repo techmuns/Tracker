@@ -816,6 +816,10 @@ function renderPage(data, opts) {
   select, input, textarea { font:inherit; background:var(--surface); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
   input:focus, select:focus, textarea:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
   input[type=search] { min-width:240px; flex:1; }
+  /* Consistent chevron on every native <select> (no stock OS triangle) */
+  select { -webkit-appearance:none; -moz-appearance:none; appearance:none; padding-right:30px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a94a6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 11px center; cursor:pointer; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; padding:8px 28px 64px; }
   .card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--shadow); transition:transform .14s,box-shadow .14s,border-color .14s; overflow:hidden; }
   .card::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--cardc,var(--accent)); }
@@ -1074,11 +1078,8 @@ function renderPage(data, opts) {
   .modal-form .form-grid label { margin:0; }
   .modal-form .form-grid input, .modal-form .form-grid select { width:100%; margin:0; }
   .form-grid .hint { color:var(--muted); font-weight:400; font-size:10.5px; }
-  .client-row { display:flex; gap:6px; margin-bottom:6px; }
-  .client-row input { flex:1; }
   .rm-client { width:34px; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:8px; cursor:pointer; font-size:15px; }
   .rm-client:hover { color:var(--danger); border-color:var(--danger-line); }
-  #addClientRow { padding:5px 10px; font-size:11.5px; }
   .modal-form .panel-actions { margin-top:16px; }
   /* Priority filter button */
   .btn.prio-btn.on { background:linear-gradient(135deg,#f59e0b,#f97316); box-shadow:0 2px 10px rgba(245,158,11,.35); }
@@ -1102,6 +1103,41 @@ function renderPage(data, opts) {
   .link-row { display:flex; gap:6px; margin-bottom:6px; }
   .link-row .f_llabel { flex:0 0 42%; min-width:0; }
   .link-row .f_lurl { flex:1; min-width:0; }
+  /* ── Custom attached dropdowns (Clients multi-select + Assigned-to combo) ── */
+  .dd { position:relative; }
+  .dd-menu { position:absolute; left:0; right:0; top:calc(100% + 5px); z-index:70;
+    background:var(--surface); border:1px solid var(--line); border-radius:11px;
+    box-shadow:var(--shadow-lg); max-height:240px; overflow-y:auto; overflow-x:hidden;
+    padding:5px; display:none; }
+  .dd.open > .dd-menu { display:block; }
+  .dd-opt { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px;
+    font-size:13.5px; color:var(--txt); cursor:pointer; user-select:none; }
+  .dd-opt:hover, .dd-opt.active { background:var(--accent-weak); }
+  .modal-form .form-grid .dd-opt input { width:16px; height:16px; margin:0; flex:0 0 auto; accent-color:var(--accent); cursor:pointer; }
+  .dd-opt.on { color:var(--accent); font-weight:600; }
+  .dd-add { display:flex; align-items:center; gap:7px; padding:8px 10px; margin-top:2px;
+    border-top:1px solid var(--line2); border-radius:0 0 8px 8px; font-size:12.5px;
+    color:var(--accent); cursor:pointer; }
+  .dd-add:hover { background:var(--accent-weak); }
+  .dd-empty { padding:11px 10px; color:var(--muted); font-size:12.5px; text-align:center; }
+  /* multi-select control: chips + inline search, styled like an input box */
+  .ms-control { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:42px;
+    padding:6px 34px 6px 8px; border:1px solid var(--line); border-radius:8px;
+    background:var(--surface); cursor:text; }
+  .dd.open .ms-control, .ms-control:focus-within { border-color:var(--accent);
+    outline:2px solid var(--accent-weak); outline-offset:-1px; }
+  .ms-chip { display:inline-flex; align-items:center; gap:5px; background:var(--accent-weak);
+    border:1px solid var(--accent-line); color:var(--accent); border-radius:7px;
+    padding:3px 5px 3px 9px; font-size:12.5px; font-weight:600; line-height:1.4; }
+  .ms-chip button { border:0; background:transparent; color:inherit; cursor:pointer;
+    font-size:15px; line-height:1; padding:0 1px; opacity:.65; }
+  .ms-chip button:hover { opacity:1; }
+  .modal-form .form-grid .ms-search { flex:1; min-width:70px; width:auto; border:0; outline:0;
+    background:transparent; font-size:13.5px; padding:4px 2px; margin:0; color:var(--txt); }
+  .modal-form .form-grid .ms-search:focus { outline:0; }
+  .ms-caret { position:absolute; right:12px; top:14px; width:12px; height:12px;
+    pointer-events:none; color:var(--muted); }
+  .combo-input { padding-right:30px !important; }
   /* Tabs */
   .tabs { display:flex; gap:4px; margin-top:14px; }
   .tab { font:inherit; font-size:13px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 14px; cursor:pointer; }
@@ -1266,11 +1302,23 @@ ${opts.manualEnabled ? `
     <input type="hidden" id="f_id">
     <div class="form-grid">
       <label class="wide">Dashboard name *<input id="f_name" placeholder="e.g. Revenue Tracker"></label>
-      <label class="wide">Clients <span class="hint">(add one or more)</span>
-        <div id="clientRows"></div>
-        <button class="btn ghost sm" id="addClientRow" type="button">+ another client</button>
+      <label class="wide">Clients <span class="hint">(pick one or more — tick to select)</span>
+        <div class="dd" id="clientDD">
+          <div class="ms-control" id="clientCtl">
+            <span id="clientChips"></span>
+            <input class="ms-search" id="clientSearch" placeholder="Search clients…" autocomplete="off">
+            <svg class="ms-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+          <div class="dd-menu" id="clientMenu"></div>
+        </div>
       </label>
-      <label>Assigned to<input id="f_owner" list="owners" placeholder="e.g. Vipul"></label>
+      <label>Assigned to
+        <div class="dd" id="ownerDD">
+          <input class="combo-input" id="f_owner" placeholder="e.g. Vipul" autocomplete="off">
+          <svg class="ms-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          <div class="dd-menu" id="ownerMenu"></div>
+        </div>
+      </label>
       <label>Stage <span class="hint">(drives progress)</span><select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
@@ -1301,8 +1349,6 @@ ${opts.manualEnabled ? `
     </div>
   </div>
 </div></div>
-<datalist id="customers">${data.customers.map((c) => `<option value="${escapeHtml(c)}">`).join('')}</datalist>
-<datalist id="owners">${data.owners.map((o) => `<option value="${escapeHtml(o)}">`).join('')}</datalist>
 ` : ''}
 
 
@@ -1636,14 +1682,74 @@ const bindDelete = bindCards; // back-compat
 function recount(){ const c = Object.fromEntries(STATES.map(s => [s.id,0])); DATA.dashboards.forEach(d => c[d.state]!==undefined && c[d.state]++); return c; }
 
 const G = (id) => document.getElementById(id);
-function clientRowHtml(val){ return \`<div class="client-row"><input class="f_client" list="customers" placeholder="e.g. Beas Capital" value="\${esc(val||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`; }
-function setClients(arr){
-  const box = G('clientRows');
-  const list = (arr && arr.length) ? arr : [''];
-  box.innerHTML = list.map(clientRowHtml).join('');
-  box.querySelectorAll('.rm-client').forEach(b => b.onclick = () => { if (box.children.length > 1) b.parentElement.remove(); else b.previousElementSibling.value=''; });
+
+// ── Directory-backed dropdowns: Clients (multi-select) + Assigned-to (combo) ──
+let DIR = { clients: [], team: [] };   // filled from /api/directory (Muns platform)
+let clientSel = [];                    // currently selected client names
+const uniqSort = (a) => { const s=new Set(), o=[]; a.forEach(n=>{ n=String(n||'').trim(); const k=n.toLowerCase(); if(n && !s.has(k)){ s.add(k); o.push(n); } }); return o.sort((x,y)=>x.localeCompare(y)); };
+function clientOptions(){ return uniqSort([...(DATA.customers||[]), ...DIR.clients]); }
+function ownerOptions(){ return uniqSort([...(DATA.owners||[]), ...DIR.team]); }
+
+function renderClientChips(){
+  const box = G('clientChips'); if (!box) return;
+  box.innerHTML = '';
+  clientSel.forEach(name => {
+    const chip = document.createElement('span'); chip.className = 'ms-chip';
+    chip.appendChild(document.createTextNode(name));
+    const x = document.createElement('button'); x.type='button'; x.textContent='×'; x.title='Remove';
+    x.onclick = (e) => { e.stopPropagation(); clientSel = clientSel.filter(c => c !== name); renderClientChips(); if (G('clientDD').classList.contains('open')) renderClientMenu(); };
+    chip.appendChild(x); box.appendChild(chip);
+  });
 }
-function getClients(){ return [...G('clientRows').querySelectorAll('.f_client')].map(i => i.value.trim()).filter(Boolean); }
+function renderClientMenu(){
+  const menu = G('clientMenu'); if (!menu) return;
+  const typed = (G('clientSearch').value || '').trim();
+  const q = typed.toLowerCase();
+  const opts = clientOptions().filter(n => !q || n.toLowerCase().includes(q));
+  menu.innerHTML = '';
+  opts.forEach(name => {
+    const on = clientSel.some(c => c.toLowerCase() === name.toLowerCase());
+    const row = document.createElement('div'); row.className = 'dd-opt' + (on ? ' on' : '');
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = on; cb.tabIndex=-1;
+    row.appendChild(cb); row.appendChild(document.createTextNode(name));
+    row.onclick = () => {
+      if (clientSel.some(c => c.toLowerCase() === name.toLowerCase())) clientSel = clientSel.filter(c => c.toLowerCase() !== name.toLowerCase());
+      else clientSel.push(name);
+      const nowOn = clientSel.includes(name);
+      cb.checked = nowOn; row.classList.toggle('on', nowOn); renderClientChips();
+    };
+    menu.appendChild(row);
+  });
+  if (typed && !clientOptions().some(n => n.toLowerCase() === q)){
+    const add = document.createElement('div'); add.className = 'dd-add';
+    add.textContent = '+ Add "' + typed + '"';
+    add.onclick = () => { if (!clientSel.some(c => c.toLowerCase() === q)) clientSel.push(typed); G('clientSearch').value=''; renderClientChips(); renderClientMenu(); };
+    menu.appendChild(add);
+  } else if (!opts.length){
+    const em = document.createElement('div'); em.className='dd-empty'; em.textContent='No matching clients'; menu.appendChild(em);
+  }
+}
+function setClients(arr){ clientSel = (arr||[]).map(s => String(s).trim()).filter(Boolean); const s=G('clientSearch'); if (s) s.value=''; renderClientChips(); }
+function getClients(){ return clientSel.slice(); }
+
+function renderOwnerMenu(){
+  const menu = G('ownerMenu'); if (!menu) return;
+  const cur = (G('f_owner').value || '').trim();
+  const q = cur.toLowerCase();
+  const opts = ownerOptions().filter(n => !q || n.toLowerCase().includes(q));
+  menu.innerHTML = '';
+  if (!opts.length){ const em=document.createElement('div'); em.className='dd-empty'; em.textContent='No matching people'; menu.appendChild(em); return; }
+  opts.forEach(name => {
+    const row = document.createElement('div'); row.className = 'dd-opt' + (cur === name ? ' on' : '');
+    row.textContent = name;
+    row.onmousedown = (e) => { e.preventDefault(); G('f_owner').value = name; closeOwnerDD(); };
+    menu.appendChild(row);
+  });
+}
+function openClientDD(){ const dd=G('clientDD'); if (!dd) return; renderClientMenu(); dd.classList.add('open'); }
+function closeClientDD(){ const dd=G('clientDD'); if (dd) dd.classList.remove('open'); }
+function openOwnerDD(){ const dd=G('ownerDD'); if (!dd) return; renderOwnerMenu(); dd.classList.add('open'); }
+function closeOwnerDD(){ const dd=G('ownerDD'); if (dd) dd.classList.remove('open'); }
 
 const DEFAULT_LINK_LABELS = ['First client meeting','First feedback meeting','Second feedback meeting','Third feedback meeting'];
 function linkRowHtml(label, url){
@@ -1761,7 +1867,24 @@ if (CFG.manualEnabled){
   G('addToggle').onclick = openAdd;
   G('cancelBtn').onclick = closeForm;
   G('formX').onclick = closeForm;
-  G('addClientRow').onclick = () => { setClients(getClients().concat('')); G('clientRows').lastElementChild.querySelector('.f_client').focus(); };
+  // Clients multi-select + Assigned-to combobox (attached, scrollable dropdowns)
+  const cs = G('clientSearch'), cctl = G('clientCtl'), cdd = G('clientDD');
+  if (cctl && cs){
+    cctl.onclick = (e) => { if (e.target !== cs) cs.focus(); openClientDD(); };
+    cs.onfocus = openClientDD;
+    cs.oninput = () => { openClientDD(); };
+    cs.onkeydown = (e) => {
+      if (e.key === 'Enter'){ e.preventDefault(); const t=cs.value.trim(); if (t && !clientOptions().some(n=>n.toLowerCase()===t.toLowerCase()) && !clientSel.some(c=>c.toLowerCase()===t.toLowerCase())){ clientSel.push(t); cs.value=''; renderClientChips(); renderClientMenu(); } }
+      else if (e.key === 'Backspace' && !cs.value && clientSel.length){ clientSel.pop(); renderClientChips(); renderClientMenu(); }
+      else if (e.key === 'Escape'){ closeClientDD(); }
+    };
+  }
+  const ow = G('f_owner');
+  if (ow){ ow.onfocus = openOwnerDD; ow.oninput = () => { openOwnerDD(); }; ow.onkeydown = (e) => { if (e.key === 'Escape') closeOwnerDD(); }; }
+  document.addEventListener('mousedown', (e) => {
+    if (cdd && !cdd.contains(e.target)) closeClientDD();
+    const odd = G('ownerDD'); if (odd && !odd.contains(e.target)) closeOwnerDD();
+  });
   G('addLinkRow').onclick = () => {
     const cur = getLinks();
     const nextLabel = DEFAULT_LINK_LABELS[cur.length] || '';
@@ -3088,7 +3211,7 @@ document.getElementById('prioToggle').onclick = () => {
 renderInsights();
 render();
 
-// Populate the Clients + Assigned-to autocompletes from the live Muns directory.
+// Load the live Muns directory into the Clients + Assigned-to dropdowns.
 // Clients come from the list of organizations; the team comes from the munshot org.
 async function loadDirectory(){
   try {
@@ -3096,19 +3219,11 @@ async function loadDirectory(){
     if (!r.ok) return;
     const d = await r.json();
     if (!d || !d.ok) return;
-    const fill = (listId, names) => {
-      const dl = document.getElementById(listId);
-      if (!dl || !Array.isArray(names)) return;
-      const have = new Set(Array.from(dl.options).map(o => o.value.toLowerCase()));
-      names.forEach(n => {
-        if (n && !have.has(n.toLowerCase())){
-          const o = document.createElement('option');
-          o.value = n; dl.appendChild(o); have.add(n.toLowerCase());
-        }
-      });
-    };
-    fill('customers', d.clients);   // Clients field
-    fill('owners', d.team);         // Assigned-to field
+    DIR.clients = Array.isArray(d.clients) ? d.clients : [];
+    DIR.team = Array.isArray(d.team) ? d.team : [];
+    const cdd = document.getElementById('clientDD'), odd = document.getElementById('ownerDD');
+    if (cdd && cdd.classList.contains('open')) renderClientMenu();
+    if (odd && odd.classList.contains('open')) renderOwnerMenu();
   } catch(e){}
 }
 loadDirectory();
