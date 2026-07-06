@@ -97,6 +97,47 @@ async function sendMuns(env, recipients, subject, html, text) {
   return { ok: results.length > 0 && results.every((x) => x.ok), sent: results.filter((x) => x.ok).length, results };
 }
 
+// ── People directory from the Muns platform ─────────────────────────────
+// Clients = every organization (the org name).  Team  = the members of the
+// munshot org (id 1) — the interns work is assigned to. The token comes from
+// the Worker env and is never exposed to the browser. Responses are edge-
+// cached briefly so we don't hammer the upstream on every page load.
+async function fetchMunsDirectory(env) {
+  if (!env.MUNS_TOKEN) return { ok: false, error: 'MUNS_TOKEN not set', clients: [], team: [] };
+  const base = env.MUNS_USERS_URL || 'https://devde.muns.io/orgs/users';
+  const headers = { 'accept': '*/*', 'Authorization': 'Bearer ' + env.MUNS_TOKEN };
+  const dedupe = (arr) => {
+    const seen = new Set(), out = [];
+    for (const n of arr) { const k = n.toLowerCase(); if (n && !seen.has(k)) { seen.add(k); out.push(n); } }
+    return out.sort((a, b) => a.localeCompare(b));
+  };
+  try {
+    const [allR, teamR] = await Promise.all([
+      fetch(base + '?limit=1000', { headers, cf: { cacheTtl: 300, cacheEverything: true } }),
+      fetch(base + '?limit=1000&organizationId=1', { headers, cf: { cacheTtl: 300, cacheEverything: true } }),
+    ]);
+    if (!allR.ok) return { ok: false, error: 'orgs ' + allR.status, clients: [], team: [] };
+    const allJson = await allR.json().catch(() => ({}));
+    const teamJson = teamR.ok ? await teamR.json().catch(() => ({})) : {};
+    const orgs = Array.isArray(allJson.data) ? allJson.data : [];
+    // Clients = all organizations except munshot itself (id 1, the internal team).
+    const clients = dedupe(orgs
+      .filter((o) => o && o.organization_id !== 1)
+      .map((o) => String((o && o.name) || '').trim())
+      .filter(Boolean));
+    // Team = active, named members of the munshot org.
+    const teamOrg = (Array.isArray(teamJson.data) ? teamJson.data : []).find((o) => o && o.organization_id === 1)
+      || orgs.find((o) => o && o.organization_id === 1) || { users: [] };
+    const team = dedupe((teamOrg.users || [])
+      .filter((u) => u && u.isActive && u.name)
+      .map((u) => String(u.name).trim())
+      .filter(Boolean));
+    return { ok: true, clients, team };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e), clients: [], team: [] };
+  }
+}
+
 // Nightly digest recipient — override with the DIGEST_TO env var/secret.
 const digestTo = (env) => env.DIGEST_TO || 'ceekay@muns.io';
 
@@ -406,6 +447,13 @@ export default {
         else return json({ error: 'Provide {id, owner} or {assignments}.' }, 400);
         await writeAssign(env, map);
         return json({ ok: true, count: Object.keys(map).length, assignments: map });
+      }
+
+      // ── People directory (clients = orgs, team = munshot members) ────────
+      // Read-only proxy to the Muns platform; keeps the token server-side.
+      if (pathname === '/api/directory') {
+        const dir = await fetchMunsDirectory(env);
+        return json(dir, dir.ok ? 200 : 502);
       }
 
       // ── Deck fonts (Playfair Display) — proxied + edge-cached, same-origin ─
@@ -3039,6 +3087,31 @@ document.getElementById('prioToggle').onclick = () => {
 };
 renderInsights();
 render();
+
+// Populate the Clients + Assigned-to autocompletes from the live Muns directory.
+// Clients come from the list of organizations; the team comes from the munshot org.
+async function loadDirectory(){
+  try {
+    const r = await fetch('/api/directory');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d || !d.ok) return;
+    const fill = (listId, names) => {
+      const dl = document.getElementById(listId);
+      if (!dl || !Array.isArray(names)) return;
+      const have = new Set(Array.from(dl.options).map(o => o.value.toLowerCase()));
+      names.forEach(n => {
+        if (n && !have.has(n.toLowerCase())){
+          const o = document.createElement('option');
+          o.value = n; dl.appendChild(o); have.add(n.toLowerCase());
+        }
+      });
+    };
+    fill('customers', d.clients);   // Clients field
+    fill('owners', d.team);         // Assigned-to field
+  } catch(e){}
+}
+loadDirectory();
 </script>
 </body>
 </html>`;
