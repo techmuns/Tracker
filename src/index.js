@@ -1139,12 +1139,33 @@ function renderPage(data, opts) {
   .ms-caret { position:absolute; right:12px; top:14px; width:12px; height:12px;
     pointer-events:none; color:var(--muted); }
   .combo-input { padding-right:30px !important; }
-  /* Enhanced due-date field */
-  .datefield { position:relative; }
-  .datefield .df-ico { position:absolute; left:11px; top:11px; width:16px; height:16px; color:var(--accent); pointer-events:none; z-index:1; }
-  .modal-form .form-grid .datefield input[type=date] { width:100%; padding-left:36px; font-variant-numeric:tabular-nums; }
-  .datefield input[type=date]::-webkit-calendar-picker-indicator { opacity:0; position:absolute; left:0; top:0; width:100%; height:100%; cursor:pointer; }
-  .df-quick { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+  /* Custom due-date picker */
+  .date-wrap { position:relative; }
+  .date-trigger { display:flex; align-items:center; gap:9px; width:100%; text-align:left; cursor:pointer;
+    background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font:inherit; font-size:13.5px; color:var(--txt); }
+  .date-trigger:hover { border-color:var(--accent); }
+  .datepick.open .date-trigger { border-color:var(--accent); outline:2px solid var(--accent-weak); outline-offset:-1px; }
+  .date-trigger .df-ico { color:var(--accent); width:16px; height:16px; flex:0 0 auto; }
+  .date-lbl { flex:1; font-variant-numeric:tabular-nums; }
+  .date-lbl.muted { color:var(--muted); }
+  .date-trigger .ms-caret { width:12px; height:12px; color:var(--muted); flex:0 0 auto; }
+  .cal-menu { left:0; right:auto; width:290px; max-height:none; overflow:visible; padding:0; }
+  .datepick.open > .date-wrap > .cal-menu { display:block; }
+  .cal { padding:12px 13px 13px; }
+  .cal-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; }
+  .cal-title { font-size:13.5px; font-weight:700; color:var(--txt); }
+  .cal-nav { display:inline-flex; gap:5px; }
+  .cal-nav button { width:28px; height:28px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--txt2); cursor:pointer; font-size:15px; line-height:1; display:grid; place-items:center; }
+  .cal-nav button:hover { background:var(--accent-weak); color:var(--accent); border-color:var(--accent-line); }
+  .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+  .cal-dow { font-size:10px; font-weight:700; color:var(--muted); text-align:center; padding:3px 0 5px; text-transform:uppercase; letter-spacing:.02em; }
+  .cal-day { aspect-ratio:1; border:0; background:transparent; border-radius:9px; font:inherit; font-size:12.5px; color:var(--txt); cursor:pointer; display:grid; place-items:center; transition:background .1s; }
+  .cal-day:hover { background:var(--accent-weak); }
+  .cal-day.other { color:transparent; pointer-events:none; }
+  .cal-day.today { box-shadow:inset 0 0 0 1.5px var(--accent-line); font-weight:700; }
+  .cal-day.sel { background:var(--accent); color:#fff; font-weight:700; }
+  .cal-day.sel:hover { background:var(--accent); }
+  .df-quick { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
   .df-quick button { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak);
     border:1px solid var(--accent-line); border-radius:999px; padding:4px 11px; cursor:pointer; transition:background .12s,color .12s; }
   .df-quick button:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
@@ -1344,9 +1365,16 @@ ${opts.manualEnabled ? `
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
       </label>
       <label class="wide">Due date
-        <div class="datefield">
-          <svg class="df-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          <input type="date" id="f_due" onclick="try{this.showPicker()}catch(e){}" onfocus="try{this.showPicker()}catch(e){}">
+        <div class="datepick" id="dueDD">
+          <div class="date-wrap">
+            <button type="button" class="date-trigger" id="dueTrigger">
+              <svg class="df-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              <span id="dueLabel" class="date-lbl muted">Select a date</span>
+              <svg class="ms-caret" style="position:static" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <input type="hidden" id="f_due">
+            <div class="dd-menu cal-menu" id="dueCal"></div>
+          </div>
           <div class="df-quick"><button type="button" data-due="0">Today</button><button type="button" data-due="7">+1 week</button><button type="button" data-due="30">+1 month</button><button type="button" data-due="clear">Clear</button></div>
         </div>
       </label>
@@ -1768,6 +1796,37 @@ function closeClientDD(){ const dd=G('clientDD'); if (dd) dd.classList.remove('o
 function openOwnerDD(){ const dd=G('ownerDD'); if (!dd) return; renderOwnerMenu(); dd.classList.add('open'); }
 function closeOwnerDD(){ const dd=G('ownerDD'); if (dd) dd.classList.remove('open'); }
 
+// ── Custom due-date calendar ──────────────────────────────────────────────
+let calView = null;   // { y, m } of the month currently displayed
+const CAL_MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const CAL_MS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function isoOf(y,m,d){ return y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+function parseISO(s){ const p=String(s).split('-').map(Number); return new Date(p[0], p[1]-1, p[2]); }
+function fmtDue(iso){ if(!iso) return ''; const [y,m,d]=iso.split('-'); return String(+d)+' '+CAL_MS[+m-1]+' '+y; }
+function setDue(iso){
+  const f=G('f_due'); if(!f) return; f.value = iso || '';
+  const lbl=G('dueLabel'); if(!lbl) return;
+  if(iso){ lbl.textContent=fmtDue(iso); lbl.classList.remove('muted'); }
+  else { lbl.textContent='Select a date'; lbl.classList.add('muted'); }
+}
+function renderCal(){
+  const cal=G('dueCal'); if(!cal||!calView) return;
+  const {y,m}=calView;
+  const start=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
+  const t=new Date(), todayIso=isoOf(t.getFullYear(),t.getMonth(),t.getDate()), sel=G('f_due').value;
+  const DOW=['Su','Mo','Tu','We','Th','Fr','Sa'];
+  let g='<div class="cal-grid">'+DOW.map(d=>'<span class="cal-dow">'+d+'</span>').join('');
+  for(let i=0;i<start;i++) g+='<span class="cal-day other"></span>';
+  for(let d=1;d<=days;d++){ const iso=isoOf(y,m,d); const c=['cal-day']; if(iso===todayIso)c.push('today'); if(iso===sel)c.push('sel'); g+='<button type="button" class="'+c.join(' ')+'" data-iso="'+iso+'">'+d+'</button>'; }
+  g+='</div>';
+  cal.innerHTML='<div class="cal"><div class="cal-head"><span class="cal-title">'+CAL_MN[m]+' '+y+'</span><span class="cal-nav"><button type="button" data-cal="prev" aria-label="Previous month">‹</button><button type="button" data-cal="next" aria-label="Next month">›</button></span></div>'+g+'</div>';
+  cal.querySelector('[data-cal=prev]').onclick=(e)=>{ e.stopPropagation(); if(--calView.m<0){calView.m=11;calView.y--;} renderCal(); };
+  cal.querySelector('[data-cal=next]').onclick=(e)=>{ e.stopPropagation(); if(++calView.m>11){calView.m=0;calView.y++;} renderCal(); };
+  cal.querySelectorAll('[data-iso]').forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); setDue(b.dataset.iso); closeCal(); });
+}
+function openCal(){ const dd=G('dueDD'); if(!dd) return; const iso=G('f_due').value; const base=iso?parseISO(iso):new Date(); calView={y:base.getFullYear(), m:base.getMonth()}; renderCal(); dd.classList.add('open'); }
+function closeCal(){ const dd=G('dueDD'); if(dd) dd.classList.remove('open'); }
+
 const DEFAULT_LINK_LABELS = ['First client meeting','First feedback meeting','Second feedback meeting','Third feedback meeting'];
 function linkRowHtml(label, url){
   return \`<div class="link-row"><input class="f_llabel" placeholder="label, e.g. First client meeting" value="\${esc(label||'')}"><input class="f_lurl" placeholder="https://… (YouTube etc.)" value="\${esc(url||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`;
@@ -1853,7 +1912,7 @@ function setForm(d){
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
   G('f_url').value = d ? (d.dashboardUrl || '') : '';
-  G('f_due').value = d ? (d.dueDate || '') : '';
+  setDue(d ? (d.dueDate || '') : '');
   fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
   renderFbRows();
   G('formMsg').textContent = '';
@@ -1892,6 +1951,7 @@ if (CFG.manualEnabled){
   document.addEventListener('mousedown', (e) => {
     if (cdd && !cdd.contains(e.target)) closeClientDD();
     const odd = G('ownerDD'); if (odd && !odd.contains(e.target)) closeOwnerDD();
+    const ddd = G('dueDD'); if (ddd && !ddd.contains(e.target)) closeCal();
   });
   G('addLinkRow').onclick = () => {
     const cur = getLinks();
@@ -1899,11 +1959,12 @@ if (CFG.manualEnabled){
     setLinks(cur.concat({ label: nextLabel, url:'' }));
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
+  if (G('dueTrigger')) G('dueTrigger').onclick = (e) => { e.preventDefault(); G('dueDD').classList.contains('open') ? closeCal() : openCal(); };
   document.querySelectorAll('.df-quick [data-due]').forEach(b => b.onclick = () => {
-    const due = G('f_due');
-    if (b.dataset.due === 'clear'){ due.value=''; return; }
+    if (b.dataset.due === 'clear'){ setDue(''); return; }
     const dt = new Date(); dt.setDate(dt.getDate() + (+b.dataset.due));
-    due.value = dt.toISOString().slice(0,10);
+    setDue(isoOf(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+    if (G('dueDD').classList.contains('open')){ calView={y:dt.getFullYear(), m:dt.getMonth()}; renderCal(); }
   });
   G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
