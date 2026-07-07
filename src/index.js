@@ -1,18 +1,15 @@
 // index.js — Cloudflare Worker entry point.
 //   GET  /             → server-rendered dashboard (clean light theme)
-//   GET  /api/data     → parsed + classified dataset (sheet + manual) as JSON
+//   GET  /api/data     → parsed + classified dataset (JSON)
 //   POST/PUT/DELETE /api/manual  → add / edit / remove a dashboard entry
 //   POST/DELETE     /api/roster  → add / remove a team member or client
 //   POST/DELETE     /api/update  → post / remove a dated status update
 //   POST            /api/person  → set an employee's join date / attendance day
-//   POST            /api/import  → one-time: import the sheet into KV, then run
-//                                  standalone (the Google Sheet is no longer read)
 //
-// Sheet data comes from the published CSV (CSV_URL) until you "go standalone",
-// after which everything lives in the KV namespace bound as MANUAL. If MANUAL
-// isn't bound, the board works read-only and editing controls are hidden.
-import { parseCsv } from './csv.js';
-import { buildDataset, manualToDashboard, rowsToEntries, STATES } from './classify.js';
+// All dashboards live in the KV namespace bound as MANUAL — there is no
+// external Google Sheet. If MANUAL isn't bound, the board works read-only and
+// the editing controls are hidden.
+import { buildDataset, manualToDashboard, STATES } from './classify.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -51,18 +48,11 @@ const readAssign = (env) => kvGet(env, KV_ASSIGN, {});
 const writeAssign = (env, a) => env.MANUAL.put(KV_ASSIGN, JSON.stringify(a));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, config, priority, clients, assignments] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env), readClients(env), readAssign(env),
+  const [manual, roster, updates, people, priority, clients, assignments] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env),
   ]);
-  // Standalone mode: serve purely from KV, never touch the Google Sheet.
-  let rows = [];
-  if (!config.standalone) {
-    if (!env.CSV_URL) throw new Error('CSV_URL is not configured');
-    const res = await fetch(env.CSV_URL, { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } });
-    if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
-    rows = parseCsv(await res.text());
-  }
-  return buildDataset(rows, manual, { roster, updates, people, priority, clients, assignments, standalone: !!config.standalone });
+  // All dashboards live in the app (KV) — there is no external Google Sheet.
+  return buildDataset([], manual, { roster, updates, people, priority, clients, assignments, standalone: true });
 }
 
 const json = (obj, status = 200) =>
@@ -305,25 +295,6 @@ export default {
         return json({ error: 'Method not allowed.' }, 405);
       }
 
-      // ── Import sheet → standalone (one-time migration) ───────────────────
-      if (pathname === '/api/import') {
-        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
-        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
-        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
-        const config = await readConfig(env);
-        if (config.standalone) return json({ error: 'Already standalone — the sheet has already been imported.' }, 409);
-        if (!env.CSV_URL) return json({ error: 'CSV_URL is not configured, nothing to import.' }, 400);
-        const res = await fetch(env.CSV_URL, { cf: { cacheTtl: 0 } });
-        if (!res.ok) return json({ error: `Sheet fetch failed: ${res.status}` }, 502);
-        const imported = rowsToEntries(parseCsv(await res.text()));
-        const list = await readManual(env);
-        const existing = new Set(list.map((e) => e.id));
-        const added = imported.filter((e) => !existing.has(e.id));
-        await writeManual(env, [...list, ...added]);
-        await writeConfig(env, { ...config, standalone: true, importedAt: new Date().toISOString() });
-        return json({ ok: true, imported: added.length, standalone: true }, 201);
-      }
-
       // ── Priority API — stores a level per dashboard (1 = highest) ────────
       if (pathname === '/api/priority') {
         if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
@@ -352,7 +323,7 @@ export default {
         if (!id || !stage) return json({ error: 'id and stage are required.' }, 400);
         const list = await readManual(env);
         const i = list.findIndex((e) => e.id === id);
-        if (i === -1) return json({ error: 'Only app-stored dashboards can be changed here. Go standalone first to edit sheet rows.' }, 404);
+        if (i === -1) return json({ error: 'Dashboard not found.' }, 404);
         list[i].stage = stage;
         list[i].updatedAt = new Date().toISOString();
         await writeManual(env, list);
@@ -647,7 +618,7 @@ export default {
         });
       }
 
-      return new Response(renderPage(data, { manualEnabled: !!env.MANUAL, editProtected: !!env.EDIT_TOKEN, standalone: !!data.standalone, hasSheet: !!env.CSV_URL }), {
+      return new Response(renderPage(data, { manualEnabled: !!env.MANUAL, editProtected: !!env.EDIT_TOKEN, standalone: true }), {
         headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
       });
     } catch (err) {
@@ -1310,7 +1281,7 @@ function renderPage(data, opts) {
   </aside>
   <main class="workspace">
     <div class="topbar">
-      <div class="tb-title"><h1>Dashboard Tracker</h1><div class="sub">${data.total} dashboards${opts.standalone ? ` · standalone (sheet disconnected)` : ` · ${data.sheetCount} from sheet${data.manualCount ? ` · ${data.manualCount} added manually` : ''}`} · updated ${escapeHtml(fresh)}</div></div>
+      <div class="tb-title"><h1>Dashboard Tracker</h1><div class="sub">${data.total} dashboard${data.total===1?'':'s'} · updated ${escapeHtml(fresh)}</div></div>
       <div class="tb-actions">
         <button class="btn ghost prio-btn" id="prioToggle" title="Show only priority dashboards">⭐ Priority</button>
         <div class="dropdown">
@@ -1321,7 +1292,6 @@ function renderPage(data, opts) {
             <button data-export="owner">Owner-wise — one sheet per owner</button>
           </div>
         </div>
-        ${opts.manualEnabled && opts.hasSheet && !opts.standalone ? `<button class="btn ghost" id="standaloneBtn" title="Import the sheet's dashboards into the app and stop reading the Google Sheet">⤓ Go standalone</button>` : ''}
         ${opts.manualEnabled ? `<button class="btn" id="addToggle">+ Add dashboard</button>` : ''}
       </div>
     </div>
@@ -1998,15 +1968,6 @@ if (CFG.manualEnabled){
     msg.className='msg ok'; msg.textContent='Saved.';
     if (autoOwner) alert('Auto-assigned to ' + autoOwner + ' — they had the lightest workload.');
     location.reload();
-  };
-  const sa = G('standaloneBtn');
-  if (sa) sa.onclick = async () => {
-    if (!confirm('Import all dashboards from the Google Sheet into the app and stop reading the sheet?\\n\\nAfter this, every card is editable here and the sheet is no longer used. (You can still keep the sheet as a backup.)')) return;
-    sa.disabled = true; sa.textContent = 'Importing…';
-    const res = await api('POST', '/api/import');
-    const e = await res.json().catch(()=>({}));
-    if (res.ok){ alert('Imported '+e.imported+' dashboards. You are now standalone — the Google Sheet is no longer read.'); location.reload(); }
-    else { sa.disabled = false; sa.textContent = '⤓ Go standalone'; alert('Import failed: '+(e.error||res.status)); }
   };
 }
 
@@ -3107,7 +3068,7 @@ function coverSheet(wb){
     return c;
   };
   ws.mergeCells('B2:F2'); set('B2', 'Dashboard Tracker', { bold:true, size:22, color:{ argb:'FF111827' } });
-  ws.mergeCells('B3:F3'); set('B3', 'Status report · generated ' + new Date().toLocaleString('en-GB', { hour12:false }) + (CFG.standalone ? '  ·  standalone' : ''), { size:11, color:{ argb:'FF6B7280' } });
+  ws.mergeCells('B3:F3'); set('B3', 'Status report · generated ' + new Date().toLocaleString('en-GB', { hour12:false }), { size:11, color:{ argb:'FF6B7280' } });
 
   // KPI band (B5:F6) — big number + label, each a coloured tile.
   const inProgress = MID_STAGES.reduce((n,k) => n + (DATA.counts[k]||0), 0);
