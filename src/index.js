@@ -46,13 +46,22 @@ const writeDigest = (env, q) => env.MANUAL.put(KV_DIGEST, JSON.stringify(q));
 const KV_ASSIGN = 'assignments';
 const readAssign = (env) => kvGet(env, KV_ASSIGN, {});
 const writeAssign = (env, a) => env.MANUAL.put(KV_ASSIGN, JSON.stringify(a));
+const KV_TASKS = 'tasks';
+const readTasks = (env) => kvGet(env, KV_TASKS, []);
+const writeTasks = (env, t) => env.MANUAL.put(KV_TASKS, JSON.stringify(t));
+const KV_MEETING = 'meeting';
+const readMeeting = (env) => kvGet(env, KV_MEETING, {});
+const writeMeeting = (env, m) => env.MANUAL.put(KV_MEETING, JSON.stringify(m));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, priority, clients, assignments] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env),
+  const [manual, roster, updates, people, priority, clients, assignments, tasks, meeting] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env), readTasks(env), readMeeting(env),
   ]);
   // All dashboards live in the app (KV) — there is no external Google Sheet.
-  return buildDataset([], manual, { roster, updates, people, priority, clients, assignments, standalone: true });
+  const ds = buildDataset([], manual, { roster, updates, people, priority, clients, assignments, standalone: true });
+  ds.tasks = Array.isArray(tasks) ? tasks : [];
+  ds.meeting = meeting && typeof meeting === 'object' ? meeting : {};
+  return ds;
 }
 
 const json = (obj, status = 200) =>
@@ -419,6 +428,77 @@ export default {
         else return json({ error: 'Provide {id, owner} or {assignments}.' }, 400);
         await writeAssign(env, map);
         return json({ ok: true, count: Object.keys(map).length, assignments: map });
+      }
+
+      // ── Standup tasks — per-member daily to-dos (EOD tracking) ───────────
+      // The meeting-transcription bot POSTs generated to-dos here; the UI reads
+      // and ticks them off. GET is open; writes use the same edit-token gate.
+      if (pathname === '/api/tasks') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') {
+          let list = await readTasks(env);
+          const date = url.searchParams.get('date'), member = url.searchParams.get('member');
+          if (date) list = list.filter((t) => t.date === date);
+          if (member) list = list.filter((t) => String(t.member || '').toLowerCase() === member.toLowerCase());
+          return json({ ok: true, tasks: list });
+        }
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const action = String(body.action || 'add');
+        let list = await readTasks(env);
+        const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+        const today = new Date().toISOString().slice(0, 10);
+        const mkTask = (o) => ({
+          id: crypto.randomUUID(),
+          member: String(o.member || '').trim() || 'Unassigned',
+          date: isDate(o.date) ? o.date : (isDate(body.date) ? body.date : today),
+          text: String(o.text || '').trim(),
+          dashboardId: String(o.dashboardId || ''),
+          dashboardName: String(o.dashboardName || ''),
+          done: !!o.done,
+          doneAt: o.done ? new Date().toISOString() : null,
+          source: String(o.source || body.source || 'manual'),
+          createdAt: new Date().toISOString(),
+        });
+        if (action === 'add') {
+          const items = Array.isArray(body.tasks) ? body.tasks : ((body.text || body.member) ? [body] : []);
+          const added = items.map(mkTask).filter((t) => t.text);
+          if (!added.length) return json({ error: 'Nothing to add — each task needs member + text.' }, 400);
+          list.push(...added);
+          await writeTasks(env, list);
+          return json({ ok: true, added: added.length, tasks: added }, 201);
+        }
+        if (action === 'toggle') {
+          const t = list.find((x) => x.id === String(body.id));
+          if (!t) return json({ error: 'Task not found.' }, 404);
+          t.done = ('done' in body) ? !!body.done : !t.done;
+          t.doneAt = t.done ? new Date().toISOString() : null;
+          await writeTasks(env, list);
+          return json({ ok: true, task: t });
+        }
+        if (action === 'delete') {
+          const before = list.length;
+          list = list.filter((x) => x.id !== String(body.id));
+          if (list.length === before) return json({ error: 'Task not found.' }, 404);
+          await writeTasks(env, list);
+          return json({ ok: true });
+        }
+        return json({ error: 'Unknown action.' }, 400);
+      }
+
+      // ── Team meeting link (shown on the Standup tab) ─────────────────────
+      if (pathname === '/api/meeting') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') return json({ ok: true, meeting: await readMeeting(env) });
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const m = await readMeeting(env);
+        if ('link' in body) m.link = String(body.link || '').trim();
+        if ('note' in body) m.note = String(body.note || '').trim();
+        await writeMeeting(env, m);
+        return json({ ok: true, meeting: m });
       }
 
       // ── People directory (clients = orgs, team = munshot members) ────────
@@ -1146,6 +1226,71 @@ function renderPage(data, opts) {
     border-radius:999px; padding:4px 11px; text-decoration:none; white-space:nowrap; transition:background .12s,color .12s; }
   .visit-btn:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
   .foot-actions { display:inline-flex; align-items:center; gap:8px; }
+  /* ── Standup / EOD ─────────────────────────────────────────────────── */
+  .eod { padding:6px 28px 4px; }
+  .eod-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .eod-head h3 { margin:0; font-size:15px; }
+  .eod-sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .eod-total { font-size:12.5px; font-weight:700; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:5px 12px; white-space:nowrap; }
+  .eod-empty { font-size:12.5px; color:var(--muted); background:var(--surface); border:1px dashed var(--line); border-radius:var(--radius); padding:16px; text-align:center; }
+  .eod-list { display:flex; flex-direction:column; gap:8px; }
+  .eod-row { display:grid; grid-template-columns:190px 160px 1fr; gap:14px; align-items:center; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:11px 14px; box-shadow:var(--shadow); }
+  @media (max-width:860px){ .eod-row { grid-template-columns:1fr; gap:9px; } }
+  .eod-who { display:flex; align-items:center; gap:9px; min-width:0; }
+  .eod-name { font-weight:650; font-size:13.5px; }
+  .eod-mini { font-size:11px; color:var(--muted); }
+  .eod-prog { display:flex; align-items:center; gap:8px; }
+  .eod-bar { flex:1; height:8px; border-radius:5px; background:var(--line2); overflow:hidden; }
+  .eod-bar i { display:block; height:100%; background:linear-gradient(90deg,#7381e6,#21ba72); border-radius:5px; transition:width .5s; }
+  .eod-bar.full i { background:var(--good); }
+  .eod-pct { font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; color:var(--txt2); min-width:34px; text-align:right; }
+  .eod-tasks { display:flex; flex-wrap:wrap; gap:5px; }
+  .eod-chip { font-size:11px; color:var(--txt2); background:var(--surface2); border:1px solid var(--line); border-radius:6px; padding:2px 8px; }
+  .eod-chip.done { color:var(--good); background:var(--good-bg); border-color:var(--good-line); }
+  .mtg-card { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px 15px; box-shadow:var(--shadow); margin-bottom:14px; }
+  .mtg-l { display:flex; align-items:center; gap:11px; min-width:0; }
+  .mtg-ico { width:38px; height:38px; border-radius:10px; background:var(--accent-weak); display:grid; place-items:center; font-size:18px; flex:0 0 auto; }
+  .mtg-t { font-weight:650; font-size:13.5px; }
+  .mtg-s { font-size:12px; color:var(--muted); max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mtg-r { display:flex; gap:8px; align-items:center; flex:0 0 auto; }
+  .su-datenav { display:flex; align-items:center; gap:10px; margin-bottom:13px; flex-wrap:wrap; }
+  .su-arrow { width:32px; height:32px; border-radius:9px; border:1px solid var(--line); background:var(--surface); color:var(--txt2); cursor:pointer; font-size:17px; }
+  .su-arrow:hover:not(:disabled){ background:var(--accent-weak); color:var(--accent); border-color:var(--accent-line); }
+  .su-arrow:disabled { opacity:.4; cursor:default; }
+  .su-date { font-size:14px; display:flex; align-items:center; gap:8px; }
+  .su-today { font-size:10.5px; font-weight:700; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 8px; }
+  .su-add { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .su-in { margin:0; }
+  .su-grow { flex:1; min-width:180px; }
+  .su-overall { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px 15px; margin-bottom:14px; box-shadow:var(--shadow); }
+  .su-overall-top { display:flex; justify-content:space-between; font-size:12.5px; font-weight:600; margin-bottom:8px; }
+  .su-bar { height:9px; border-radius:6px; background:var(--line2); overflow:hidden; }
+  .su-bar i { display:block; height:100%; background:linear-gradient(90deg,#7381e6,#21ba72); border-radius:6px; transition:width .5s; }
+  .su-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; }
+  .su-member { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px; box-shadow:var(--shadow); }
+  .su-mhead { display:flex; align-items:center; gap:9px; margin-bottom:9px; }
+  .su-mname { font-weight:650; font-size:14px; flex:1; }
+  .su-mstat { font-size:11.5px; font-weight:700; color:var(--txt2); }
+  .su-mstat.full { color:var(--good); }
+  .su-mbar { height:6px; border-radius:4px; background:var(--line2); overflow:hidden; margin-bottom:11px; }
+  .su-mbar i { display:block; height:100%; background:linear-gradient(90deg,#7381e6,#21ba72); }
+  .su-tasks { display:flex; flex-direction:column; gap:7px; }
+  .su-task { display:flex; align-items:flex-start; gap:9px; }
+  .su-check { position:relative; flex:0 0 auto; cursor:pointer; width:18px; height:18px; }
+  .su-check input { position:absolute; opacity:0; width:18px; height:18px; margin:0; cursor:pointer; }
+  .su-box { display:block; width:18px; height:18px; border:1.5px solid var(--line); border-radius:6px; transition:all .12s; }
+  .su-check input:checked + .su-box { background:var(--good) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E") center/12px no-repeat; border-color:var(--good); }
+  .su-body { flex:1; min-width:0; }
+  .su-txt { font-size:13px; }
+  .su-task.done .su-txt { color:var(--muted); }
+  .su-dash { display:inline-block; font-size:11px; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:6px; padding:1px 7px; margin-top:3px; }
+  .su-del { border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:16px; line-height:1; padding:0 2px; }
+  .su-del:hover { color:var(--danger); }
+  .su-bot { margin-top:16px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:2px 15px; }
+  .su-bot summary { cursor:pointer; font-size:12.5px; font-weight:600; padding:11px 0; color:var(--txt2); }
+  .su-bot-body { font-size:12px; color:var(--muted); padding-bottom:13px; line-height:1.6; }
+  .su-bot pre { background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:11px; overflow-x:auto; font-size:11.5px; color:var(--txt); margin:8px 0; }
+  .su-bot code { background:var(--surface2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:11px; }
   /* Tabs */
   .tabs { display:flex; gap:4px; margin-top:14px; }
   .tab { font:inherit; font-size:13px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 14px; cursor:pointer; }
@@ -1276,6 +1421,7 @@ function renderPage(data, opts) {
       <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
       <button class="side-item" data-tab="assign"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0zM7 8h10"/></svg><span>Assign</span></button>
       <button class="side-item" data-tab="checklist"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L20 6"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Requests</span></button>
+      <button class="side-item" data-tab="standup"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 8a4 4 0 0 0-4 4v2a4 4 0 0 0 8 0v-2a4 4 0 0 0-4-4z"/><path d="M5 12a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg><span>Standup</span></button>
     </nav>
     <div class="side-foot"><button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button></div>
   </aside>
@@ -1300,6 +1446,7 @@ function renderPage(data, opts) {
 <section class="tabview" id="tab-overview">
 <div class="legend" id="legend"></div>
 <div class="kpis" id="kpis"></div>
+<div class="eod" id="eod"></div>
 <div class="insights" id="insights"></div>
 
 ${opts.manualEnabled ? `
@@ -1383,6 +1530,7 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
 <section class="tabview" id="tab-checklist" hidden></section>
+<section class="tabview" id="tab-standup" hidden></section>
 
 </div></main></div>
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
@@ -2413,11 +2561,12 @@ let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients','assign','checklist'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','team','clients','assign','checklist','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
   if (tab === 'assign') renderAssignTab();
   if (tab === 'checklist') renderChecklistTab();
+  if (tab === 'standup') renderStandupTab();
 }
 // ── Checklist / proof tab: every client feedback as a tick-off item with proof ──
 async function toggleFbDone(id, fbId, checked, el){
@@ -2537,6 +2686,86 @@ function renderAssignTab(){
     el.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => { const row=b.closest('.asg-row'), sel=row.querySelector('.asg-sel'); assignOne(b.dataset.assign, sel?sel.value:''); });
   }
 }
+// ── Standup / EOD: per-member daily to-dos ────────────────────────────────
+let TASKS = Array.isArray(DATA.tasks) ? DATA.tasks : [];
+let MEETING = (DATA.meeting && typeof DATA.meeting==='object') ? DATA.meeting : {};
+function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function shiftISO(iso, days){ const p=String(iso).split('-').map(Number); const d=new Date(p[0],p[1]-1,p[2]); d.setDate(d.getDate()+days); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function prettyDay(iso){ const p=String(iso).split('-').map(Number); const d=new Date(p[0],p[1]-1,p[2]); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
+function dashName(id){ const d=DATA.dashboards.find(x=>x.id===id); return d?d.name:''; }
+let standupDate = todayISO();
+function tasksFor(date){ return TASKS.filter(t => t.date===date); }
+function memberStats(list){ const done=list.filter(t=>t.done).length, total=list.length; return { done, total, pct: total?Math.round(done/total*100):0 }; }
+function groupByMember(list){ const g={}; list.forEach(t=>{ (g[t.member]=g[t.member]||[]).push(t); }); return g; }
+
+async function taskAdd(o){ const r=await api('POST','/api/tasks',{action:'add',...o}); if(r.ok){ const j=await r.json().catch(()=>({})); if(Array.isArray(j.tasks)) TASKS.push(...j.tasks); } return r; }
+async function taskToggle(t, done){ const r=await api('POST','/api/tasks',{action:'toggle',id:t.id,done}); if(r.ok){ t.done=done; t.doneAt=done?new Date().toISOString():null; } return r; }
+async function taskDelete(id){ const r=await api('POST','/api/tasks',{action:'delete',id}); if(r.ok){ TASKS=TASKS.filter(x=>x.id!==id); } return r; }
+async function meetingSave(link){ const r=await api('POST','/api/meeting',{link}); if(r.ok){ MEETING.link=link; } return r; }
+
+function renderEod(){
+  const el = G('eod'); if(!el) return;
+  const today = todayISO(), list = tasksFor(today), st = memberStats(list);
+  const g = groupByMember(list);
+  const members = Object.keys(g).sort((a,b)=>{ const sb=memberStats(g[b]), sa=memberStats(g[a]); return (sb.total-sa.total)||(sb.pct-sa.pct)||a.localeCompare(b); });
+  const head = \`<div class="eod-head"><div><h3>📊 Today's work · EOD</h3><div class="eod-sub">\${prettyDay(today)} · what each member did today</div></div>\${list.length?\`<div class="eod-total">\${st.done}/\${st.total} done · \${st.pct}%</div>\`:''}</div>\`;
+  if(!list.length){ el.innerHTML = head + \`<div class="eod-empty">No standup tasks logged today yet — open the <b>Standup</b> tab to add them, or let the meeting bot push them in.</div>\`; return; }
+  const rows = members.map(m => { const items=g[m], ms=memberStats(items);
+    const chips = items.filter(t=>t.done).map(t=>\`<span class="eod-chip done">✓ \${esc(t.text)}</span>\`).join('')
+                + items.filter(t=>!t.done).map(t=>\`<span class="eod-chip">\${esc(t.text)}</span>\`).join('');
+    return \`<div class="eod-row">
+      <div class="eod-who">\${avatar(m)}<div class="eod-wn"><div class="eod-name">\${esc(m)}</div><div class="eod-mini">\${ms.done} of \${ms.total} done</div></div></div>
+      <div class="eod-prog"><div class="eod-bar \${ms.pct===100?'full':''}"><i style="width:\${ms.pct}%"></i></div><span class="eod-pct">\${ms.pct}%</span></div>
+      <div class="eod-tasks">\${chips}</div>
+    </div>\`;
+  }).join('');
+  el.innerHTML = head + \`<div class="eod-list">\${rows}</div>\`;
+}
+
+function renderStandupTab(){
+  const el = G('tab-standup'); if(!el) return;
+  const list = tasksFor(standupDate), st = memberStats(list), g = groupByMember(list);
+  const members = Object.keys(g).sort((a,b)=>a.localeCompare(b));
+  const isToday = standupDate===todayISO();
+  const meetingCard = \`<div class="mtg-card"><div class="mtg-l"><div class="mtg-ico">🎥</div><div><div class="mtg-t">Team meeting</div><div class="mtg-s">\${MEETING.link?esc(MEETING.link):'No meeting link set yet'}</div></div></div>
+    <div class="mtg-r">\${MEETING.link?\`<a class="btn sm" href="\${esc(MEETING.link)}" target="_blank" rel="noopener">Join ↗</a>\`:''}\${CFG.manualEnabled?\`<button class="btn ghost sm" id="mtgEdit">\${MEETING.link?'Edit link':'+ Add link'}</button>\`:''}</div></div>\`;
+  const dateNav = \`<div class="su-datenav"><button class="su-arrow" data-daynav="-1" title="Previous day">‹</button>
+    <div class="su-date"><b>\${prettyDay(standupDate)}</b>\${isToday?'<span class="su-today">Today</span>':''}</div>
+    <button class="su-arrow" data-daynav="1" \${isToday?'disabled':''} title="Next day">›</button>
+    \${!isToday?'<button class="btn ghost sm" data-daynav="today">Jump to today</button>':''}</div>\`;
+  const composer = CFG.manualEnabled ? \`<div class="su-add">
+    <input id="suMember" class="su-in" list="ownersList" placeholder="Team member" autocomplete="off">
+    <input id="suText" class="su-in su-grow" placeholder="What needs to be done…">
+    <select id="suDash" class="su-in"><option value="">(link a dashboard — optional)</option>\${DATA.dashboards.map(d=>\`<option value="\${esc(d.id)}">\${esc(d.name)}</option>\`).join('')}</select>
+    <button class="btn sm" id="suAdd">+ Add</button></div>\` : '';
+  const overall = list.length ? \`<div class="su-overall"><div class="su-overall-top"><span>Everyone · \${prettyDay(standupDate)}</span><span>\${st.done}/\${st.total} done · \${st.pct}%</span></div><div class="su-bar"><i style="width:\${st.pct}%"></i></div></div>\` : '';
+  const cards = members.length ? members.map(m => { const items=g[m], ms=memberStats(items);
+    const rows = items.map(t => \`<div class="su-task \${t.done?'done':''}"><label class="su-check"><input type="checkbox" \${t.done?'checked':''} data-task="\${esc(t.id)}"><span class="su-box"></span></label>
+      <div class="su-body"><div class="su-txt">\${esc(t.text)}</div>\${(t.dashboardName||t.dashboardId)?\`<span class="su-dash">\${esc(t.dashboardName||dashName(t.dashboardId))}</span>\`:''}</div>
+      \${CFG.manualEnabled?\`<button class="su-del" data-taskdel="\${esc(t.id)}" title="Remove">×</button>\`:''}</div>\`).join('');
+    return \`<div class="su-member"><div class="su-mhead">\${avatar(m)}<div class="su-mname">\${esc(m)}</div><div class="su-mstat \${ms.pct===100?'full':''}">\${ms.done}/\${ms.total} · \${ms.pct}%</div></div>
+      <div class="su-mbar"><i style="width:\${ms.pct}%"></i></div><div class="su-tasks">\${rows}</div></div>\`;
+  }).join('') : \`<div class="empty">No to-dos for \${prettyDay(standupDate)} yet.\${CFG.manualEnabled?' Add one above, or your meeting bot can push them in.':''}</div>\`;
+  const botHelp = CFG.manualEnabled ? \`<details class="su-bot"><summary>🤖 Connect your meeting-transcription bot</summary><div class="su-bot-body">After the bot transcribes the meeting, have it POST each person's generated to-dos to <code>/api/tasks</code>:<pre>POST /api/tasks
+{
+  "action": "add",
+  "date": "\${standupDate}",
+  "tasks": [
+    { "member": "Naval",   "text": "Fix the P&L tab on the Beas dashboard" },
+    { "member": "Aashita", "text": "Implement client change #3" }
+  ]
+}</pre>\${CFG.editProtected?'Include the header <code>x-edit-token: YOUR_TOKEN</code>.':'No auth header is needed (no edit token is configured).'}</div></details>\` : '';
+  el.innerHTML = \`<div class="tabhead"><h2>🎙️ Daily Standup</h2><div class="sub">Each member's work for the day — what they did and how much</div></div>
+    \${meetingCard}\${dateNav}\${composer}\${overall}<div class="su-grid">\${cards}</div>\${botHelp}
+    <datalist id="ownersList">\${ownerOptions().map(o=>\`<option value="\${esc(o)}">\`).join('')}</datalist>\`;
+  // wire
+  el.querySelectorAll('[data-daynav]').forEach(b => b.onclick = () => { const v=b.dataset.daynav; standupDate = v==='today'?todayISO():shiftISO(standupDate, +v); renderStandupTab(); });
+  el.querySelectorAll('[data-task]').forEach(cb => cb.onchange = async () => { const t=TASKS.find(x=>x.id===cb.dataset.task); if(!t) return; const want=cb.checked; const r=await taskToggle(t, want); if(!r.ok){ cb.checked=!want; alert('Could not update.'); return; } renderStandupTab(); renderEod(); });
+  el.querySelectorAll('[data-taskdel]').forEach(b => b.onclick = async () => { if(!confirm('Remove this to-do?')) return; const r=await taskDelete(b.dataset.taskdel); if(!r.ok){ alert('Could not remove.'); return; } renderStandupTab(); renderEod(); });
+  const me=G('mtgEdit'); if(me) me.onclick = async () => { const v=prompt('Team meeting link (Google Meet / Zoom):', MEETING.link||''); if(v===null) return; const r=await meetingSave(v.trim()); if(r.ok) renderStandupTab(); else alert('Could not save the link.'); };
+  const add=G('suAdd'); if(add) add.onclick = async () => { const member=G('suMember').value.trim(), text=G('suText').value.trim(), dashId=G('suDash').value; if(!member){ alert('Pick a team member.'); return; } if(!text){ alert('Enter what needs to be done.'); return; } const r=await taskAdd({ member, text, date:standupDate, dashboardId:dashId, dashboardName:dashId?dashName(dashId):'', source:'manual' }); if(r.ok){ renderStandupTab(); renderEod(); } else alert('Could not add the to-do.'); };
+}
+
 document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
 
 // Click a card → open its detail modal (buttons/chips handled first).
@@ -3240,6 +3469,7 @@ document.getElementById('prioToggle').onclick = () => {
 };
 renderInsights();
 render();
+renderEod();
 
 // Load the live Muns directory into the Clients + Assigned-to dropdowns.
 // Clients come from the list of organizations; the team comes from the munshot org.
