@@ -86,11 +86,11 @@ export function fixTypos(s) {
 }
 
 const clean = (s) => fixTypos(String(s ?? '').replace(/\s+/g, ' ').trim());
-// Fold "Not Assigned" / "-" / "(Priority)" / status-like junk into the canonical
-// Unassigned bucket. Real names never start with "(" or "-", so those are junk.
+// Fold "Not Assigned" / "-" / "(Priority)" / status-like junk into a blank
+// owner. Real names never start with "(" or "-", so those are junk.
 const ownerName = (raw) => {
   const o = clean(raw);
-  return (!o || /^[(\-]/.test(o) || /^(not assigned|unassigned|none|na|n\/a|-+|tbd|priority)$/i.test(o)) ? 'Unassigned' : o;
+  return (!o || /^[(\-]/.test(o) || /^(not assigned|unassigned|none|na|n\/a|-+|tbd|priority)$/i.test(o)) ? '' : o;
 };
 
 // A blank-ish cell: empty, "-", "n/a", etc.
@@ -226,8 +226,7 @@ export function rowToDashboard(cells) {
   // actual URL spilled into a later column.
   const meetingNote = !blank(link) && !/^https?:\/\//i.test(link.trim()) ? clean(link) : '';
   const { state, isLive } = classify({ status, liveRaw });
-  const customers = splitCustomers(customer);
-  const customerList = customers.length ? customers : ['Unassigned'];
+  const customerList = splitCustomers(customer);
 
   return {
     serial,
@@ -262,8 +261,7 @@ export function manualToDashboard(m) {
   const liveRaw = m.liveRaw || (m.isLive ? 'Live on Munshot' : 'Not Live');
   const { state, isLive } = classify({ status: m.status, liveRaw, stage: m.stage });
   const url = String(m.meetingUrl ?? '').trim();
-  const customers = splitCustomers(m.customer);
-  const customerList = customers.length ? customers : ['Unassigned'];
+  const customerList = splitCustomers(m.customer);
   const serial = Number.parseInt(m.serial, 10);
   return {
     serial: Number.isFinite(serial) ? serial : null,

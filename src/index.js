@@ -192,7 +192,7 @@ function dailyStatusHtml(dateStr, owners, dashRows) {
     return `<tr><td style="padding:11px 12px;border-bottom:1px solid #eee2c9">
       <div style="font-weight:600;color:#16294a">${e(r.client || '—')} · ${e(r.name)}</div>
       <div style="font-size:12px;color:#7a8395;margin-top:2px">${r.done}/${r.total} changes done (${r.pct}%) · ${r.pending} pending${extra}</div>${bar}</td>
-      <td style="padding:11px 12px;border-bottom:1px solid #eee2c9;text-align:right;color:#727a8a;font-size:12px;white-space:nowrap">${e(r.owner || 'Unassigned')}</td></tr>`;
+      <td style="padding:11px 12px;border-bottom:1px solid #eee2c9;text-align:right;color:#727a8a;font-size:12px;white-space:nowrap">${e(r.owner || 'No owner')}</td></tr>`;
   }).join('');
   return `<div style="font-family:Arial,Helvetica,sans-serif;background:#faf6ec;padding:24px"><div style="max-width:660px;margin:0 auto">
     <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c9a24a;font-weight:700">Daily Status · ${e(dateStr)}</div>
@@ -224,7 +224,7 @@ async function runDailyStatus(env, trigger) {
     cur[d.id] = { total, done };
     const doneToday = Math.max(0, done - (p.done || 0)), newToday = Math.max(0, total - (p.total || 0)), pct = total ? Math.round(done / total * 100) : 0;
     dashRows.push({ id: d.id, name: d.name, client: d.customer, owner: d.owner, total, done, pending: total - done, doneToday, newToday, pct });
-    const o = d.owner || 'Unassigned', a = owners[o] || (owners[o] = { done: 0, doneToday: 0, pending: 0, total: 0 });
+    const o = d.owner || 'No owner', a = owners[o] || (owners[o] = { done: 0, doneToday: 0, pending: 0, total: 0 });
     a.done += done; a.doneToday += doneToday; a.pending += (total - done); a.total += total;
   }
   const dateStr = new Date().toISOString().slice(0, 10);
@@ -627,11 +627,11 @@ export default {
           roster[key] = roster[key].filter((n) => n !== name);
           await writeRoster(env, roster);
           // Detach the name from any app-stored dashboards so it disappears
-          // everywhere (owners → Unassigned; clients → removed from the list).
+          // everywhere (owners → blank/no owner; clients → removed from the list).
           const list = await readManual(env);
           let changed = 0;
           for (const e of list) {
-            if (type === 'owner' && (e.owner || '') === name) { e.owner = 'Unassigned'; changed++; }
+            if (type === 'owner' && (e.owner || '') === name) { e.owner = ''; changed++; }
             if (type === 'customer') {
               const parts = String(e.customer || '').split(/\s*&\s*/).map((s) => s.trim()).filter(Boolean);
               if (parts.includes(name)) { e.customer = parts.filter((p) => p !== name).join(' & '); changed++; }
@@ -805,8 +805,8 @@ function renderPage(data, opts) {
   .tag.owner-link { cursor:pointer; }
   .tag.owner-link:hover { background:var(--accent-weak); border-color:var(--accent-line); color:var(--accent); }
   /* Slide-over drawer (owner profile + team) */
-  .overlay { position:fixed; inset:0; background:var(--overlay); display:none; z-index:50; }
-  .overlay.open { display:block; }
+  .overlay { position:fixed; inset:0; background:var(--overlay); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); display:none; z-index:50; }
+  .overlay.open { display:block; animation:bgFadeIn .15s ease; }
   .drawer { position:absolute; top:0; right:0; height:100%; width:min(560px,100%); background:var(--bg); box-shadow:-8px 0 30px rgba(16,24,40,.18); overflow-y:auto; }
   .drawer-head { position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--line); padding:18px 22px; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
   .drawer-head h2 { margin:0; font-size:20px; font-weight:650; }
@@ -849,7 +849,7 @@ function renderPage(data, opts) {
   .cal-nav { border:1px solid var(--line); background:var(--surface); border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:15px; line-height:1; }
   .cal-dow { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; font-size:10px; color:var(--muted); text-align:center; margin-bottom:4px; }
   .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
-  .cal-cell { aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface); cursor:pointer; user-select:none; }
+  .cal-cell { aspect-ratio:1; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; font-size:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface); cursor:pointer; user-select:none; }
   .cal-cell.empty { border:0; background:transparent; cursor:default; }
   .cal-cell.today { outline:2px solid var(--accent); outline-offset:-2px; font-weight:700; }
   .cal-cell.present { background:var(--present-bg); border-color:var(--present-line); color:var(--present-txt); }
@@ -896,8 +896,11 @@ function renderPage(data, opts) {
   .upd-btn { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--surface); border:1px solid var(--accent-line); border-radius:7px; padding:4px 9px; cursor:pointer; }
   .upd-btn:hover { background:var(--accent-weak); }
   /* Update modal */
-  .modal-bg { position:fixed; inset:0; background:var(--overlay); display:none; z-index:60; align-items:center; justify-content:center; }
-  .modal-bg.open { display:flex; }
+  @keyframes bgFadeIn { from{ opacity:0; } to{ opacity:1; } }
+  @keyframes modalPop { from{ opacity:0; transform:translateY(10px) scale(.97); } to{ opacity:1; transform:none; } }
+  .modal-bg { position:fixed; inset:0; background:var(--overlay); backdrop-filter:blur(4px) saturate(1.1); -webkit-backdrop-filter:blur(4px) saturate(1.1); display:none; z-index:60; align-items:center; justify-content:center; }
+  .modal-bg.open { display:flex; animation:bgFadeIn .15s ease; }
+  .modal-bg.open .modal { animation:modalPop .18s cubic-bezier(.16,1,.3,1); }
   .modal { background:var(--surface); border-radius:14px; width:min(460px,94vw); max-height:88vh; overflow-y:auto; box-shadow:0 20px 50px rgba(16,24,40,.25); }
   .modal-head { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
   .modal-head h3 { margin:0; font-size:16px; }
@@ -1033,7 +1036,7 @@ function renderPage(data, opts) {
   .panel-title { font-weight:650; font-size:14px; margin-bottom:12px; }
   .panel.open { display:block; }
   .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
-  .form-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .form-grid label, .form-grid .field { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
   .panel-actions { margin-top:12px; display:flex; gap:10px; align-items:center; }
   .msg { font-size:12.5px; }
   .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
@@ -1140,15 +1143,18 @@ function renderPage(data, opts) {
   .card.prio::after { content:"★ PRIORITY"; position:absolute; top:0; right:0; font-size:8.5px; font-weight:800; letter-spacing:.06em; color:#92670b; background:#fef3c7; padding:2px 7px; border-bottom-left-radius:8px; }
   [data-theme="dark"] .card.prio::after { color:#fcd34d; background:#2a2410; }
   /* Add/Edit modal form */
-  .modal-form { width:min(680px,95vw); }
-  .modal-form .form-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
-  .modal-form .form-grid label.wide { grid-column:1 / -1; }
-  .modal-form .form-grid label { margin:0; }
-  .modal-form .form-grid input, .modal-form .form-grid select { width:100%; margin:0; }
-  .form-grid .hint { color:var(--muted); font-weight:400; font-size:10.5px; }
+  .modal-form { position:relative; width:min(680px,95vw); max-height:88vh; overflow:hidden; display:flex; flex-direction:column; }
+  .modal-form::before { content:""; position:absolute; top:0; left:0; right:0; height:4px; background:var(--grad); border-radius:14px 14px 0 0; z-index:1; }
+  .modal-form .modal-head { flex:0 0 auto; background:var(--grad-soft); border-radius:14px 14px 0 0; }
+  .modal-form .modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  .modal-form .form-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
+  .modal-form .form-grid label.wide, .modal-form .form-grid .field.wide { grid-column:1 / -1; }
+  .modal-form .form-grid label, .modal-form .form-grid .field { margin:0; font-weight:600; }
+  .modal-form .form-grid input, .modal-form .form-grid select { width:100%; margin:0; font-weight:400; }
   .rm-client { width:34px; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:8px; cursor:pointer; font-size:15px; }
   .rm-client:hover { color:var(--danger); border-color:var(--danger-line); }
-  .modal-form .panel-actions { margin-top:16px; }
+  .modal-form .panel-actions { position:sticky; bottom:-20px; z-index:2; margin:18px -20px -20px; padding:14px 20px;
+    background:var(--surface); border-top:1px solid var(--line); border-radius:0 0 14px 14px; }
   /* Priority filter button */
   .btn.prio-btn.on { background:linear-gradient(135deg,#f59e0b,#f97316); box-shadow:0 2px 10px rgba(245,158,11,.35); }
   /* Stage progress bar on cards */
@@ -1216,26 +1222,31 @@ function renderPage(data, opts) {
   .date-lbl { flex:1; font-variant-numeric:tabular-nums; }
   .date-lbl.muted { color:var(--muted); }
   .date-trigger .ms-caret { width:12px; height:12px; color:var(--muted); flex:0 0 auto; }
-  .cal-menu { left:0; right:auto; width:290px; max-height:none; overflow:visible; padding:0; }
+  .date-clear { border:0; background:var(--line2); color:var(--muted); width:19px; height:19px; border-radius:50%;
+    display:grid; place-items:center; cursor:pointer; font-size:13px; line-height:1; flex:0 0 auto; padding:0; }
+  .date-clear[hidden] { display:none; }
+  .date-clear:hover { background:var(--danger-bg); color:var(--danger); }
+  .cal-menu { left:0; right:auto; width:296px; max-height:none; overflow:visible; padding:0; }
   .datepick.open > .date-wrap > .cal-menu { display:block; }
   .cal { padding:12px 13px 13px; }
-  .cal-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; }
-  .cal-title { font-size:13.5px; font-weight:700; color:var(--txt); }
+  .cal-head { display:flex; align-items:center; justify-content:space-between;
+    margin:-12px -13px 11px; padding:12px 13px 10px; background:var(--grad-soft); border-radius:11px 11px 0 0; }
+  .cal-title { font-size:14px; font-weight:800; color:var(--accent); letter-spacing:-.01em; }
   .cal-nav { display:inline-flex; gap:5px; }
-  .cal-nav button { width:28px; height:28px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--txt2); cursor:pointer; font-size:15px; line-height:1; display:grid; place-items:center; }
-  .cal-nav button:hover { background:var(--accent-weak); color:var(--accent); border-color:var(--accent-line); }
-  .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
-  .cal-dow { font-size:10px; font-weight:700; color:var(--muted); text-align:center; padding:3px 0 5px; text-transform:uppercase; letter-spacing:.02em; }
-  .cal-day { aspect-ratio:1; border:0; background:transparent; border-radius:9px; font:inherit; font-size:12.5px; color:var(--txt); cursor:pointer; display:grid; place-items:center; transition:background .1s; }
-  .cal-day:hover { background:var(--accent-weak); }
+  .cal-nav button { width:26px; height:26px; border-radius:8px; border:1px solid var(--accent-line); background:var(--surface); color:var(--accent); cursor:pointer; font-size:15px; line-height:1; display:grid; place-items:center; transition:background .12s,color .12s,transform .12s; }
+  .cal-nav button:hover { background:var(--grad); color:#fff; border-color:transparent; transform:translateY(-1px); }
+  .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+  .cal-dow { font-size:10px; font-weight:800; color:var(--muted); text-align:center; padding:3px 0 7px; text-transform:uppercase; letter-spacing:.03em; }
+  .cal-dow:nth-child(7n+1), .cal-dow:nth-child(7n) { color:var(--accent2); }
+  .cal-day { aspect-ratio:1; border:0; margin:0; padding:0; min-width:0; width:100%; appearance:none; -webkit-appearance:none;
+    background:transparent; border-radius:9px; font:inherit; font-size:12.5px; color:var(--txt); cursor:pointer;
+    display:grid; place-items:center; transition:background .12s,transform .12s,color .12s; }
+  .cal-day:nth-child(7n+1):not(.other), .cal-day:nth-child(7n):not(.other) { background:color-mix(in srgb, var(--accent2) 9%, transparent); }
+  .cal-day:hover:not(.other):not(.sel) { background:var(--accent-weak); color:var(--accent); transform:scale(1.08); }
   .cal-day.other { color:transparent; pointer-events:none; }
-  .cal-day.today { box-shadow:inset 0 0 0 1.5px var(--accent-line); font-weight:700; }
-  .cal-day.sel { background:var(--accent); color:#fff; font-weight:700; }
-  .cal-day.sel:hover { background:var(--accent); }
-  .df-quick { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-  .df-quick button { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak);
-    border:1px solid var(--accent-line); border-radius:999px; padding:4px 11px; cursor:pointer; transition:background .12s,color .12s; }
-  .df-quick button:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .cal-day.today { box-shadow:inset 0 0 0 2px var(--accent); color:var(--accent); font-weight:800; }
+  .cal-day.sel { background:var(--grad); color:#fff; font-weight:800; box-shadow:0 3px 12px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .cal-day.sel:hover { background:var(--grad); color:#fff; transform:scale(1.08); }
   /* Visit button on dashboard cards */
   .visit-btn { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; font-weight:650;
     color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line);
@@ -1471,7 +1482,7 @@ ${opts.manualEnabled ? `
     <input type="hidden" id="f_id">
     <div class="form-grid">
       <label class="wide">Dashboard name *<input id="f_name" placeholder="e.g. Revenue Tracker"></label>
-      <label class="wide">Clients <span class="hint">(pick one or more — tick to select)</span>
+      <label class="wide">Clients
         <div class="dd" id="clientDD">
           <div class="ms-control" id="clientCtl">
             <span id="clientChips"></span>
@@ -1491,26 +1502,26 @@ ${opts.manualEnabled ? `
       <label>Stage<select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
-      <label class="wide">Dashboard link <span class="hint">(Munshot URL — powers the "Visit" button on the card)</span><input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
-      <label class="wide">Links <span class="hint">(meetings, feedback recordings — add as many as you like)</span>
+      <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
+      <label class="wide">YouTube Links
         <div id="linkRows"></div>
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
       </label>
-      <label class="wide">Due date
+      <div class="field wide">Due date
         <div class="datepick" id="dueDD">
           <div class="date-wrap">
-            <button type="button" class="date-trigger" id="dueTrigger">
+            <div class="date-trigger" id="dueTrigger" role="button" tabindex="0">
               <svg class="df-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
               <span id="dueLabel" class="date-lbl muted">Select a date</span>
+              <span class="date-clear" id="dueClear" role="button" tabindex="-1" title="Clear date" hidden>×</span>
               <svg class="ms-caret" style="position:static" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
+            </div>
             <input type="hidden" id="f_due">
             <div class="dd-menu cal-menu" id="dueCal"></div>
           </div>
-          <div class="df-quick"><button type="button" data-due="0">Today</button><button type="button" data-due="7">+1 week</button><button type="button" data-due="30">+1 month</button><button type="button" data-due="clear">Clear</button></div>
         </div>
-      </label>
-      <label class="wide">Feedbacks <span class="hint">(upload many screenshots; give each its OWN description → each becomes its own PDF page)</span>
+      </div>
+      <label class="wide">Feedbacks
         <div id="fbRows"></div>
         <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
       </label>
@@ -1593,7 +1604,7 @@ function initials(name){
   return (parts[0][0] + (parts.length>1 ? parts[parts.length-1][0] : '')).toUpperCase();
 }
 function avatar(name, cls){ return \`<span class="avatar \${cls||''}" style="background:\${nameColor(name)}">\${esc(initials(name))}</span>\`; }
-function ownerTag(name){ return \`<span class="av-tag owner-link" data-owner="\${esc(name)}" title="View \${esc(name)}'s profile">\${avatar(name)}\${esc(name)}</span>\`; }
+function ownerTag(name){ return name ? \`<span class="av-tag owner-link" data-owner="\${esc(name)}" title="View \${esc(name)}'s profile">\${avatar(name)}\${esc(name)}</span>\` : ''; }
 function clientTag(name){
   const c = nameColor('c·'+name);
   return \`<span class="ctag owner-link" data-customer="\${esc(name)}" title="View \${esc(name)}" style="background:color-mix(in srgb, \${c} 16%, transparent); color:\${c}">\${esc(name)}</span>\`;
@@ -1644,7 +1655,7 @@ function card(d, n){
     </div>
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Current status</span><br>\${esc(d.status)}</div>\` : ''}
     \${fields.map(([k,v]) => \`<div class="field"><span class="label">\${k}</span><div class="val">\${esc(v)}</div></div>\`).join('')}
-    \${links.length ? \`<div class="links"><span class="label">Links</span>\${links.map(l => \`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div>\` : ''}
+    \${links.length ? \`<div class="links"><span class="label">YouTube Links</span>\${links.map(l => \`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div>\` : ''}
     \${d.updates && d.updates.length ? \`<div class="upd"><span class="label">Latest update · \${esc(d.updates[d.updates.length-1].date||'')}</span><div class="val">\${esc(d.updates[d.updates.length-1].note || SMAP[d.updates[d.updates.length-1].state]?.label || '')}</div></div>\` : ''}
     <div class="foot">
       <span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>
@@ -1706,11 +1717,11 @@ const ATT_ICN = {
 };
 // Data-driven, clickable "what needs attention" callouts.
 function attentionItems(){
-  const un = DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned').length;
+  const un = DATA.dashboards.filter(d => !d.owner).length;
   const awaiting = DATA.counts['feedback_open']||0, incorp = DATA.counts['feedback_incorp']||0, notStarted = DATA.counts['not_started']||0;
   const prio = DATA.dashboards.filter(d => d.priorityLevel>0 && d.state!=='completed').length;
   const out = [];
-  if (un) out.push({ tone:'warn', icon:ATT_ICN.user, big:un, main:'Unassigned dashboards', sub:'give them an owner', act:'assign' });
+  if (un) out.push({ tone:'warn', icon:ATT_ICN.user, big:un, main:'No owner assigned', sub:'give them an owner', act:'assign' });
   if (prio) out.push({ tone:'warn', icon:ATT_ICN.star, big:prio, main:'Priority still open', sub:'high-priority, not done yet', act:'prio' });
   if (awaiting) out.push({ tone:'accent', icon:ATT_ICN.msg, big:awaiting, main:'Awaiting client feedback', sub:'follow up with the client', act:'state:feedback_open' });
   if (out.length<3 && incorp) out.push({ tone:'accent', icon:ATT_ICN.load, big:incorp, main:'Feedback to incorporate', sub:'client changes in progress', act:'state:feedback_incorp' });
@@ -1762,7 +1773,7 @@ function rowHtml(d, n){
     <td class="tnum">\${n}</td>
     <td class="tname">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</td>
     <td>\${d.customers.map(c=>\`<span class="tchip" data-customer="\${esc(c)}">\${esc(c)}</span>\`).join(' ')}</td>
-    <td><span class="tchip" data-owner="\${esc(d.owner)}">\${esc(d.owner)}</span></td>
+    <td>\${d.owner?\`<span class="tchip" data-owner="\${esc(d.owner)}">\${esc(d.owner)}</span>\`:'<span class="tmut">—</span>'}</td>
     <td class="tstage"><span class="tdot" style="background:\${s.color}"></span>\${esc(s.label)}<div class="ttrack"><i style="width:\${pct}%;background:\${s.color}"></i></div></td>
     <td>\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:'<span class="tmut">—</span>'}</td>
     <td>\${d.isLive?'<span class="tag live">● Live</span>':'<span class="tmut">—</span>'}</td>
@@ -1813,7 +1824,7 @@ function render(){
     groups = keys.map(k => [k, list.filter(d => d.customers.includes(k))]); // a 2-client dash appears under both
   } else if (groupby === 'owner'){
     const keys = [...new Set(list.map(d => d.owner))].sort();
-    groups = keys.map(k => [k, list.filter(d => d.owner === k)]);
+    groups = keys.map(k => [k || 'No owner', list.filter(d => d.owner === k)]);
   }
 
   if (dashView === 'table'){
@@ -1947,6 +1958,7 @@ function setDue(iso){
   const lbl=G('dueLabel'); if(!lbl) return;
   if(iso){ lbl.textContent=fmtDue(iso); lbl.classList.remove('muted'); }
   else { lbl.textContent='Select a date'; lbl.classList.add('muted'); }
+  const clr=G('dueClear'); if(clr) clr.hidden = !iso;
 }
 function renderCal(){
   const cal=G('dueCal'); if(!cal||!calView) return;
@@ -2098,13 +2110,12 @@ if (CFG.manualEnabled){
     setLinks(cur.concat({ label: nextLabel, url:'' }));
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
-  if (G('dueTrigger')) G('dueTrigger').onclick = (e) => { e.preventDefault(); G('dueDD').classList.contains('open') ? closeCal() : openCal(); };
-  document.querySelectorAll('.df-quick [data-due]').forEach(b => b.onclick = () => {
-    if (b.dataset.due === 'clear'){ setDue(''); return; }
-    const dt = new Date(); dt.setDate(dt.getDate() + (+b.dataset.due));
-    setDue(isoOf(dt.getFullYear(), dt.getMonth(), dt.getDate()));
-    if (G('dueDD').classList.contains('open')){ calView={y:dt.getFullYear(), m:dt.getMonth()}; renderCal(); }
-  });
+  if (G('dueTrigger')){
+    const toggleCal = () => { G('dueDD').classList.contains('open') ? closeCal() : openCal(); };
+    G('dueTrigger').onclick = toggleCal;
+    G('dueTrigger').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggleCal(); } };
+  }
+  if (G('dueClear')) G('dueClear').onclick = (e) => { e.stopPropagation(); setDue(''); closeCal(); };
   G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
@@ -2388,7 +2399,7 @@ function rosterDelete(type, name, total){
     e.stopPropagation();
     const what = type === 'owner' ? 'team member' : 'client';
     const warn = total > 0
-      ? \`Delete \${what} "\${name}"?\\n\\nOn \${total} dashboard\${total!==1?'s':''}. \${type==='owner'?'Those become Unassigned.':'Removed from those dashboards.'}\`
+      ? \`Delete \${what} "\${name}"?\\n\\nOn \${total} dashboard\${total!==1?'s':''}. \${type==='owner'?'Those lose their owner.':'Removed from those dashboards.'}\`
       : \`Delete \${what} "\${name}"?\`;
     if (!confirm(warn)) return;
     const res = await api('DELETE', \`/api/roster?type=\${type}&name=\${encodeURIComponent(name)}\`);
@@ -2490,7 +2501,7 @@ function openDetail(id){
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
       <div class="dgrid">
-        \${factCell('Owner', esc(d.owner))}
+        \${factCell('Owner', d.owner ? esc(d.owner) : '—')}
         \${factCell('Client(s)', esc(d.customer))}
         \${factCell('Due date', d.dueDate?esc(d.dueDate):'—')}
         \${factCell('Priority', d.priorityLevel?('P'+d.priorityLevel):'—')}
@@ -2500,7 +2511,7 @@ function openDetail(id){
       \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
       \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
       \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
-      \${links.length?\`<div class="dsec"><h4>Meetings & links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
+      \${links.length?\`<div class="dsec"><h4>YouTube Links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
       <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
       \${d.improvement&&d.improvement!=='-'?\`<div class="dsec"><h4>Improvements</h4><div class="dnote">\${esc(d.improvement)}</div></div>\`:''}
       \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
@@ -2615,7 +2626,7 @@ let ckSearch = '', ckClient = '';
 function renderChecklistTab(){
   const el = G('tab-checklist'), ed = CFG.manualEnabled;
   const reqs = [];
-  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => reqs.push({ d, f, client:(d.customers && d.customers[0]) || 'Unassigned', owner:d.owner||'Unassigned' })));
+  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => reqs.push({ d, f, client:(d.customers && d.customers[0]) || 'No client', owner:d.owner||'' })));
   const clients = [...new Set(reqs.map(r => r.client))].sort();
   const q = ckSearch.trim().toLowerCase();
   const fil = reqs.filter(r => (!ckClient || r.client===ckClient) && (!q || ((r.f.label||'')+' '+(r.f.text||'')+' '+r.client+' '+r.d.name).toLowerCase().indexOf(q)>=0));
@@ -2625,7 +2636,7 @@ function renderChecklistTab(){
     const f=r.f, d=r.d, editable = ed && d.source==='manual';
     const proof = (f.files||[]).slice(0,5).map(x => '<a class="rq-pf" href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener" title="'+esc(x.name||'proof')+'">'+((x.type||'').startsWith('image/')?'🖼':'📄')+'</a>').join('');
     return '<div class="rq-card'+(f.implemented?' rq-done':'')+'">'
-      + '<div class="rq-ctop"><span class="rq-cl"><span class="rq-dot" style="background:'+nameColor('c·'+r.client)+'"></span>'+esc(r.client)+'</span><span class="rq-av" title="'+esc(r.owner)+'">'+avatar(r.owner)+'</span></div>'
+      + '<div class="rq-ctop"><span class="rq-cl"><span class="rq-dot" style="background:'+nameColor('c·'+r.client)+'"></span>'+esc(r.client)+'</span>'+(r.owner?'<span class="rq-av" title="'+esc(r.owner)+'">'+avatar(r.owner)+'</span>':'')+'</div>'
       + '<div class="rq-ttl">'+esc(f.label||'Change')+'</div>'
       + (f.text?'<div class="rq-txt">'+esc(f.text)+'</div>':'')
       + '<div class="rq-dash">📊 '+esc(d.name)+'</div>'
@@ -2662,8 +2673,8 @@ function ownerLoad(name, overrides){
   return { load, active };
 }
 function loadStatus(load, active){ if (active===0) return ['free','Free']; if (load>=CAP||active>=3) return ['full','Full']; if (load>=1.6) return ['busy','Busy']; return ['ok','Open']; }
-function assignOwners(){ return DATA.owners.filter(o => o && o!=='Unassigned'); }
-function unassignedDashboards(){ return DATA.dashboards.filter(d => !d.owner || d.owner==='Unassigned'); }
+function assignOwners(){ return DATA.owners.filter(Boolean); }
+function unassignedDashboards(){ return DATA.dashboards.filter(d => !d.owner); }
 function recommendOwner(overrides){
   const owners = assignOwners(); if (!owners.length) return null;
   let best=null, bestLoad=Infinity;
@@ -2701,7 +2712,7 @@ function renderAssignTab(){
   el.innerHTML = \`<div class="tabhead"><h2>⚖️ Assign</h2><div class="sub">Workload-balanced · \${un.length} unassigned · least-loaded teammate gets the next one</div></div>
     \${CFG.manualEnabled && un.length ? \`<div class="roster-add"><button class="btn" id="autoAll">⚡ Auto-assign all \${un.length}</button><span class="sub" style="align-self:center">picks the lightest plate for each dashboard</span></div>\` : ''}
     <div class="section-t">Team workload</div><div class="wl-grid">\${board}</div>
-    <div class="section-t" style="margin-top:18px">Unassigned dashboards</div>\${queue}\`;
+    <div class="section-t" style="margin-top:18px">Needs an owner</div>\${queue}\`;
   if (CFG.manualEnabled){
     const aa = G('autoAll'); if (aa) aa.onclick = () => autoAssignAll(aa);
     el.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => { const row=b.closest('.asg-row'), sel=row.querySelector('.asg-sel'); assignOne(b.dataset.assign, sel?sel.value:''); });

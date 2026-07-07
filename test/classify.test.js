@@ -46,7 +46,7 @@ test('rowToDashboard skips spreadsheet noise', () => {
   assert.equal(rowToDashboard(['', 'No serial', 'Cust']), null);                  // no serial
   const d = rowToDashboard(['7', 'Portfolio monitoring', 'Vimana Capital', '', 'Not Live', 'Pending', '-', 'Pending Call', 'Need to take details from clients', '-', '']);
   assert.equal(d.serial, 7);
-  assert.equal(d.owner, 'Unassigned');
+  assert.equal(d.owner, '');
   assert.equal(d.state, 'not_started'); // "need to take details" → waiting → not started
 });
 
