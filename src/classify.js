@@ -282,6 +282,7 @@ export function manualToDashboard(m) {
     state,
     links: normalizeLinks(m.links, url),
     meetingUrl: (normalizeLinks(m.links, url)[0] || {}).url || '',
+    dashboardUrl: String(m.dashboardUrl ?? '').trim(),
     meetingNote: '',
     lastUpdated: clean(m.lastUpdated),
     note: clean(m.note),

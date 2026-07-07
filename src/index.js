@@ -263,6 +263,7 @@ export default {
             improvement: body.improvement || '',
             feedback: body.feedback || '',
             meetingUrl: body.meetingUrl || '',
+            dashboardUrl: body.dashboardUrl || '',
             links: Array.isArray(body.links) ? body.links : [],
             lastUpdated: body.lastUpdated || new Date().toLocaleDateString('en-GB'),
             note: body.note || '',
@@ -286,7 +287,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -1138,6 +1139,21 @@ function renderPage(data, opts) {
   .ms-caret { position:absolute; right:12px; top:14px; width:12px; height:12px;
     pointer-events:none; color:var(--muted); }
   .combo-input { padding-right:30px !important; }
+  /* Enhanced due-date field */
+  .datefield { position:relative; }
+  .datefield .df-ico { position:absolute; left:11px; top:11px; width:16px; height:16px; color:var(--accent); pointer-events:none; z-index:1; }
+  .modal-form .form-grid .datefield input[type=date] { width:100%; padding-left:36px; font-variant-numeric:tabular-nums; }
+  .datefield input[type=date]::-webkit-calendar-picker-indicator { opacity:0; position:absolute; left:0; top:0; width:100%; height:100%; cursor:pointer; }
+  .df-quick { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+  .df-quick button { font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak);
+    border:1px solid var(--accent-line); border-radius:999px; padding:4px 11px; cursor:pointer; transition:background .12s,color .12s; }
+  .df-quick button:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+  /* Visit button on dashboard cards */
+  .visit-btn { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; font-weight:650;
+    color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line);
+    border-radius:999px; padding:4px 11px; text-decoration:none; white-space:nowrap; transition:background .12s,color .12s; }
+  .visit-btn:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .foot-actions { display:inline-flex; align-items:center; gap:8px; }
   /* Tabs */
   .tabs { display:flex; gap:4px; margin-top:14px; }
   .tab { font:inherit; font-size:13px; font-weight:600; color:var(--muted); background:none; border:0; border-bottom:2.5px solid transparent; padding:8px 14px; cursor:pointer; }
@@ -1319,27 +1335,25 @@ ${opts.manualEnabled ? `
           <div class="dd-menu" id="ownerMenu"></div>
         </div>
       </label>
-      <label>Stage <span class="hint">(drives progress)</span><select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
+      <label>Stage<select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
+      <label class="wide">Dashboard link <span class="hint">(Munshot URL — powers the "Visit" button on the card)</span><input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
       <label class="wide">Links <span class="hint">(meetings, feedback recordings — add as many as you like)</span>
         <div id="linkRows"></div>
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
       </label>
-      <label>Due date <span class="hint">(pick from calendar)</span><input type="date" id="f_due" onclick="try{this.showPicker()}catch(e){}" onfocus="try{this.showPicker()}catch(e){}"></label>
-      <label class="wide">Manual status <span class="hint">(handwritten — where it really stands)</span><textarea id="f_manual" rows="2" placeholder="e.g. UI 80% done, waiting on Chiraag's data file"></textarea></label>
-      <label class="wide">Original client requirement <span class="hint">(summary + upload PDF / photo)</span>
-        <input id="f_req" placeholder="short requirement summary">
-        <div class="filebox" id="reqFiles"></div>
-        <button class="btn ghost sm" id="addReqFile" type="button">📎 Upload requirement file</button>
+      <label class="wide">Due date
+        <div class="datefield">
+          <svg class="df-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <input type="date" id="f_due" onclick="try{this.showPicker()}catch(e){}" onfocus="try{this.showPicker()}catch(e){}">
+          <div class="df-quick"><button type="button" data-due="0">Today</button><button type="button" data-due="7">+1 week</button><button type="button" data-due="30">+1 month</button><button type="button" data-due="clear">Clear</button></div>
+        </div>
       </label>
       <label class="wide">Feedbacks <span class="hint">(upload many screenshots; give each its OWN description → each becomes its own PDF page)</span>
         <div id="fbRows"></div>
         <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
       </label>
-      <label>Improvements<input id="f_imp" placeholder="optional"></label>
-      <label>Current status note<input id="f_status" placeholder="optional, e.g. needs QA"></label>
-      <label class="wide">Notes<input id="f_note" placeholder="optional"></label>
       <input type="hidden" id="f_meeting">
     </div>
     <div class="panel-actions">
@@ -1472,7 +1486,10 @@ function card(d, n){
     \${d.updates && d.updates.length ? \`<div class="upd"><span class="label">Latest update · \${esc(d.updates[d.updates.length-1].date||'')}</span><div class="val">\${esc(d.updates[d.updates.length-1].note || SMAP[d.updates[d.updates.length-1].state]?.label || '')}</div></div>\` : ''}
     <div class="foot">
       <span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>
-      \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
+      <div class="foot-actions">
+        \${d.dashboardUrl ? \`<a class="visit-btn" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : ''}
+        \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
+      </div>
     </div>
   </div>\`;
 }
@@ -1790,12 +1807,8 @@ function fileChip(f, removable){
   return \`<span class="fchip"><a href="\${esc(f.url||('/api/file?id='+f.id))}" target="_blank" rel="noopener">\${img?'🖼':'📄'} \${esc(f.name||'file')}</a>\${removable?\`<button type="button" class="fx" data-fx="\${esc(f.id)}">×</button>\`:''}</span>\`;
 }
 
-// Requirement files + feedbacks: edited via in-memory state, saved on submit.
-let reqFilesState = [], fbState = [];
-function renderReqFiles(){
-  const box = G('reqFiles'); box.innerHTML = reqFilesState.map(f => fileChip(f,true)).join('');
-  box.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { reqFilesState = reqFilesState.filter(x => x.id !== b.dataset.fx); renderReqFiles(); });
-}
+// Feedbacks: edited via in-memory state, saved on submit.
+let fbState = [];
 function fbRowHtml(f, i){
   return \`<div class="fb-row">
     <div class="fb-top"><input class="fb-cat" placeholder="area, e.g. Data Audit" value="\${esc(f.category||'')}"><input class="fb-label" placeholder="headline / change \${i+1}" value="\${esc(f.label||'')}"><input type="date" class="fb-date" value="\${esc(f.date||'')}">
@@ -1839,15 +1852,10 @@ function setForm(d){
   G('f_stage').value = d ? d.state : 'not_started';
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
+  G('f_url').value = d ? (d.dashboardUrl || '') : '';
   G('f_due').value = d ? (d.dueDate || '') : '';
-  G('f_manual').value = d ? (d.manualStatus || '') : '';
-  G('f_status').value = d ? d.status : '';
-  G('f_req').value = d ? d.requirements : '';
-  G('f_imp').value = d ? d.improvement : '';
-  G('f_note').value = d ? (d.note || '') : '';
-  reqFilesState = d && Array.isArray(d.requirementFiles) ? d.requirementFiles.slice() : [];
   fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
-  renderReqFiles(); renderFbRows();
+  renderFbRows();
   G('formMsg').textContent = '';
 }
 function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); }
@@ -1891,7 +1899,12 @@ if (CFG.manualEnabled){
     setLinks(cur.concat({ label: nextLabel, url:'' }));
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
-  G('addReqFile').onclick = async () => { const ups = await uploadFiles(); if (ups.length){ reqFilesState.push(...ups); renderReqFiles(); } };
+  document.querySelectorAll('.df-quick [data-due]').forEach(b => b.onclick = () => {
+    const due = G('f_due');
+    if (b.dataset.due === 'clear'){ due.value=''; return; }
+    const dt = new Date(); dt.setDate(dt.getDate() + (+b.dataset.due));
+    due.value = dt.toISOString().slice(0,10);
+  });
   G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
@@ -1906,13 +1919,8 @@ if (CFG.manualEnabled){
       liveRaw: G('f_live').value,
       links,
       meetingUrl: links[0] ? links[0].url : '',
-      status: G('f_status').value,
-      requirements: G('f_req').value,
-      improvement: G('f_imp').value,
-      note: G('f_note').value,
+      dashboardUrl: G('f_url').value.trim(),
       dueDate: G('f_due').value,
-      manualStatus: G('f_manual').value,
-      requirementFiles: reqFilesState,
       feedbacks: getFeedbacks(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
