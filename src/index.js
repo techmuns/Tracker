@@ -1038,9 +1038,29 @@ function renderPage(data, opts) {
   .msg { font-size:12.5px; }
   .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
   /* KPI hero */
-  .kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; padding:18px 28px 4px; }
-  @media (max-width:1100px){ .kpis { grid-template-columns:repeat(3,1fr); } }
-  @media (max-width:680px){ .kpis { grid-template-columns:repeat(2,1fr); } }
+  .kpis { padding:14px 28px 4px; }
+  .kpi-toolbar { display:flex; justify-content:flex-end; margin-bottom:11px; }
+  .kpi-seg { display:inline-flex; background:var(--surface2); border:1px solid var(--line); border-radius:9px; padding:2px; gap:2px; }
+  .kseg { font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:transparent; border:0; border-radius:7px; padding:5px 13px; cursor:pointer; }
+  .kseg.on { background:var(--surface); color:var(--accent); box-shadow:var(--shadow); }
+  .kpi-cards { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; }
+  @media (max-width:1100px){ .kpi-cards { grid-template-columns:repeat(3,1fr); } }
+  @media (max-width:680px){ .kpi-cards { grid-template-columns:repeat(2,1fr); } }
+  .kpi-table { width:100%; border-collapse:separate; border-spacing:0; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow); }
+  .kpi-tr { cursor:pointer; transition:background .12s; }
+  .kpi-tr td { padding:12px 16px; border-bottom:1px solid var(--line2); font-size:13.5px; vertical-align:middle; }
+  .kpi-tr:last-child td { border-bottom:0; }
+  .kpi-tr:hover { background:var(--accent-weak); }
+  .kpi-tr.on { background:color-mix(in srgb, var(--kc,var(--accent)) 12%, transparent); box-shadow:inset 3px 0 0 var(--kc,var(--accent)); }
+  .kpi-tr.off { opacity:.5; }
+  .kpi-ic { width:40px; text-align:center; font-size:16px; }
+  .kpi-lbl { font-weight:600; color:var(--txt); }
+  .kpi-num { font-weight:760; font-size:18px; font-variant-numeric:tabular-nums; text-align:right; width:64px; }
+  .kpi-share { width:40%; white-space:nowrap; }
+  .kpi-track { display:inline-block; width:calc(100% - 46px); height:8px; border-radius:5px; background:var(--line2); overflow:hidden; vertical-align:middle; }
+  .kpi-track i { display:block; height:100%; border-radius:5px; transition:width .5s; }
+  .kpi-pct { display:inline-block; width:40px; text-align:right; font-size:11.5px; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; }
+  @media (max-width:680px){ .kpi-share { display:none; } }
   .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
   .kpi:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--kc,var(--accent)); }
   .kpi.off { opacity:.45; }
@@ -1657,6 +1677,7 @@ function clearAllFilters(){
   ['q','customer','owner'].forEach(id => document.getElementById(id).value = '');
   liveOnlyEl().checked = false;
 }
+let kpiView = (localStorage.getItem('kpiView') === 'cards') ? 'cards' : 'table';
 function renderKpis(){
   const el = document.getElementById('kpis'); if (!el) return;
   const liveOn = liveOnlyEl() ? liveOnlyEl().checked : false;
@@ -1664,6 +1685,7 @@ function renderKpis(){
   // A tight, meaningful KPI row — the per-stage breakdown lives on the pill row
   // and the Status Mix donut, so we don't repeat all 7 stages as tiles here.
   const inprog = MID_STAGES.reduce((n,k) => n + (DATA.counts[k]||0), 0);
+  const total = DATA.total || 1;
   const tiles = [
     { id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter },
     { id:'not_started', label:'Not started', n:DATA.counts['not_started']||0, color:'#9ca3af', icon:'⏳', on:stateFilter.has('not_started') },
@@ -1672,9 +1694,22 @@ function renderKpis(){
     { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
     { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
   ];
-  el.innerHTML = tiles.map(t => \`<div class="kpi \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
+  const seg = \`<div class="kpi-toolbar"><div class="kpi-seg"><button class="kseg \${kpiView==='table'?'on':''}" data-kview="table">▤ Table</button><button class="kseg \${kpiView==='cards'?'on':''}" data-kview="cards">▦ Cards</button></div></div>\`;
+  let body;
+  if (kpiView === 'cards'){
+    body = \`<div class="kpi-cards">\` + tiles.map(t => \`<div class="kpi \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
       <div class="ic">\${t.icon}</div><div class="n" data-count="\${t.n}">0</div><div class="l">\${esc(t.label)}</div><div class="spark"></div>
-    </div>\`).join('');
+    </div>\`).join('') + \`</div>\`;
+  } else {
+    body = \`<table class="kpi-table"><tbody>\` + tiles.map(t => { const pct = t.id==='__all' ? 100 : Math.round((t.n/total)*100);
+      return \`<tr class="kpi-tr \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
+        <td class="kpi-ic">\${t.icon}</td><td class="kpi-lbl">\${esc(t.label)}</td>
+        <td class="kpi-num" data-count="\${t.n}">0</td>
+        <td class="kpi-share"><div class="kpi-track"><i style="width:\${pct}%;background:\${t.color}"></i></div><span class="kpi-pct">\${pct}%</span></td>
+      </tr>\`; }).join('') + \`</tbody></table>\`;
+  }
+  el.innerHTML = seg + body;
+  el.querySelectorAll('[data-kview]').forEach(b => b.onclick = () => { kpiView = b.dataset.kview; try{ localStorage.setItem('kpiView', kpiView); }catch(e){} renderKpis(); });
   el.querySelectorAll('[data-kpi]').forEach(k => k.onclick = () => {
     const id = k.dataset.kpi;
     if (id === '__all'){ clearAllFilters(); }
