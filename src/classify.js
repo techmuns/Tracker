@@ -163,6 +163,8 @@ const CUSTOMER_ALIASES = {
 };
 function canonicalCustomer(name) {
   const c = clean(name);
+  // Drop junk placeholders (legacy "Unassigned"/"-"/etc.) so they never show as a client.
+  if (/^(unassigned|not assigned|none|n\/a|na|-+|tbd|priority)$/i.test(c)) return '';
   return CUSTOMER_ALIASES[c.toLowerCase()] || c;
 }
 

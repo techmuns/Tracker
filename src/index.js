@@ -1048,21 +1048,31 @@ function renderPage(data, opts) {
   /* Dashboards table view */
   .grid.table-mode { display:block; }
   .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow); }
-  .dtable { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
-  .dtable thead th { text-align:left; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); padding:11px 14px; border-bottom:1px solid var(--line); background:var(--surface2); position:sticky; top:0; z-index:1; white-space:nowrap; }
-  .dtable td { padding:10px 14px; border-bottom:1px solid var(--line2); vertical-align:middle; }
+  /* table-layout:fixed + an explicit colgroup keep header & body columns locked
+     in step (auto layout let thead/tbody size columns independently). */
+  .dtable { width:100%; min-width:1080px; table-layout:fixed; border-collapse:separate; border-spacing:0; font-size:13px; }
+  .dtable thead th { text-align:left; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); padding:11px 14px; border-bottom:1px solid var(--line); background:var(--surface2); position:sticky; top:0; z-index:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dtable td { padding:10px 14px; border-bottom:1px solid var(--line2); vertical-align:middle; overflow:hidden; }
   .dtable tr:last-child td { border-bottom:0; }
-  .drow { cursor:pointer; transition:background .1s; }
-  .drow:hover { background:var(--accent-weak); }
-  .tnum { color:var(--muted); font-variant-numeric:tabular-nums; width:36px; }
-  .tname { font-weight:650; color:var(--txt); min-width:150px; }
-  .tchip { display:inline-block; font-size:11.5px; background:var(--surface2); border:1px solid var(--line); border-radius:6px; padding:2px 8px; cursor:pointer; white-space:nowrap; }
+  /* Scope to .dtable + force table-row: a same-named .drow rule elsewhere sets
+     display:flex, which would otherwise turn table rows into flex containers. */
+  .dtable .drow { display:table-row; cursor:pointer; transition:background .1s; }
+  .dtable .drow:hover { background:var(--accent-weak); }
+  .tnum { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .tname { font-weight:650; color:var(--txt); }
+  .tname .tname-in { display:block; overflow:hidden; text-overflow:ellipsis; }
+  .tchips { display:flex; flex-wrap:wrap; gap:4px; }
+  .tchip { display:inline-block; max-width:100%; font-size:11.5px; background:var(--surface2); border:1px solid var(--line); border-radius:6px; padding:2px 8px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .tchip:hover { border-color:var(--accent); color:var(--accent); }
-  .tstage { min-width:165px; white-space:nowrap; color:var(--txt2); }
+  .tstage { white-space:nowrap; color:var(--txt2); }
+  .tstage-lbl { display:block; overflow:hidden; text-overflow:ellipsis; }
   .tdot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .tlive { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:700; color:var(--good); background:var(--good-bg); border:1px solid var(--good-line); border-radius:999px; padding:1px 7px; margin-left:7px; vertical-align:middle; }
   .ttrack { height:5px; border-radius:4px; background:var(--line2); overflow:hidden; margin-top:5px; }
   .ttrack i { display:block; height:100%; border-radius:4px; transition:width .4s; }
   .tmut { color:var(--muted); }
+  .tlink { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:3px 10px; text-decoration:none; white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+  .tlink:hover { background:var(--accent); color:#fff; border-color:var(--accent); text-decoration:none; }
   .tacts { white-space:nowrap; text-align:right; }
   .tbtn { display:inline-grid; place-items:center; width:26px; height:26px; border:1px solid var(--line); background:var(--surface); border-radius:7px; cursor:pointer; color:var(--txt2); text-decoration:none; font-size:13px; margin-left:4px; }
   .tbtn:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-weak); }
@@ -1349,9 +1359,10 @@ function renderPage(data, opts) {
   .profile-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; padding:8px 28px 64px; }
   .profile-card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--shadow); cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
   .profile-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); border-color:var(--accent); }
-  .profile-card .pc-head { display:flex; align-items:center; gap:11px; }
-  .profile-card .pc-name { font-weight:680; font-size:15px; }
-  .profile-card .pc-role { font-size:12px; color:var(--muted); margin-top:1px; }
+  .profile-card .pc-head { display:flex; align-items:center; gap:11px; padding-right:24px; }
+  .profile-card .pc-head > div { min-width:0; flex:1; }
+  .profile-card .pc-name { font-weight:680; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .profile-card .pc-role { font-size:12px; color:var(--muted); margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .profile-card .pc-stats { display:flex; flex-wrap:wrap; gap:10px; margin-top:11px; font-size:12px; color:var(--muted); }
   .profile-card .pc-stats b { color:var(--txt); }
   .profile-card .rm { position:absolute; top:10px; right:10px; }
@@ -1731,12 +1742,12 @@ function attentionItems(){
 }
 function renderInsights(){
   const el = document.getElementById('insights'); if (!el) return;
-  const total = DATA.total||1, done = DATA.counts['completed']||0, pct = Math.round(done/total*100);
+  const total = DATA.total||0, done = DATA.counts['completed']||0, pct = total ? Math.round(done/total*100) : 0;
   const stepper = STATES.map(s => \`<div class="step" data-leg="\${s.id}" title="\${esc(s.label)}: \${DATA.counts[s.id]||0}"><div class="step-n">\${DATA.counts[s.id]||0}</div><span class="step-bar" style="background:\${s.color}"></span><div class="step-lbl">\${STAGE_SHORT[s.id]}</div></div>\`).join('');
   const att = attentionItems().map(a => \`<button class="att-row att-\${a.tone}"\${a.act?' data-act="'+esc(a.act)+'"':' disabled'}><span class="att-ic">\${a.icon}</span><div class="att-big">\${a.big}</div><div class="att-txt"><div class="att-main">\${a.main}</div><div class="att-sub">\${a.sub}</div></div>\${a.act?'<svg class="att-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>':''}</button>\`).join('');
   const body = insightsOpen ? \`<div class="ins-grid">
     <div class="ins-card"><h4>Overall progress</h4>
-      <div class="ov-head"><span class="ov-pct">\${pct}%</span><span class="ov-cap">\${done} of \${total} dashboards completed</span></div>
+      <div class="ov-head"><span class="ov-pct">\${pct}%</span><span class="ov-cap">\${total ? done+' of '+total+' dashboard'+(total===1?'':'s')+' completed' : 'No dashboards yet'}</span></div>
       <div class="ov-bar"><i style="width:\${pct}%"></i></div>
       <div class="stepper">\${stepper}</div>
     </div>
@@ -1761,28 +1772,36 @@ function renderInsights(){
 }
 
 let dashView = (localStorage.getItem('dashView') === 'cards') ? 'cards' : 'table';
+// Format a stored due date (ISO "YYYY-MM-DD" → "29 Jun 2026"; other formats shown as-is).
+function fmtDueCell(v){ return v ? (/^\\d{4}-\\d{2}-\\d{2}$/.test(v) ? esc(fmtDue(v)) : esc(v)) : '<span class="tmut">—</span>'; }
 // One row of the dashboards table (mirrors card() but tabular).
 function rowHtml(d, n){
   const s = SMAP[d.state] || { color:'var(--muted)', label:d.state };
   const pct = Math.round((d.progress||0)*100);
   const editable = d.source==='manual' && CFG.manualEnabled;
-  const visit = d.dashboardUrl ? \`<a class="tbtn" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" title="Open on Munshot">↗</a>\` : '';
+  const links = (d.links && d.links.length) ? d.links : (d.meetingUrl ? [{label:'Recording / link', url:d.meetingUrl}] : []);
+  const meet = links[0];
+  const clients = d.customers.length ? d.customers.map(c=>\`<span class="tchip" data-customer="\${esc(c)}">\${esc(c)}</span>\`).join('') : '<span class="tmut">—</span>';
+  const dash = d.dashboardUrl ? \`<a class="tlink" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : '<span class="tmut">—</span>';
+  const meetCell = meet ? \`<a class="tlink" href="\${esc(meet.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="\${esc(meet.label||'Open link')}">▶ \${esc(meet.label||'Link')}</a>\` : '<span class="tmut">—</span>';
   const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add update">＋</button>\` : '';
   const editDel = editable ? \`<button class="tbtn" data-edit="\${esc(d.id)}" title="Edit">✎</button><button class="tbtn del" data-del="\${esc(d.id)}" title="Delete">×</button>\` : '';
   return \`<tr class="drow" data-card="\${esc(d.id)}">
     <td class="tnum">\${n}</td>
-    <td class="tname">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</td>
-    <td>\${d.customers.map(c=>\`<span class="tchip" data-customer="\${esc(c)}">\${esc(c)}</span>\`).join(' ')}</td>
+    <td class="tname"><span class="tname-in">\${d.priorityLevel?'★ ':''}\${esc(d.name)}\${d.isLive?'<span class="tlive">● Live</span>':''}</span></td>
+    <td><div class="tchips">\${clients}</div></td>
     <td>\${d.owner?\`<span class="tchip" data-owner="\${esc(d.owner)}">\${esc(d.owner)}</span>\`:'<span class="tmut">—</span>'}</td>
-    <td class="tstage"><span class="tdot" style="background:\${s.color}"></span>\${esc(s.label)}<div class="ttrack"><i style="width:\${pct}%;background:\${s.color}"></i></div></td>
-    <td>\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:'<span class="tmut">—</span>'}</td>
-    <td>\${d.isLive?'<span class="tag live">● Live</span>':'<span class="tmut">—</span>'}</td>
-    <td class="tmut">\${esc(d.lastUpdated||'—')}</td>
-    <td class="tacts">\${visit}\${upd}\${editDel}</td>
+    <td class="tmut">\${fmtDueCell(d.dueDate)}</td>
+    <td class="tstage"><span class="tstage-lbl"><span class="tdot" style="background:\${s.color}"></span>\${esc(s.label)}</span><div class="ttrack"><i style="width:\${pct}%;background:\${s.color}"></i></div></td>
+    <td>\${dash}</td>
+    <td>\${meetCell}</td>
+    <td class="tacts">\${upd}\${editDel}</td>
   </tr>\`;
 }
 function dashTable(bodyRows){
-  return \`<div class="table-wrap"><table class="dtable"><thead><tr><th>#</th><th>Name</th><th>Client</th><th>Owner</th><th>Stage</th><th>Priority</th><th>Live</th><th>Updated</th><th></th></tr></thead><tbody>\${bodyRows}</tbody></table></div>\`;
+  return \`<div class="table-wrap"><table class="dtable">
+    <colgroup><col style="width:44px"><col style="width:210px"><col style="width:150px"><col style="width:128px"><col style="width:104px"><col style="width:188px"><col style="width:98px"><col style="width:150px"><col style="width:104px"></colgroup>
+    <thead><tr><th>#</th><th>Name</th><th>Client</th><th>Assigned to</th><th>Due date</th><th>Stage</th><th>Dashboard</th><th>Meeting</th><th></th></tr></thead><tbody>\${bodyRows}</tbody></table></div>\`;
 }
 function render(){
   renderLegend();
@@ -1812,7 +1831,14 @@ function render(){
   });
 
   const grid = document.getElementById('grid');
-  if (!list.length){ grid.classList.remove('table-mode'); grid.innerHTML = '<div class="empty">No dashboards match these filters.</div>'; bindCards(); return; }
+  if (!list.length){
+    grid.classList.remove('table-mode');
+    const noneAtAll = !DATA.dashboards.length;
+    grid.innerHTML = noneAtAll
+      ? '<div class="empty">No dashboards yet.' + (CFG.manualEnabled ? ' Click <b>+ Add dashboard</b> to create your first one.' : '') + '</div>'
+      : '<div class="empty">No dashboards match these filters.</div>';
+    bindCards(); return;
+  }
 
   // Grouping (used by both card and table views). Numbering is positional
   // within the CURRENT view (1..n), not the dashboard's own id.
@@ -2415,7 +2441,7 @@ function renderTeamTab(){
     return \`<div class="profile-card" data-member="\${esc(name)}">
       \${CFG.manualEnabled?\`<button class="rm" data-rmown="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
       <div class="pc-head">\${avatar(name,'lg')}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${esc(p.role||'Team member')}</div></div></div>
-      <div class="pc-stats"><span><b>\${s.total}</b> dashboards</span><span><b>\${s.completed}</b> done</span>\${pend?\`<span class="warnpill">\${pend} to-do</span>\`:''}</div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboard\${s.total!==1?'s':''}</span><span><b>\${s.completed}</b> done</span>\${pend?\`<span class="warnpill">\${pend} to-do</span>\`:''}</div>
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
@@ -2435,7 +2461,7 @@ function renderClientsTab(){
     return \`<div class="profile-card" data-client="\${esc(name)}">
       \${CFG.manualEnabled?\`<button class="rm" data-rmcli="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
       <div class="pc-head">\${logo}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${det.poc?('POC: '+esc(det.poc)):(s.people.length+' on team')}</div></div></div>
-      <div class="pc-stats"><span><b>\${s.total}</b> dashboards</span><span><b>\${s.completed}</b> done</span>\${det.meetingFreq?\`<span>🗓 \${esc(det.meetingFreq)}</span>\`:''}</div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboard\${s.total!==1?'s':''}</span><span><b>\${s.completed}</b> done</span>\${det.meetingFreq?\`<span>🗓 \${esc(det.meetingFreq)}</span>\`:''}</div>
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
@@ -2503,7 +2529,7 @@ function openDetail(id){
       <div class="dgrid">
         \${factCell('Owner', d.owner ? esc(d.owner) : '—')}
         \${factCell('Client(s)', esc(d.customer))}
-        \${factCell('Due date', d.dueDate?esc(d.dueDate):'—')}
+        \${factCell('Due date', d.dueDate?(/^\\d{4}-\\d{2}-\\d{2}$/.test(d.dueDate)?esc(fmtDue(d.dueDate)):esc(d.dueDate)):'—')}
         \${factCell('Priority', d.priorityLevel?('P'+d.priorityLevel):'—')}
         \${factCell('Live on Munshot', d.isLive?'Yes':'No')}
         \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
