@@ -1038,37 +1038,33 @@ function renderPage(data, opts) {
   .msg { font-size:12.5px; }
   .msg.err { color:var(--danger); } .msg.ok { color:var(--good); }
   /* KPI hero */
-  .kpis { padding:14px 28px 4px; }
-  .kpi-toolbar { display:flex; justify-content:flex-end; margin-bottom:11px; }
-  .kpi-seg { display:inline-flex; background:var(--surface2); border:1px solid var(--line); border-radius:9px; padding:2px; gap:2px; }
-  .kseg { font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:transparent; border:0; border-radius:7px; padding:5px 13px; cursor:pointer; }
-  .kseg.on { background:var(--surface); color:var(--accent); box-shadow:var(--shadow); }
-  .kpi-cards { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; }
-  @media (max-width:1100px){ .kpi-cards { grid-template-columns:repeat(3,1fr); } }
-  @media (max-width:680px){ .kpi-cards { grid-template-columns:repeat(2,1fr); } }
-  .kpi-table { width:100%; border-collapse:separate; border-spacing:0; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow); }
-  .kpi-tr { cursor:pointer; transition:background .12s; }
-  .kpi-tr td { padding:12px 16px; border-bottom:1px solid var(--line2); font-size:13.5px; vertical-align:middle; }
-  .kpi-tr:last-child td { border-bottom:0; }
-  .kpi-tr:hover { background:var(--accent-weak); }
-  .kpi-tr.on { background:color-mix(in srgb, var(--kc,var(--accent)) 12%, transparent); box-shadow:inset 3px 0 0 var(--kc,var(--accent)); }
-  .kpi-tr.off { opacity:.5; }
-  .kpi-ic { width:40px; text-align:center; font-size:16px; }
-  .kpi-lbl { font-weight:600; color:var(--txt); }
-  .kpi-num { font-weight:760; font-size:18px; font-variant-numeric:tabular-nums; text-align:right; width:64px; }
-  .kpi-share { width:40%; white-space:nowrap; }
-  .kpi-track { display:inline-block; width:calc(100% - 46px); height:8px; border-radius:5px; background:var(--line2); overflow:hidden; vertical-align:middle; }
-  .kpi-track i { display:block; height:100%; border-radius:5px; transition:width .5s; }
-  .kpi-pct { display:inline-block; width:40px; text-align:right; font-size:11.5px; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; }
-  @media (max-width:680px){ .kpi-share { display:none; } }
-  .kpi { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:transform .14s,box-shadow .14s,border-color .14s; }
-  .kpi:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--kc,var(--accent)); }
-  .kpi.off { opacity:.45; }
-  .kpi.on { border-color:var(--kc,var(--accent)); box-shadow:0 0 0 2px color-mix(in srgb, var(--kc,var(--accent)) 35%, transparent), var(--shadow-md); }
-  .kpi .ic { position:absolute; right:12px; top:12px; width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-size:17px; background:color-mix(in srgb, var(--kc,var(--accent)) 16%, transparent); }
-  .kpi .n { font-size:30px; font-weight:760; line-height:1; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
-  .kpi .l { font-size:12px; color:var(--muted); margin-top:5px; font-weight:550; }
-  .kpi .spark { height:4px; border-radius:3px; margin-top:10px; background:var(--kc,var(--accent)); opacity:.85; }
+  /* Dashboards Cards ⇄ Table view toggle */
+  .view-seg { display:inline-flex; background:var(--surface2); border:1px solid var(--line); border-radius:9px; padding:2px; gap:2px; margin-left:auto; }
+  .vseg { font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:transparent; border:0; border-radius:7px; padding:5px 12px; cursor:pointer; }
+  .vseg.on { background:var(--surface); color:var(--accent); box-shadow:var(--shadow); }
+  /* Dashboards table view */
+  .grid.table-mode { display:block; }
+  .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow); }
+  .dtable { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
+  .dtable thead th { text-align:left; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); padding:11px 14px; border-bottom:1px solid var(--line); background:var(--surface2); position:sticky; top:0; z-index:1; white-space:nowrap; }
+  .dtable td { padding:10px 14px; border-bottom:1px solid var(--line2); vertical-align:middle; }
+  .dtable tr:last-child td { border-bottom:0; }
+  .drow { cursor:pointer; transition:background .1s; }
+  .drow:hover { background:var(--accent-weak); }
+  .tnum { color:var(--muted); font-variant-numeric:tabular-nums; width:36px; }
+  .tname { font-weight:650; color:var(--txt); min-width:150px; }
+  .tchip { display:inline-block; font-size:11.5px; background:var(--surface2); border:1px solid var(--line); border-radius:6px; padding:2px 8px; cursor:pointer; white-space:nowrap; }
+  .tchip:hover { border-color:var(--accent); color:var(--accent); }
+  .tstage { min-width:165px; white-space:nowrap; color:var(--txt2); }
+  .tdot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .ttrack { height:5px; border-radius:4px; background:var(--line2); overflow:hidden; margin-top:5px; }
+  .ttrack i { display:block; height:100%; border-radius:4px; transition:width .4s; }
+  .tmut { color:var(--muted); }
+  .tacts { white-space:nowrap; text-align:right; }
+  .tbtn { display:inline-grid; place-items:center; width:26px; height:26px; border:1px solid var(--line); background:var(--surface); border-radius:7px; cursor:pointer; color:var(--txt2); text-decoration:none; font-size:13px; margin-left:4px; }
+  .tbtn:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-weak); }
+  .tbtn.del:hover { border-color:var(--danger-line); color:var(--danger); background:var(--danger-bg); }
+  .dtable .grp td { background:var(--surface2); font-weight:700; font-size:12px; color:var(--txt2); }
   /* Insights / charts */
   .insights { padding:8px 28px 4px; }
   .ins-toggle { display:inline-flex; align-items:center; gap:7px; font:inherit; font-size:12.5px; font-weight:600; color:var(--muted); background:none; border:0; cursor:pointer; padding:6px 0; }
@@ -1465,7 +1461,6 @@ function renderPage(data, opts) {
 
 <section class="tabview" id="tab-overview">
 <div class="legend" id="legend"></div>
-<div class="kpis" id="kpis"></div>
 <div class="eod" id="eod"></div>
 <div class="insights" id="insights"></div>
 
@@ -1542,6 +1537,7 @@ ${opts.manualEnabled ? `
     <option value="owner">Group by owner</option>
   </select>
   <label style="font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px"><input type="checkbox" id="liveonly"> Live only</label>
+  <div class="view-seg" id="viewSeg"><button class="vseg" data-dview="table">▤ Table</button><button class="vseg" data-dview="cards">▦ Cards</button></div>
 </div>
 <div class="grid" id="grid"></div>
 </section>
@@ -1677,51 +1673,6 @@ function clearAllFilters(){
   ['q','customer','owner'].forEach(id => document.getElementById(id).value = '');
   liveOnlyEl().checked = false;
 }
-let kpiView = (localStorage.getItem('kpiView') === 'cards') ? 'cards' : 'table';
-function renderKpis(){
-  const el = document.getElementById('kpis'); if (!el) return;
-  const liveOn = liveOnlyEl() ? liveOnlyEl().checked : false;
-  const anyFilter = stateFilter.size > 0 || prioOnly || liveOn;
-  // A tight, meaningful KPI row — the per-stage breakdown lives on the pill row
-  // and the Status Mix donut, so we don't repeat all 7 stages as tiles here.
-  const inprog = MID_STAGES.reduce((n,k) => n + (DATA.counts[k]||0), 0);
-  const total = DATA.total || 1;
-  const tiles = [
-    { id:'__all', label:'Total dashboards', n:DATA.total, color:'var(--accent)', icon:'📊', on:!anyFilter },
-    { id:'not_started', label:'Not started', n:DATA.counts['not_started']||0, color:'#9ca3af', icon:'⏳', on:stateFilter.has('not_started') },
-    { id:'__inprog', label:'In progress', n:inprog, color:'#7381e6', icon:'🔧', on:stateFilter.size===MID_STAGES.length && MID_STAGES.every(k => stateFilter.has(k)) },
-    { id:'completed', label:'Completed', n:DATA.counts['completed']||0, color:'#22c55e', icon:'✅', on:stateFilter.has('completed') },
-    { id:'__live', label:'Live on Munshot', n:DATA.liveCount||0, color:'#16a34a', icon:'🚀', on:liveOn },
-    { id:'__prio', label:'Priority', n:DATA.priorityCount||0, color:'#f59e0b', icon:'⭐', on:prioOnly },
-  ];
-  const seg = \`<div class="kpi-toolbar"><div class="kpi-seg"><button class="kseg \${kpiView==='table'?'on':''}" data-kview="table">▤ Table</button><button class="kseg \${kpiView==='cards'?'on':''}" data-kview="cards">▦ Cards</button></div></div>\`;
-  let body;
-  if (kpiView === 'cards'){
-    body = \`<div class="kpi-cards">\` + tiles.map(t => \`<div class="kpi \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
-      <div class="ic">\${t.icon}</div><div class="n" data-count="\${t.n}">0</div><div class="l">\${esc(t.label)}</div><div class="spark"></div>
-    </div>\`).join('') + \`</div>\`;
-  } else {
-    body = \`<table class="kpi-table"><tbody>\` + tiles.map(t => { const pct = t.id==='__all' ? 100 : Math.round((t.n/total)*100);
-      return \`<tr class="kpi-tr \${t.on?'on':(anyFilter?'off':'')}" data-kpi="\${t.id}" style="--kc:\${t.color}">
-        <td class="kpi-ic">\${t.icon}</td><td class="kpi-lbl">\${esc(t.label)}</td>
-        <td class="kpi-num" data-count="\${t.n}">0</td>
-        <td class="kpi-share"><div class="kpi-track"><i style="width:\${pct}%;background:\${t.color}"></i></div><span class="kpi-pct">\${pct}%</span></td>
-      </tr>\`; }).join('') + \`</tbody></table>\`;
-  }
-  el.innerHTML = seg + body;
-  el.querySelectorAll('[data-kview]').forEach(b => b.onclick = () => { kpiView = b.dataset.kview; try{ localStorage.setItem('kpiView', kpiView); }catch(e){} renderKpis(); });
-  el.querySelectorAll('[data-kpi]').forEach(k => k.onclick = () => {
-    const id = k.dataset.kpi;
-    if (id === '__all'){ clearAllFilters(); }
-    else if (id === '__inprog'){ const on = MID_STAGES.some(s => stateFilter.has(s)); clearAllFilters(); if (!on) MID_STAGES.forEach(s => stateFilter.add(s)); }
-    else if (id === '__live'){ const on = !liveOnlyEl().checked; clearAllFilters(); liveOnlyEl().checked = on; }
-    else if (id === '__prio'){ const on = !prioOnly; clearAllFilters(); prioOnly = on; }
-    else { isolateState(id); return; }
-    render();
-  });
-  animateCounts(el);
-}
-
 // ── Insights (SVG donut + bar charts, no external libs) ────────────────────
 function donutSvg(){
   const total = DATA.total || 1, r = 54, c = 2*Math.PI*r; let off = 0, segs = '';
@@ -1798,8 +1749,32 @@ function renderInsights(){
   }
 }
 
+let dashView = (localStorage.getItem('dashView') === 'cards') ? 'cards' : 'table';
+// One row of the dashboards table (mirrors card() but tabular).
+function rowHtml(d, n){
+  const s = SMAP[d.state] || { color:'var(--muted)', label:d.state };
+  const pct = Math.round((d.progress||0)*100);
+  const editable = d.source==='manual' && CFG.manualEnabled;
+  const visit = d.dashboardUrl ? \`<a class="tbtn" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" title="Open on Munshot">↗</a>\` : '';
+  const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add update">＋</button>\` : '';
+  const editDel = editable ? \`<button class="tbtn" data-edit="\${esc(d.id)}" title="Edit">✎</button><button class="tbtn del" data-del="\${esc(d.id)}" title="Delete">×</button>\` : '';
+  return \`<tr class="drow" data-card="\${esc(d.id)}">
+    <td class="tnum">\${n}</td>
+    <td class="tname">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</td>
+    <td>\${d.customers.map(c=>\`<span class="tchip" data-customer="\${esc(c)}">\${esc(c)}</span>\`).join(' ')}</td>
+    <td><span class="tchip" data-owner="\${esc(d.owner)}">\${esc(d.owner)}</span></td>
+    <td class="tstage"><span class="tdot" style="background:\${s.color}"></span>\${esc(s.label)}<div class="ttrack"><i style="width:\${pct}%;background:\${s.color}"></i></div></td>
+    <td>\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:'<span class="tmut">—</span>'}</td>
+    <td>\${d.isLive?'<span class="tag live">● Live</span>':'<span class="tmut">—</span>'}</td>
+    <td class="tmut">\${esc(d.lastUpdated||'—')}</td>
+    <td class="tacts">\${visit}\${upd}\${editDel}</td>
+  </tr>\`;
+}
+function dashTable(bodyRows){
+  return \`<div class="table-wrap"><table class="dtable"><thead><tr><th>#</th><th>Name</th><th>Client</th><th>Owner</th><th>Stage</th><th>Priority</th><th>Live</th><th>Updated</th><th></th></tr></thead><tbody>\${bodyRows}</tbody></table></div>\`;
+}
 function render(){
-  renderKpis(); renderLegend();
+  renderLegend();
   { const b = document.getElementById('prioToggle'); if (b) b.classList.toggle('on', prioOnly); }
   const q = document.getElementById('q').value.trim().toLowerCase();
   const cust = document.getElementById('customer').value;
@@ -1826,21 +1801,32 @@ function render(){
   });
 
   const grid = document.getElementById('grid');
-  if (!list.length){ grid.innerHTML = '<div class="empty">No dashboards match these filters.</div>'; bindCards(); return; }
+  if (!list.length){ grid.classList.remove('table-mode'); grid.innerHTML = '<div class="empty">No dashboards match these filters.</div>'; bindCards(); return; }
 
-  // Numbering is positional within the CURRENT view (1..n), not the dashboard's
-  // own id — so picking an owner shows their dashboards as 1,2,3…
-  if (!groupby){ grid.innerHTML = list.map((d,i) => card(d, i+1)).join(''); bindCards(); return; }
-  let groups;
+  // Grouping (used by both card and table views). Numbering is positional
+  // within the CURRENT view (1..n), not the dashboard's own id.
+  let groups = null;
   if (groupby === 'state'){
     groups = STATES.map(s => [s.label, list.filter(d => d.state === s.id)]).filter(([,a]) => a.length);
   } else if (groupby === 'customer'){
     const keys = [...new Set(list.flatMap(d => d.customers))].sort();
     groups = keys.map(k => [k, list.filter(d => d.customers.includes(k))]); // a 2-client dash appears under both
-  } else {
+  } else if (groupby === 'owner'){
     const keys = [...new Set(list.map(d => d.owner))].sort();
     groups = keys.map(k => [k, list.filter(d => d.owner === k)]);
   }
+
+  if (dashView === 'table'){
+    grid.classList.add('table-mode');
+    const body = groups
+      ? groups.map(([t,items]) => \`<tr class="grp"><td colspan="9">\${esc(t)} · \${items.length}</td></tr>\` + items.map((d,i) => rowHtml(d, i+1)).join('')).join('')
+      : list.map((d,i) => rowHtml(d, i+1)).join('');
+    grid.innerHTML = dashTable(body);
+    bindCards();
+    return;
+  }
+  grid.classList.remove('table-mode');
+  if (!groups){ grid.innerHTML = list.map((d,i) => card(d, i+1)).join(''); bindCards(); return; }
   grid.innerHTML = groups.map(([t,items]) => \`<div class="group-h">\${esc(t)} · \${items.length}</div>\` + items.map((d,i) => card(d, i+1)).join('')).join('');
   bindCards();
 }
@@ -3493,6 +3479,10 @@ exportMenu.querySelectorAll('[data-export]').forEach(b => b.onclick = () => { ex
   const el = document.getElementById(id);
   el.addEventListener(el.type==='checkbox'?'change':'input', render);
 });
+// Dashboards Cards ⇄ Table view toggle
+function syncViewSeg(){ document.querySelectorAll('#viewSeg .vseg').forEach(b => b.classList.toggle('on', b.dataset.dview===dashView)); }
+document.querySelectorAll('#viewSeg [data-dview]').forEach(b => b.onclick = () => { dashView = b.dataset.dview; try{ localStorage.setItem('dashView', dashView); }catch(e){} syncViewSeg(); render(); });
+syncViewSeg();
 document.getElementById('themeToggle').onclick = () => {
   const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
   localStorage.setItem('theme', next); applyTheme(next);
