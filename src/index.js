@@ -21,6 +21,7 @@ const KV_UPDATES = 'dashboard_updates';
 const KV_PEOPLE = 'people';
 const KV_CONFIG = 'config';
 const KV_PRIORITY = 'priority';
+const KV_TASKS = 'tasks';
 
 async function kvGet(env, key, fallback) {
   if (!env.MANUAL) return fallback;
@@ -39,10 +40,12 @@ const readConfig = (env) => kvGet(env, KV_CONFIG, {});
 const writeConfig = (env, c) => env.MANUAL.put(KV_CONFIG, JSON.stringify(c));
 const readPriority = (env) => kvGet(env, KV_PRIORITY, {});
 const writePriority = (env, p) => env.MANUAL.put(KV_PRIORITY, JSON.stringify(p));
+const readTasks = (env) => kvGet(env, KV_TASKS, {});
+const writeTasks = (env, t) => env.MANUAL.put(KV_TASKS, JSON.stringify(t));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, config, priority] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env),
+  const [manual, roster, updates, people, config, priority, tasks] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readConfig(env), readPriority(env), readTasks(env),
   ]);
   // Standalone mode: serve purely from KV, never touch the Google Sheet.
   let rows = [];
@@ -52,7 +55,7 @@ async function getDataset(env) {
     if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status}`);
     rows = parseCsv(await res.text());
   }
-  return buildDataset(rows, manual, { roster, updates, people, priority, standalone: !!config.standalone });
+  return buildDataset(rows, manual, { roster, updates, people, priority, tasks, standalone: !!config.standalone });
 }
 
 const json = (obj, status = 200) =>
@@ -161,6 +164,87 @@ export default {
         if (body.on) priority[id] = true; else delete priority[id];
         await writePriority(env, priority);
         return json({ ok: true, id, on: !!body.on });
+      }
+
+      // ── Tasks API (to-do and accomplished lists per team member) ────────
+      if (pathname === '/api/tasks') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+
+        if (request.method === 'POST') {
+          // Add a new task
+          const body = await request.json().catch(() => ({}));
+          const owner = String(body.owner || '').trim();
+          const text = String(body.text || '').trim();
+          if (!owner) return json({ error: 'owner is required.' }, 400);
+          if (!text) return json({ error: 'text is required.' }, 400);
+
+          const tasks = await readTasks(env);
+          if (!tasks[owner]) tasks[owner] = { todo: [], accomplished: [] };
+
+          const task = {
+            id: crypto.randomUUID(),
+            text,
+            createdAt: new Date().toISOString(),
+          };
+
+          tasks[owner].todo.push(task);
+          await writeTasks(env, tasks);
+          return json({ ok: true, task }, 201);
+        }
+
+        if (request.method === 'PUT') {
+          // Move task to accomplished or back to todo
+          const body = await request.json().catch(() => ({}));
+          const owner = String(body.owner || '').trim();
+          const taskId = String(body.taskId || '').trim();
+          const status = String(body.status || '').trim(); // 'todo' or 'accomplished'
+
+          if (!owner) return json({ error: 'owner is required.' }, 400);
+          if (!taskId) return json({ error: 'taskId is required.' }, 400);
+          if (status !== 'todo' && status !== 'accomplished') return json({ error: 'status must be "todo" or "accomplished".' }, 400);
+
+          const tasks = await readTasks(env);
+          if (!tasks[owner]) return json({ error: 'Owner not found.' }, 404);
+
+          // Find and move the task
+          let task = null;
+          const sourceList = status === 'accomplished' ? 'todo' : 'accomplished';
+          const targetList = status;
+
+          const sourceIdx = tasks[owner][sourceList].findIndex(t => t.id === taskId);
+          if (sourceIdx === -1) return json({ error: 'Task not found.' }, 404);
+
+          task = tasks[owner][sourceList][sourceIdx];
+          tasks[owner][sourceList].splice(sourceIdx, 1);
+          task.completedAt = status === 'accomplished' ? new Date().toISOString() : undefined;
+          tasks[owner][targetList].push(task);
+
+          await writeTasks(env, tasks);
+          return json({ ok: true, task });
+        }
+
+        if (request.method === 'DELETE') {
+          // Delete a task
+          const owner = url.searchParams.get('owner');
+          const taskId = url.searchParams.get('taskId');
+          const list = url.searchParams.get('list'); // 'todo' or 'accomplished'
+
+          if (!owner || !taskId || !list) return json({ error: 'owner, taskId, and list are required.' }, 400);
+
+          const tasks = await readTasks(env);
+          if (!tasks[owner]) return json({ error: 'Owner not found.' }, 404);
+
+          const idx = tasks[owner][list].findIndex(t => t.id === taskId);
+          if (idx !== -1) {
+            tasks[owner][list].splice(idx, 1);
+            await writeTasks(env, tasks);
+          }
+
+          return json({ ok: true });
+        }
+
+        return json({ error: 'Method not allowed.' }, 405);
       }
 
       // ── Person / employee terminal API ──────────────────────────────────
@@ -415,6 +499,20 @@ function renderPage(data, opts) {
   .owner-card:hover { border-color:var(--accent); background:var(--accent-weak); }
   .owner-card .on { font-weight:620; font-size:14.5px; }
   .owner-card .os { font-size:12px; color:var(--muted); margin-top:3px; }
+  /* Task lists */
+  .task-section { margin-top:18px; }
+  .task-add { display:flex; gap:8px; margin-bottom:12px; }
+  .task-add input { flex:1; font-size:13px; }
+  .task-list { display:flex; flex-direction:column; gap:8px; }
+  .task-item { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
+  .task-item:hover { background:var(--line2); }
+  .task-check { width:18px; height:18px; border:2px solid var(--line); border-radius:5px; flex:none; margin-top:2px; cursor:pointer; display:grid; place-items:center; font-size:11px; color:#fff; transition:all .15s; }
+  .task-check:hover { border-color:var(--accent); }
+  .task-check.done { background:var(--good); border-color:var(--good); }
+  .task-text { flex:1; font-size:13px; line-height:1.4; word-break:break-word; }
+  .task-text.done { color:var(--muted); text-decoration:line-through; }
+  .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:15px; padding:0; width:20px; height:20px; flex:none; }
+  .task-del:hover { color:var(--danger); }
   .back { background:none; border:0; color:var(--accent); cursor:pointer; font:inherit; font-size:12.5px; padding:0; margin-bottom:10px; }
   .controls { display:flex; flex-wrap:wrap; gap:10px; padding:14px 28px; align-items:center; }
   select, input, textarea { font:inherit; background:var(--surface); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
@@ -1008,13 +1106,156 @@ function openOwner(name){
     <div class="drawer-body">
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
+      \${tasksHtml(name)}
       \${employeeTerminalHtml(name)}
       \${s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:''}
       \${sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
     </div>\`;
   overlay.classList.add('open');
   wireDrawer('owner', name);
+  wireTasks(name);
   wireEmployee(name);
+}
+
+// ── Task lists (to-do and accomplished) ────────────────────────────────────
+function tasksHtml(name){
+  const ownerTasks = DATA.tasks && DATA.tasks[name] ? DATA.tasks[name] : { todo: [], accomplished: [] };
+  const editable = CFG.manualEnabled;
+  const todoItems = ownerTasks.todo.map(t => \`
+    <div class="task-item">
+      <div class="task-check" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-action="complete" title="Mark as accomplished">○</div>
+      <div class="task-text">\${esc(t.text)}</div>
+      \${editable?\`<button class="task-del" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-list="todo" title="Delete">×</button>\`:''}
+    </div>
+  \`).join('') || '<div class="sub" style="padding:10px 0;">No tasks yet.</div>';
+
+  const accomplishedItems = ownerTasks.accomplished.map(t => \`
+    <div class="task-item">
+      <div class="task-check done" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-action="uncomplete" title="Move back to to-do">✓</div>
+      <div class="task-text done">\${esc(t.text)}</div>
+      \${editable?\`<button class="task-del" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-list="accomplished" title="Delete">×</button>\`:''}
+    </div>
+  \`).join('') || '<div class="sub" style="padding:10px 0;">No accomplished tasks yet.</div>';
+
+  return \`
+    <div class="task-section">
+      <div class="section-t">📝 To-Do · \${ownerTasks.todo.length}</div>
+      \${editable?\`<div class="task-add">
+        <input type="text" id="taskInput" placeholder="Add a new task..." />
+        <button class="btn sm" id="taskAddBtn">+ Add</button>
+      </div>\`:''}
+      <div class="task-list" id="todoList">\${todoItems}</div>
+    </div>
+    <div class="task-section">
+      <div class="section-t">✅ Accomplished · \${ownerTasks.accomplished.length}</div>
+      <div class="task-list" id="accomplishedList">\${accomplishedItems}</div>
+    </div>
+  \`;
+}
+
+function wireTasks(name){
+  if (!CFG.manualEnabled) return;
+
+  const addBtn = document.getElementById('taskAddBtn');
+  const taskInput = document.getElementById('taskInput');
+
+  if (addBtn && taskInput) {
+    const addTask = async () => {
+      const text = taskInput.value.trim();
+      if (!text) return;
+
+      const res = await api('POST', '/api/tasks', { owner: name, text });
+      if (res.ok) {
+        const data = await res.json();
+        if (!DATA.tasks[name]) DATA.tasks[name] = { todo: [], accomplished: [] };
+        DATA.tasks[name].todo.push(data.task);
+        renderTasks(name);
+        taskInput.value = '';
+      } else {
+        alert('Failed to add task: ' + ((await res.json()).error || res.status));
+      }
+    };
+
+    addBtn.onclick = addTask;
+    taskInput.onkeypress = (e) => { if (e.key === 'Enter') addTask(); };
+  }
+
+  // Wire check/uncheck handlers
+  drawer.querySelectorAll('.task-check').forEach(check => {
+    check.onclick = async () => {
+      const taskId = check.dataset.taskId;
+      const owner = check.dataset.owner;
+      const action = check.dataset.action;
+      const status = action === 'complete' ? 'accomplished' : 'todo';
+
+      const res = await api('PUT', '/api/tasks', { owner, taskId, status });
+      if (res.ok) {
+        // Update local data
+        const tasks = DATA.tasks[owner];
+        const sourceList = status === 'accomplished' ? 'todo' : 'accomplished';
+        const idx = tasks[sourceList].findIndex(t => t.id === taskId);
+        if (idx !== -1) {
+          const task = tasks[sourceList][idx];
+          tasks[sourceList].splice(idx, 1);
+          tasks[status].push(task);
+        }
+        renderTasks(owner);
+      } else {
+        alert('Failed to update task.');
+      }
+    };
+  });
+
+  // Wire delete handlers
+  drawer.querySelectorAll('.task-del').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Delete this task?')) return;
+
+      const taskId = btn.dataset.taskId;
+      const owner = btn.dataset.owner;
+      const list = btn.dataset.list;
+
+      const res = await api('DELETE', \`/api/tasks?owner=\${encodeURIComponent(owner)}&taskId=\${encodeURIComponent(taskId)}&list=\${list}\`);
+      if (res.ok) {
+        const tasks = DATA.tasks[owner];
+        const idx = tasks[list].findIndex(t => t.id === taskId);
+        if (idx !== -1) tasks[list].splice(idx, 1);
+        renderTasks(owner);
+      } else {
+        alert('Failed to delete task.');
+      }
+    };
+  });
+}
+
+function renderTasks(name){
+  const todoContainer = document.getElementById('todoList');
+  const accomplishedContainer = document.getElementById('accomplishedList');
+  if (!todoContainer || !accomplishedContainer) return;
+
+  const ownerTasks = DATA.tasks && DATA.tasks[name] ? DATA.tasks[name] : { todo: [], accomplished: [] };
+  const editable = CFG.manualEnabled;
+
+  const todoItems = ownerTasks.todo.map(t => \`
+    <div class="task-item">
+      <div class="task-check" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-action="complete" title="Mark as accomplished">○</div>
+      <div class="task-text">\${esc(t.text)}</div>
+      \${editable?\`<button class="task-del" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-list="todo" title="Delete">×</button>\`:''}
+    </div>
+  \`).join('') || '<div class="sub" style="padding:10px 0;">No tasks yet.</div>';
+
+  const accomplishedItems = ownerTasks.accomplished.map(t => \`
+    <div class="task-item">
+      <div class="task-check done" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-action="uncomplete" title="Move back to to-do">✓</div>
+      <div class="task-text done">\${esc(t.text)}</div>
+      \${editable?\`<button class="task-del" data-task-id="\${esc(t.id)}" data-owner="\${esc(name)}" data-list="accomplished" title="Delete">×</button>\`:''}
+    </div>
+  \`).join('') || '<div class="sub" style="padding:10px 0;">No accomplished tasks yet.</div>';
+
+  todoContainer.innerHTML = todoItems;
+  accomplishedContainer.innerHTML = accomplishedItems;
+
+  wireTasks(name);
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────

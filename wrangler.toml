@@ -1,4 +1,4 @@
-name = "dashboard-tracker"
+name = "tracker"
 main = "src/index.js"
 compatibility_date = "2026-06-22"
 
@@ -13,7 +13,7 @@ CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtnhH9a-ssSwVT-2xDcN
 # namespace, create one in the Cloudflare dashboard and swap the id below.
 [[kv_namespaces]]
 binding = "MANUAL"
-id = "fe377c45c1fa42cb803f04235c726823"
+id = "48ab526d55564e3797e794fcae22a938"
 
 # Optional: protect the Add/Delete actions with a shared password. Set this as a
 # secret (Settings → Variables → Add → Encrypt), then the UI prompts for it once.

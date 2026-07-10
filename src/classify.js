@@ -311,6 +311,7 @@ export function buildDataset(rows, manual = [], opts = {}) {
     customers: [...new Set([...dashboards.flatMap((d) => d.customers), ...(roster.customers || [])])].filter(Boolean).sort(),
     owners: [...new Set([...dashboards.map((d) => d.owner), ...(roster.owners || [])])].filter(Boolean).sort(),
     people: opts.people || {},
+    tasks: opts.tasks || {},
     dashboards,
   };
 }
