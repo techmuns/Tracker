@@ -2098,6 +2098,11 @@ function renderFbRows(){
 }
 function getFeedbacks(){ syncFbFromDom(); return fbState.filter(f => f.label || f.text || f.link || (f.files && f.files.length)); }
 
+function updateDueFieldVisibility(){
+  const stageSelect = G('f_stage');
+  const dueField = G('dueField');
+  if (stageSelect && dueField) dueField.hidden = stageSelect.value === 'completed';
+}
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
@@ -2112,6 +2117,7 @@ function setForm(d){
   fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
   renderFbRows();
   G('formMsg').textContent = '';
+  updateDueFieldVisibility();
 }
 function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); }
 function closeForm(){ const b = G('formModalBg'); if (b) b.classList.remove('open'); }
@@ -2164,12 +2170,7 @@ if (CFG.manualEnabled){
   if (G('dueClear')) G('dueClear').onclick = (e) => { e.stopPropagation(); setDue(''); closeCal(); };
   const stageSelect = G('f_stage');
   if (stageSelect) {
-    const updateDueFieldVisibility = () => {
-      const dueField = G('dueField');
-      if (dueField) dueField.hidden = stageSelect.value === 'completed';
-    };
     stageSelect.addEventListener('change', updateDueFieldVisibility);
-    updateDueFieldVisibility();
   }
   G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
