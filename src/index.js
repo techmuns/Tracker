@@ -1418,6 +1418,21 @@ function renderPage(data, opts) {
   .todo .impl { margin:0; flex:none; width:30px; text-align:center; }
   .todo-main { flex:1; }
   .todo-top { font-size:13px; }
+  /* Personal task lists */
+  .tasks-container { padding:10px 0; }
+  .task-add-row { display:flex; gap:8px; margin-bottom:16px; }
+  .task-add-row input { flex:1; }
+  .task-list { display:flex; flex-direction:column; gap:8px; }
+  .task-row { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
+  .task-row:hover { background:var(--line2); }
+  .task-check { width:20px; height:20px; border:2px solid var(--line); border-radius:5px; flex:none; margin-top:2px; cursor:pointer; display:grid; place-items:center; font-size:12px; color:#fff; transition:all .15s; background:none; padding:0; }
+  .task-check:hover { border-color:var(--accent); }
+  .task-check.done { background:var(--good); border-color:var(--good); }
+  .task-text { flex:1; font-size:13px; line-height:1.5; word-break:break-word; }
+  .task-text.done { color:var(--muted); text-decoration:line-through; }
+  .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; padding:0; width:20px; height:20px; flex:none; }
+  .task-del:hover { color:var(--danger); }
+  .empty-tasks { padding:16px; text-align:center; color:var(--muted); font-size:13px; }
   /* Feedback editor rows (form) */
   .fb-row { border:1px solid var(--line); border-radius:11px; padding:10px; margin-bottom:9px; background:var(--surface2); }
   .fb-top { display:flex; gap:8px; align-items:center; margin-bottom:7px; flex-wrap:wrap; }
@@ -2248,6 +2263,32 @@ function wireEmployeeProfile(name){
     if (res.ok){ DATA.people[name] = (await res.json()).person; btn.textContent = 'Saved ✓'; setTimeout(()=>btn.textContent='Save profile',1500); } else alert('Save failed.');
   };
 }
+function ownerTasksHtml(name){
+  const memberTasks = TASKS.filter(t => t.member === name);
+  const todo = memberTasks.filter(t => !t.done);
+  const accomplished = memberTasks.filter(t => t.done);
+  const ed = CFG.manualEnabled;
+
+  const taskRow = (t) => \`<div class="task-row">
+    <button class="task-check \${t.done?'done':''}" data-task-id="\${t.id}">\${t.done?'✓':'○'}</button>
+    <div class="task-text \${t.done?'done':''}">\${esc(t.text)}</div>
+    \${ed?\`<button class="task-del" data-task-id="\${t.id}">×</button>\`:''}
+  </div>\`;
+
+  const todoList = todo.length ? todo.map(taskRow).join('') : '<div class="empty-tasks">No tasks yet</div>';
+  const doneList = accomplished.length ? accomplished.map(taskRow).join('') : '<div class="empty-tasks">No accomplished tasks yet</div>';
+
+  return \`<div class="tasks-container">
+    <div class="section-t">📝 To-Do · \${todo.length}</div>
+    \${ed?\`<div class="task-add-row">
+      <input type="text" id="taskInput" placeholder="Add a new task..." />
+      <button class="btn sm" id="taskAddBtn">+ Add</button>
+    </div>\`:''}
+    <div class="task-list">\${todoList}</div>
+    <div class="section-t" style="margin-top:20px">✅ Accomplished · \${accomplished.length}</div>
+    <div class="task-list">\${doneList}</div>
+  </div>\`;
+}
 function ownerBodyHtml(name, s){
   if (ownerSub === 'work'){
     return statRow(s) + \`<div class="bar">\${stateBar(s.c,s.total)}</div>\`
@@ -2261,8 +2302,62 @@ function ownerBodyHtml(name, s){
     const row = t => \`<div class="todo">\${CFG.manualEnabled?\`<button class="impl \${t.f.implemented?'yes':'no'}" data-fbtoggle="\${esc(t.d.id)}" data-fbid="\${esc(t.f.id)}">\${t.f.implemented?'✓':'✗'}</button>\`:\`<span class="impl \${t.f.implemented?'yes':'no'}">\${t.f.implemented?'✓':'✗'}</span>\`}<div class="todo-main"><div class="todo-top"><b>\${esc(t.f.label||'Feedback')}</b> <span class="muted">· \${esc(t.d.name)}</span>\${t.f.date?\`<span class="muted"> · \${esc(t.f.date)}</span>\`:''}</div>\${t.f.text?\`<div class="dnote">\${esc(t.f.text)}</div>\`:''}\${t.f.link?\`<a href="\${esc(t.f.link)}" target="_blank" class="lnk">▶ link</a>\`:''}</div><button class="btn ghost sm" data-open="\${esc(t.d.id)}">open</button></div>\`;
     return \`<div class="section-t">Pending (\${pending.length})</div>\${pending.map(row).join('')||'<div class="dnote muted">All caught up 🎉</div>'}\${done.length?\`<div class="section-t">Implemented (\${done.length})</div>\${done.map(row).join('')}\`:''}\`;
   }
+  if (ownerSub === 'tasks') return ownerTasksHtml(name);
   if (ownerSub === 'profile') return employeeProfileHtml(name);
   return employeeTerminalHtml(name); // attendance
+}
+function wireOwnerTasks(name){
+  if (!CFG.manualEnabled) return;
+
+  const addBtn = document.getElementById('taskAddBtn');
+  const taskInput = document.getElementById('taskInput');
+
+  if (addBtn && taskInput) {
+    const addTask = async () => {
+      const text = taskInput.value.trim();
+      if (!text) return;
+
+      const res = await taskAdd({ member: name, text });
+      if (res.ok) {
+        taskInput.value = '';
+        renderOwner(name);
+      } else {
+        alert('Failed to add task');
+      }
+    };
+
+    addBtn.onclick = addTask;
+    taskInput.onkeypress = (e) => { if (e.key === 'Enter') addTask(); };
+  }
+
+  drawer.querySelectorAll('.task-check').forEach(check => {
+    check.onclick = async () => {
+      const taskId = check.dataset.taskId;
+      const task = TASKS.find(t => t.id === taskId);
+      if (!task) return;
+
+      const res = await taskToggle(task, !task.done);
+      if (res.ok) {
+        renderOwner(name);
+      } else {
+        alert('Failed to update task');
+      }
+    };
+  });
+
+  drawer.querySelectorAll('.task-del').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Delete this task?')) return;
+
+      const taskId = btn.dataset.taskId;
+      const res = await taskDelete(taskId);
+      if (res.ok) {
+        renderOwner(name);
+      } else {
+        alert('Failed to delete task');
+      }
+    };
+  });
 }
 function openOwner(name){ ownerSub = 'work'; renderOwner(name); overlay.classList.add('open'); }
 function renderOwner(name){
@@ -2271,7 +2366,7 @@ function renderOwner(name){
   const hr = ownerSub==='profile' || ownerSub==='attendance';
   const nav = hr
     ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button><button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance</button></nav>\`
-    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
+    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ Feedback\${pending?' ('+pending+')':''}</button><button class="subtab \${ownerSub==='tasks'?'on':''}" data-sub="tasks">📝 Tasks</button></nav>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Team</button>
@@ -2295,6 +2390,7 @@ function renderOwner(name){
   });
   if (ownerSub === 'profile') wireEmployeeProfile(name);
   if (ownerSub === 'attendance') wireEmployee(name);
+  if (ownerSub === 'tasks') wireOwnerTasks(name);
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────
