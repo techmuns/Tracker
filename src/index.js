@@ -2541,6 +2541,61 @@ function rosterDelete(type, name, total){
     if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
   };
 }
+function exportTeamTasksPdf(){
+  const content = DATA.owners.map(name => {
+    const memberTasks = TASKS.filter(t => t.member === name);
+    const todo = memberTasks.filter(t => !t.done);
+    const done = memberTasks.filter(t => t.done);
+
+    return \`
+      <div class="pdf-member">
+        <h2>\${esc(name)}</h2>
+        <div class="pdf-section">
+          <h3>📝 To-Do (\${todo.length})</h3>
+          \${todo.length ? \`<ul>\${todo.map(t => \`<li>\${esc(t.text)}</li>\`).join('')}</ul>\` : '<p class="empty">No pending tasks</p>'}
+        </div>
+        <div class="pdf-section">
+          <h3>✅ Accomplished (\${done.length})</h3>
+          \${done.length ? \`<ul>\${done.map(t => \`<li>\${esc(t.text)}</li>\`).join('')}</ul>\` : '<p class="empty">No accomplished tasks</p>'}
+        </div>
+      </div>
+    \`;
+  }).join('');
+
+  const printWindow = window.open('', '_blank');
+  printWindow.document.write(\`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Team Tasks - \${new Date().toLocaleDateString()}</title>
+      <style>
+        @media print { @page { margin: 1.5cm; } }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 30px; color: #333; }
+        .pdf-member { page-break-inside: avoid; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
+        .pdf-member:last-child { border-bottom: none; }
+        h2 { color: #4f46e5; margin-bottom: 20px; font-size: 24px; }
+        .pdf-section { margin-bottom: 25px; }
+        h3 { color: #666; font-size: 16px; margin-bottom: 10px; }
+        ul { list-style-type: disc; padding-left: 25px; }
+        li { margin-bottom: 8px; line-height: 1.5; }
+        .empty { color: #999; font-style: italic; }
+        .date { text-align: center; color: #666; margin-bottom: 20px; }
+      </style>
+    </head>
+    <body>
+      <h1>Team Tasks Report</h1>
+      <div class="date">Generated on \${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+      \${content}
+    </body>
+    </html>
+  \`);
+  printWindow.document.close();
+
+  setTimeout(() => {
+    printWindow.print();
+  }, 250);
+}
 function renderTeamTab(){
   const el = G('tab-team');
   const add = CFG.manualEnabled ? \`<div class="roster-add"><input id="memInput" placeholder="New team member name…"><button class="btn" id="memAdd">+ Add member</button></div>\` : '';
@@ -2554,7 +2609,8 @@ function renderTeamTab(){
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
-  el.innerHTML = \`<div class="tabhead"><h2>👤 Team</h2><div class="sub">\${DATA.owners.length} members · open anyone for profile, attendance & to-dos</div></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No team members yet.</div>'}</div>\`;
+  el.innerHTML = \`<div class="tabhead"><h2>👤 Team</h2><div class="sub">\${DATA.owners.length} members · open anyone for profile, attendance & to-dos</div><button class="btn ghost" id="exportTasksPdf">📄 Export Tasks PDF</button></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No team members yet.</div>'}</div>\`;
+  G('exportTasksPdf').onclick = () => exportTeamTasksPdf();
   if (CFG.manualEnabled){
     G('memAdd').onclick = async () => { const n = G('memInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'owner',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
     el.querySelectorAll('[data-rmown]').forEach(b => b.onclick = rosterDelete('owner', b.dataset.rmown, +b.dataset.total));
