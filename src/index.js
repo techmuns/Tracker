@@ -1549,7 +1549,7 @@ ${opts.manualEnabled ? `
       </div>
       <label class="wide" id="fbLabel" hidden>Feedbacks
         <div id="fbRows"></div>
-        <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
+        <button class="btn ghost sm" id="addFb" type="button" title="Add feedback">+ Feedback</button>
       </label>
       <input type="hidden" id="f_meeting">
     </div>
