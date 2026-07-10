@@ -1533,7 +1533,7 @@ ${opts.manualEnabled ? `
         <div id="linkRows"></div>
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
       </label>
-      <div class="field wide">Due date
+      <div class="field wide" id="dueField">Due date
         <div class="datepick" id="dueDD">
           <div class="date-wrap">
             <div class="date-trigger" id="dueTrigger" role="button" tabindex="0">
@@ -1547,9 +1547,9 @@ ${opts.manualEnabled ? `
           </div>
         </div>
       </div>
-      <label class="wide">Feedbacks
+      <label class="wide" id="fbLabel" hidden>Feedbacks
         <div id="fbRows"></div>
-        <button class="btn ghost sm" id="addFb" type="button">+ add feedback</button>
+        <button class="btn ghost sm" id="addFb" type="button" title="Add feedback">+ Feedback</button>
       </label>
       <input type="hidden" id="f_meeting">
     </div>
@@ -1770,8 +1770,9 @@ function renderInsights(){
     <div class="ins-card"><h4>Top team members</h4>\${barChart(DATA.owners, ownerStats, 'data-bc-owner', true)}</div>
     <div class="ins-card"><h4>Top clients</h4>\${barChart(DATA.customers, clientStats, 'data-bc-customer', false)}</div>
   </div>\` : '';
-  el.innerHTML = \`<button class="ins-toggle" id="insToggle">📊 Insights \${insightsOpen?'▾':'▸'}</button>\${body}\`;
+  el.innerHTML = \`<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px"><button class="ins-toggle" id="insToggle">📊 Insights \${insightsOpen?'▾':'▸'}</button>\${insightsOpen?'<button class="btn ghost sm" id="viewTableBtn">📋 View Table</button>':''}</div>\${body}\`;
   document.getElementById('insToggle').onclick = () => { insightsOpen = !insightsOpen; renderInsights(); };
+  { const vtb = document.getElementById('viewTableBtn'); if (vtb) vtb.onclick = () => { dashView = 'table'; localStorage.setItem('dashView', 'table'); syncViewSeg(); render(); }; }
   if (insightsOpen){
     el.querySelectorAll('[data-leg]').forEach(li => li.onclick = () => { isolateState(li.dataset.leg); window.scrollTo({top:0,behavior:'smooth'}); });
     el.querySelectorAll('[data-bc-owner]').forEach(b => b.onclick = () => openOwner(b.getAttribute('data-bc-owner')));
@@ -1945,14 +1946,17 @@ function renderClientMenu(){
   menu.innerHTML = '';
   opts.forEach(name => {
     const on = clientSel.some(c => c.toLowerCase() === name.toLowerCase());
-    const row = document.createElement('div'); row.className = 'dd-opt' + (on ? ' on' : '');
-    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = on; cb.tabIndex=-1;
-    row.appendChild(cb); row.appendChild(document.createTextNode(name));
-    row.onclick = () => {
+    const row = document.createElement('div'); row.className = 'dd-opt' + (on ? ' on' : ''); row.style.cursor = 'pointer';
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = on; cb.tabIndex=-1; cb.style.pointerEvents = 'none';
+    row.appendChild(cb);
+    const lbl = document.createElement('label'); lbl.style.flex = '1'; lbl.style.cursor = 'pointer'; lbl.style.margin = '0'; lbl.appendChild(document.createTextNode(name));
+    row.appendChild(lbl);
+    row.onclick = (e) => {
+      e.stopPropagation();
       if (clientSel.some(c => c.toLowerCase() === name.toLowerCase())) clientSel = clientSel.filter(c => c.toLowerCase() !== name.toLowerCase());
       else clientSel.push(name);
       const nowOn = clientSel.includes(name);
-      cb.checked = nowOn; row.classList.toggle('on', nowOn); renderClientChips();
+      cb.checked = nowOn; row.classList.toggle('on', nowOn); renderClientChips(); closeClientDD();
     };
     menu.appendChild(row);
   });
@@ -2111,7 +2115,7 @@ function setForm(d){
 }
 function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); }
 function closeForm(){ const b = G('formModalBg'); if (b) b.classList.remove('open'); }
-function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; openForm(); G('f_name').focus(); }
+function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; G('fbLabel').hidden = true; openForm(); G('f_name').focus(); }
 function openEdit(id){
   const d = DATA.dashboards.find(x => x.id === id);
   if (!d) return;
@@ -2119,6 +2123,7 @@ function openEdit(id){
   setForm(d);
   G('panelTitle').textContent = 'Edit · ' + (d.serial ? '#'+d.serial+' ' : '') + d.name;
   G('saveBtn').textContent = 'Save changes';
+  G('fbLabel').hidden = false;
   openForm();
 }
 
@@ -2157,6 +2162,15 @@ if (CFG.manualEnabled){
     G('dueTrigger').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggleCal(); } };
   }
   if (G('dueClear')) G('dueClear').onclick = (e) => { e.stopPropagation(); setDue(''); closeCal(); };
+  const stageSelect = G('f_stage');
+  if (stageSelect) {
+    const updateDueFieldVisibility = () => {
+      const dueField = G('dueField');
+      if (dueField) dueField.hidden = stageSelect.value === 'completed';
+    };
+    stageSelect.addEventListener('change', updateDueFieldVisibility);
+    updateDueFieldVisibility();
+  }
   G('addFb').onclick = () => { syncFbFromDom(); fbState.push({ id:'fb'+Date.now(), category:'', label:'Feedback '+(fbState.length+1), date:'', text:'', link:'', files:[], implemented:false }); renderFbRows(); };
   G('formModalBg').addEventListener('click', (e) => { if (e.target === G('formModalBg')) closeForm(); });
   G('saveBtn').onclick = async () => {
@@ -2363,16 +2377,16 @@ function openOwner(name){ ownerSub = 'work'; renderOwner(name); overlay.classLis
 function renderOwner(name){
   const s = ownerStats(name), p = personData(name);
   const pending = ownerTodos(name).filter(t=>!t.f.implemented).length;
-  const hr = ownerSub==='profile' || ownerSub==='attendance';
+  const hr = ownerSub==='profile';
   const nav = hr
-    ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button><button class="subtab \${ownerSub==='attendance'?'on':''}" data-sub="attendance">🗓 Attendance</button></nav>\`
-    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ Feedback\${pending?' ('+pending+')':''}</button><button class="subtab \${ownerSub==='tasks'?'on':''}" data-sub="tasks">📝 Tasks</button></nav>\`;
+    ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button></nav>\`
+    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button><button class="subtab \${ownerSub==='tasks'?'on':''}" data-sub="tasks">📝 Tasks</button></nav>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Team</button>
       <div class="av-head">\${avatar(name,'lg')}<div><h2>\${esc(name)}</h2>
       <div class="sub">\${esc(p.role||'Team member')} · \${s.total} dashboard\${s.total!==1?'s':''}</div></div></div></div>
-      <div class="dh-right">\${hr?'':'<button class="btn ghost sm" id="hrBtn">👤 Profile &amp; Attendance</button>'}<button class="x" id="drawerX">×</button></div>
+      <div class="dh-right">\${hr?'':'<button class="btn ghost sm" id="hrBtn">👤 Profile</button>'}<button class="x" id="drawerX">×</button></div>
     </div>
     \${nav}
     <div class="drawer-body">\${ownerBodyHtml(name, s)}</div>\`;
@@ -2389,7 +2403,6 @@ function renderOwner(name){
     if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else alert('Failed.');
   });
   if (ownerSub === 'profile') wireEmployeeProfile(name);
-  if (ownerSub === 'attendance') wireEmployee(name);
   if (ownerSub === 'tasks') wireOwnerTasks(name);
 }
 
