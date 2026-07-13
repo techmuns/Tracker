@@ -750,12 +750,14 @@ export default {
           const body = await request.json().catch(() => ({}));
           const id = String(body.id || '').trim();
           if (!id) return json({ error: 'id is required.' }, 400);
-          if (!body.state && !body.note) return json({ error: 'Pick a status or write a note.' }, 400);
+          const files = Array.isArray(body.files) ? body.files : [];
+          if (!body.state && !body.note && !files.length) return json({ error: 'Write a note, attach a screenshot, or set a stage.' }, 400);
           const entry = {
             ts: Date.now(),
             date: body.date || new Date().toLocaleDateString('en-GB'),
             state: body.state || '',
             note: body.note || '',
+            files,
             by: body.by || '',
           };
           if (!Array.isArray(updates[id])) updates[id] = [];
@@ -1831,13 +1833,13 @@ function card(d, n){
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Current status</span><br>\${esc(d.status)}</div>\` : ''}
     \${fields.map(([k,v]) => \`<div class="field"><span class="label">\${k}</span><div class="val">\${esc(v)}</div></div>\`).join('')}
     \${links.length ? \`<div class="links"><span class="label">YouTube Links</span>\${links.map(l => \`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div>\` : ''}
-    \${d.updates && d.updates.length ? \`<div class="upd"><span class="label">Latest update · \${esc(d.updates[d.updates.length-1].date||'')}</span><div class="val">\${esc(d.updates[d.updates.length-1].note || SMAP[d.updates[d.updates.length-1].state]?.label || '')}</div></div>\` : ''}
+    \${d.updates && d.updates.length ? \`<div class="upd"><span class="label">Latest work update · \${esc(d.updates[d.updates.length-1].date||'')}</span><div class="val">\${esc(d.updates[d.updates.length-1].note || SMAP[d.updates[d.updates.length-1].state]?.label || '')}</div>\${d.updates[d.updates.length-1].files&&d.updates[d.updates.length-1].files.length?\`<div class="thumbs">\${fileGrid(d.updates[d.updates.length-1].files)}</div>\`:''}</div>\` : ''}
     <div class="foot">
       <span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>
       <div class="foot-actions">
         \${d.dashboardUrl ? \`<a class="visit-btn" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : ''}
         \${editable ? publishBtnHtml(d) : ''}
-        \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
+        \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Work update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
       </div>
     </div>
   </div>\`;
@@ -1874,7 +1876,7 @@ function rowHtml(d, n){
   const clients = d.customers.length ? d.customers.map(c=>\`<span class="tchip" data-customer="\${esc(c)}">\${esc(c)}</span>\`).join('') : '<span class="tmut">—</span>';
   const dash = d.dashboardUrl ? \`<a class="tlink" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : '<span class="tmut">—</span>';
   const meetCell = meet ? \`<a class="tlink" href="\${esc(meet.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="\${esc(meet.label||'Open link')}">▶ \${esc(meet.label||'Link')}</a>\` : '<span class="tmut">—</span>';
-  const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add update">＋</button>\` : '';
+  const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add work update">＋</button>\` : '';
   const pub = editable ? \`<button class="tbtn \${d.publishedAt?'pubdone':''}" data-publish="\${esc(d.id)}" data-name="\${esc(d.name)}" title="\${d.publishedAt?'Published — click to re-publish':'Publish to the admin page'}">⬆</button>\` : '';
   const editDel = editable ? \`<button class="tbtn" data-edit="\${esc(d.id)}" title="Edit">✎</button><button class="tbtn del" data-del="\${esc(d.id)}" title="Delete">×</button>\` : '';
   return \`<tr class="drow" data-card="\${esc(d.id)}">
@@ -2804,7 +2806,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -2821,6 +2823,7 @@ function openDetail(id){
       \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
       \${links.length?\`<div class="dsec"><h4>YouTube Links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
       \${(d.sections&&d.sections.length)?\`<div class="dsec"><h4>Sections\${d.publishedAt?' · <span style="color:var(--good)">published '+esc(String(d.publishedAt).slice(0,10))+'</span>':''}</h4>\${secViewHtml(d.sections,'')}</div>\`:''}
+      \${(d.updates&&d.updates.length)?\`<div class="dsec"><h4>Work updates (\${d.updates.length})</h4>\${d.updates.slice().reverse().map(e=>{const st=SMAP[e.state];return \`<div class="fbv"><div class="fbv-top"><b>\${esc(e.date||'')}</b>\${st?\`<span class="fbcat" style="color:\${st.color};background:color-mix(in srgb, \${st.color} 14%, transparent)">\${esc(st.label)}</span>\`:''}</div>\${e.note?\`<div class="dnote">\${esc(e.note)}</div>\`:''}\${e.files&&e.files.length?\`<div class="thumbs">\${fileGrid(e.files)}</div>\`:''}</div>\`;}).join('')}</div>\`:''}
       <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
       \${d.improvement&&d.improvement!=='-'?\`<div class="dsec"><h4>Improvements</h4><div class="dnote">\${esc(d.improvement)}</div></div>\`:''}
       \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
@@ -2846,35 +2849,48 @@ const updModalBg = document.getElementById('updModalBg');
 const updModal = document.getElementById('updModal');
 function closeUpd(){ updModalBg.classList.remove('open'); }
 updModalBg.addEventListener('click', (e) => { if (e.target === updModalBg) closeUpd(); });
+let updFiles = [];
+function renderUpdFiles(){
+  const box = G('u_files'); if (!box) return;
+  box.innerHTML = updFiles.map(f => fileChip(f, true)).join('');
+  box.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { updFiles = updFiles.filter(x => x.id !== b.dataset.fx); renderUpdFiles(); });
+}
 function openUpdate(id, name){
   const d = DATA.dashboards.find(x => x.id === id) || { updates: [], state: 'not_started', name };
+  updFiles = [];
   const log = d.updates || [];
   const opts = STATES.map(x => \`<option value="\${x.id}">\${x.label}</option>\`).join('');
   const tl = log.slice().reverse().map(e => {
     const st = SMAP[e.state];
-    return \`<div class="tl-item"><span class="tl-dot" style="background:\${st?st.color:'#ccc'}"></span><div class="tl-main"><div class="tl-date">\${esc(e.date||'')}\${st?' · '+st.label:''}</div>\${e.note?\`<div class="tl-note">\${esc(e.note)}</div>\`:''}</div><button class="tl-del" data-ts="\${e.ts}" title="Remove">×</button></div>\`;
-  }).join('') || '<div class="tl-date">No updates yet — add your first below.</div>';
+    return \`<div class="tl-item"><span class="tl-dot" style="background:\${st?st.color:'#ccc'}"></span><div class="tl-main"><div class="tl-date">\${esc(e.date||'')}\${st?' · '+st.label:''}</div>\${e.note?\`<div class="tl-note">\${esc(e.note)}</div>\`:''}\${e.files&&e.files.length?\`<div class="thumbs">\${fileGrid(e.files)}</div>\`:''}</div><button class="tl-del" data-ts="\${e.ts}" title="Remove">×</button></div>\`;
+  }).join('') || '<div class="tl-date">No work updates yet — add your first below.</div>';
   updModal.innerHTML = \`
-    <div class="modal-head"><div><h3>Daily update</h3><div class="sub">\${esc(name||d.name||'')}</div></div><button class="x" id="updX">×</button></div>
+    <div class="modal-head"><div><h3>Work update</h3><div class="sub">\${esc(name||d.name||'')}</div></div><button class="x" id="updX">×</button></div>
     <div class="modal-body">
-      <label>Status (sets the card colour)</label>
+      <label>What work did you do? (note)</label>
+      <textarea id="u_note" placeholder="e.g. Wired live data into the P&amp;L tab; refreshed the holdings table"></textarea>
+      <label>Screenshots of the work (optional)</label>
+      <div class="filebox" id="u_files"></div>
+      <button class="btn ghost sm" id="u_upload" type="button">📎 Add screenshots</button>
+      <label style="margin-top:14px">Stage (optional — updates the card)</label>
       <select id="u_state">\${opts}</select>
-      <label>What did you do today? (note)</label>
-      <textarea id="u_note" placeholder="e.g. Wired live data into the P&amp;L tab; pending QA"></textarea>
-      <button class="btn" id="u_save">Post update</button>
+      <button class="btn" id="u_save" style="margin-top:14px">Post work update</button>
       <div class="timeline"><div class="label" style="margin-bottom:6px">History (\${log.length})</div>\${tl}</div>
     </div>\`;
   document.getElementById('u_state').value = d.state || 'not_started';
+  renderUpdFiles();
   updModalBg.classList.add('open');
   document.getElementById('updX').onclick = closeUpd;
+  document.getElementById('u_upload').onclick = async () => { const ups = await uploadFiles(); if (ups.length){ updFiles = updFiles.concat(ups); renderUpdFiles(); } };
   document.getElementById('u_save').onclick = async () => {
     const state = document.getElementById('u_state').value;
     const note = document.getElementById('u_note').value.trim();
-    const res = await api('POST', '/api/update', { id, state, note });
+    if (!note && !updFiles.length){ alert('Write what you did, or attach a screenshot.'); return; }
+    const res = await api('POST', '/api/update', { id, state, note, files: updFiles });
     if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
   };
   updModal.querySelectorAll('.tl-del').forEach(b => b.onclick = async () => {
-    if (!confirm('Remove this update?')) return;
+    if (!confirm('Remove this work update?')) return;
     const res = await api('DELETE', \`/api/update?id=\${encodeURIComponent(id)}&ts=\${b.dataset.ts}\`);
     if (res.ok) location.reload();
   });
