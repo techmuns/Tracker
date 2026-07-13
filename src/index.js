@@ -556,16 +556,45 @@ export default {
       }
 
       // ── Tracking tasks from Munshot notetaker ────────────────────────────
+      // Pulls the notetaker's per-member to-dos and folds them into the SAME KV
+      // task store the profile To-do lists use, then returns the merged list.
+      // Upsert-only + dedup by (member, text) so re-syncing never duplicates and
+      // never clobbers a task's locally-toggled done status.
       if (pathname === '/api/tracking-tasks') {
+        let tasks = await readTasks(env).catch(() => []);
         try {
-          const res = await fetch('https://munshot-notetaker-frontend.amazon-review-radar-489675.workers.dev/api/public/tracking', {
-            headers: { 'Authorization': 'Bearer quackquackquackquack' }
+          const trackingUrl = env.MUNS_TRACKING_URL || 'https://munshot-notetaker-frontend.amazon-review-radar-489675.workers.dev/api/public/tracking';
+          const res = await fetch(trackingUrl, {
+            headers: { 'Authorization': 'Bearer ' + (env.MUNSBOT_TOKEN || 'quackquackquackquack') }
           });
-          if (!res.ok) return json({ error: 'Failed to fetch tracking data', status: res.status }, 502);
+          if (!res.ok) return json({ ok: true, tasks, warning: 'notetaker returned ' + res.status });
           const data = await res.json();
-          return json(data);
+          const people = Array.isArray(data && data.people) ? data.people : [];
+          const norm = (s) => String(s || '').trim();
+          const key = (m, t) => (norm(m) + '||' + norm(t)).toLowerCase();
+          const seen = new Set(tasks.map((x) => key(x.member, x.text)));
+          const today = new Date().toISOString().slice(0, 10);
+          let added = 0;
+          for (const p of people) {
+            const member = norm(p && p.name);
+            if (!member) continue;
+            const items = [
+              ...(Array.isArray(p.todo) ? p.todo : []).map((t) => ({ text: t, done: false })),
+              ...(Array.isArray(p.accomplished) ? p.accomplished : []).map((t) => ({ text: t, done: true })),
+            ];
+            for (const it of items) {
+              const text = norm(it.text);
+              if (!text || seen.has(key(member, text))) continue;
+              seen.add(key(member, text));
+              tasks.push({ id: crypto.randomUUID(), member, date: today, text, dashboardId: '', dashboardName: '',
+                done: it.done, doneAt: it.done ? new Date().toISOString() : null, source: 'notetaker', createdAt: new Date().toISOString() });
+              added++;
+            }
+          }
+          if (added && env.MANUAL) await writeTasks(env, tasks);
+          return json({ ok: true, tasks, imported: added });
         } catch (e) {
-          return json({ error: 'Failed to fetch tracking data: ' + e.message }, 502);
+          return json({ ok: true, tasks, warning: 'notetaker fetch failed: ' + e.message });
         }
       }
 
@@ -2614,30 +2643,25 @@ function rosterDelete(type, name, total){
 }
 async function exportTeamTasksPdf(){
   try {
-    const res = await fetch('/api/tracking-tasks');
-    if (!res.ok) throw new Error('Failed to fetch tasks');
-    const data = await res.json();
+    await syncTrackingTasks(); // fold the latest notetaker to-dos into the shared KV store first
+    const members = [...new Set([...(DATA.owners||[]), ...TASKS.map(t => t.member)])].filter(Boolean).sort();
+    if (!members.length){ alert('No tasks yet.'); return; }
 
-    if (!data.ok || !data.people) {
-      alert('No task data available');
-      return;
-    }
-
-    const content = data.people.map(person => {
-      const todo = person.todo || [];
-      const accomplished = person.accomplished || [];
+    const content = members.map(name => {
+      const mine = TASKS.filter(t => t.member === name);
+      const todo = mine.filter(t => !t.done);
+      const accomplished = mine.filter(t => t.done);
 
       return \`
         <div class="pdf-member">
-          <h2>\${esc(person.name)}</h2>
-          \${person.overall ? \`<p class="overview">\${esc(person.overall)}</p>\` : ''}
+          <h2>\${esc(name)}</h2>
           <div class="pdf-section">
             <h3>📝 To-Do (\${todo.length})</h3>
-            \${todo.length ? \`<ul>\${todo.map(t => \`<li>\${esc(t)}</li>\`).join('')}</ul>\` : '<p class="empty">No pending tasks</p>'}
+            \${todo.length ? \`<ul>\${todo.map(t => \`<li>\${esc(t.text)}</li>\`).join('')}</ul>\` : '<p class="empty">No pending tasks</p>'}
           </div>
           <div class="pdf-section">
             <h3>✅ Accomplished (\${accomplished.length})</h3>
-            \${accomplished.length ? \`<ul>\${accomplished.map(t => \`<li>\${esc(t)}</li>\`).join('')}</ul>\` : '<p class="empty">No accomplished tasks</p>'}
+            \${accomplished.length ? \`<ul>\${accomplished.map(t => \`<li>\${esc(t.text)}</li>\`).join('')}</ul>\` : '<p class="empty">No accomplished tasks</p>'}
           </div>
         </div>
       \`;
@@ -2958,6 +2982,17 @@ function groupByMember(list){ const g={}; list.forEach(t=>{ (g[t.member]=g[t.mem
 async function taskAdd(o){ const r=await api('POST','/api/tasks',{action:'add',...o}); if(r.ok){ const j=await r.json().catch(()=>({})); if(Array.isArray(j.tasks)) TASKS.push(...j.tasks); } return r; }
 async function taskToggle(t, done){ const r=await api('POST','/api/tasks',{action:'toggle',id:t.id,done}); if(r.ok){ t.done=done; t.doneAt=done?new Date().toISOString():null; } return r; }
 async function taskDelete(id){ const r=await api('POST','/api/tasks',{action:'delete',id}); if(r.ok){ TASKS=TASKS.filter(x=>x.id!==id); } return r; }
+// Pull the Munshot-notetaker to-dos into the shared KV task store, then refresh
+// the in-memory TASKS so the profile To-do lists + the Tasks PDF stay in sync.
+async function syncTrackingTasks(){
+  try {
+    const r = await fetch('/api/tracking-tasks');
+    if (!r.ok) return false;
+    const j = await r.json().catch(()=>({}));
+    if (j && Array.isArray(j.tasks)){ TASKS = j.tasks; return true; }
+  } catch(e){}
+  return false;
+}
 async function meetingSave(link){ const r=await api('POST','/api/meeting',{link}); if(r.ok){ MEETING.link=link; } return r; }
 
 function renderEod(){
@@ -3748,6 +3783,14 @@ async function loadDirectory(){
   } catch(e){}
 }
 loadDirectory();
+// Fold the latest notetaker to-dos into the shared KV store, then refresh views.
+syncTrackingTasks().then((changed) => {
+  if (!changed) return;
+  renderEod();
+  if (activeTab === 'team') renderTeamTab();
+  if (activeTab === 'standup') renderStandupTab();
+  if (overlay.classList.contains('open') && drawer.querySelector('.subtab')) { /* owner drawer open — leave as-is until next open */ }
+});
 </script>
 </body>
 </html>`;
