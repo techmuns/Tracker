@@ -2332,11 +2332,6 @@ function sectionsHtml(s, metaFn){
   }).join('');
 }
 let ownerSub = 'work';
-function ownerTodos(name){
-  const out = [];
-  DATA.dashboards.filter(d => d.owner === name).forEach(d => (d.feedbacks||[]).forEach(f => out.push({ d, f })));
-  return out;
-}
 function val(id){ const e = document.getElementById(id); return e ? e.value : ''; }
 function employeeProfileHtml(name){
   const p = personData(name), ed = CFG.manualEnabled;
@@ -2392,14 +2387,7 @@ function ownerBodyHtml(name, s){
       + (s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:'')
       + sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''));
   }
-  if (ownerSub === 'todo'){
-    const todos = ownerTodos(name);
-    if (!todos.length) return '<div class="empty">No feedbacks on this person\\'s dashboards yet.</div>';
-    const pending = todos.filter(t=>!t.f.implemented), done = todos.filter(t=>t.f.implemented);
-    const row = t => \`<div class="todo">\${CFG.manualEnabled?\`<button class="impl \${t.f.implemented?'yes':'no'}" data-fbtoggle="\${esc(t.d.id)}" data-fbid="\${esc(t.f.id)}">\${t.f.implemented?'✓':'✗'}</button>\`:\`<span class="impl \${t.f.implemented?'yes':'no'}">\${t.f.implemented?'✓':'✗'}</span>\`}<div class="todo-main"><div class="todo-top"><b>\${esc(t.f.label||'Feedback')}</b> <span class="muted">· \${esc(t.d.name)}</span>\${t.f.date?\`<span class="muted"> · \${esc(t.f.date)}</span>\`:''}</div>\${t.f.text?\`<div class="dnote">\${esc(t.f.text)}</div>\`:''}\${t.f.link?\`<a href="\${esc(t.f.link)}" target="_blank" class="lnk">▶ link</a>\`:''}</div><button class="btn ghost sm" data-open="\${esc(t.d.id)}">open</button></div>\`;
-    return \`<div class="section-t">Pending (\${pending.length})</div>\${pending.map(row).join('')||'<div class="dnote muted">All caught up 🎉</div>'}\${done.length?\`<div class="section-t">Implemented (\${done.length})</div>\${done.map(row).join('')}\`:''}\`;
-  }
-  if (ownerSub === 'tasks') return ownerTasksHtml(name);
+  if (ownerSub === 'todo' || ownerSub === 'tasks') return ownerTasksHtml(name);
   if (ownerSub === 'profile') return employeeProfileHtml(name);
   return employeeTerminalHtml(name); // attendance
 }
@@ -2459,11 +2447,11 @@ function wireOwnerTasks(name){
 function openOwner(name){ ownerSub = 'work'; renderOwner(name); overlay.classList.add('open'); }
 function renderOwner(name){
   const s = ownerStats(name), p = personData(name);
-  const pending = ownerTodos(name).filter(t=>!t.f.implemented).length;
+  const pending = TASKS.filter(t => t.member === name && !t.done).length;
   const hr = ownerSub==='profile';
   const nav = hr
     ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button></nav>\`
-    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='todo'?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button><button class="subtab \${ownerSub==='tasks'?'on':''}" data-sub="tasks">📝 Tasks</button></nav>\`;
+    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${(ownerSub==='todo'||ownerSub==='tasks')?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Team</button>
@@ -2486,7 +2474,7 @@ function renderOwner(name){
     if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else alert('Failed.');
   });
   if (ownerSub === 'profile') wireEmployeeProfile(name);
-  if (ownerSub === 'tasks') wireOwnerTasks(name);
+  if (ownerSub === 'todo' || ownerSub === 'tasks') wireOwnerTasks(name);
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────
@@ -2698,7 +2686,7 @@ function renderTeamTab(){
   const add = CFG.manualEnabled ? \`<div class="roster-add"><input id="memInput" placeholder="New team member name…"><button class="btn" id="memAdd">+ Add member</button></div>\` : '';
   const cards = DATA.owners.map(name => {
     const s = ownerStats(name), p = (DATA.people&&DATA.people[name])||{};
-    const pend = ownerTodos(name).filter(t=>!t.f.implemented).length;
+    const pend = TASKS.filter(t => t.member === name && !t.done).length;
     return \`<div class="profile-card" data-member="\${esc(name)}">
       \${CFG.manualEnabled?\`<button class="rm" data-rmown="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
       <div class="pc-head">\${avatar(name,'lg')}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${esc(p.role||'Team member')}</div></div></div>
