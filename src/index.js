@@ -1529,7 +1529,6 @@ function renderPage(data, opts) {
   .task-check:hover { border-color:var(--accent); }
   .task-check.done { background:var(--good); border-color:var(--good); }
   .task-text { flex:1; font-size:13px; line-height:1.5; word-break:break-word; }
-  .task-text.done { color:var(--muted); text-decoration:line-through; }
   .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; padding:0; width:20px; height:20px; flex:none; }
   .task-del:hover { color:var(--danger); }
   .empty-tasks { padding:16px; text-align:center; color:var(--muted); font-size:13px; }
