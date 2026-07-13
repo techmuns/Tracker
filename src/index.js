@@ -501,6 +501,21 @@ export default {
         return json({ ok: true, meeting: m });
       }
 
+      // ── Tracking tasks from Munshot notetaker ────────────────────────────
+      if (pathname === '/api/tracking-tasks') {
+        if (!env.MUNSBOT_TOKEN) return json({ error: 'MUNSBOT_TOKEN not configured' }, 503);
+        try {
+          const res = await fetch('https://munshot-notetaker-frontend.amazon-review-radar-489675.workers.dev/api/public/tracking', {
+            headers: { 'Authorization': 'Bearer ' + env.MUNSBOT_TOKEN }
+          });
+          if (!res.ok) return json({ error: 'Failed to fetch tracking data', status: res.status }, 502);
+          const data = await res.json();
+          return json(data);
+        } catch (e) {
+          return json({ error: 'Failed to fetch tracking data: ' + e.message }, 502);
+        }
+      }
+
       // ── People directory (clients = orgs, team = munshot members) ────────
       // Read-only proxy to the Muns platform; keeps the token server-side.
       if (pathname === '/api/directory') {
@@ -2542,60 +2557,74 @@ function rosterDelete(type, name, total){
     if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
   };
 }
-function exportTeamTasksPdf(){
-  const content = DATA.owners.map(name => {
-    const memberTasks = TASKS.filter(t => t.member === name);
-    const todo = memberTasks.filter(t => !t.done);
-    const done = memberTasks.filter(t => t.done);
+async function exportTeamTasksPdf(){
+  try {
+    const res = await fetch('/api/tracking-tasks');
+    if (!res.ok) throw new Error('Failed to fetch tasks');
+    const data = await res.json();
 
-    return \`
-      <div class="pdf-member">
-        <h2>\${esc(name)}</h2>
-        <div class="pdf-section">
-          <h3>📝 To-Do (\${todo.length})</h3>
-          \${todo.length ? \`<ul>\${todo.map(t => \`<li>\${esc(t.text)}</li>\`).join('')}</ul>\` : '<p class="empty">No pending tasks</p>'}
+    if (!data.ok || !data.people) {
+      alert('No task data available');
+      return;
+    }
+
+    const content = data.people.map(person => {
+      const todo = person.todo || [];
+      const accomplished = person.accomplished || [];
+
+      return \`
+        <div class="pdf-member">
+          <h2>\${esc(person.name)}</h2>
+          \${person.overall ? \`<p class="overview">\${esc(person.overall)}</p>\` : ''}
+          <div class="pdf-section">
+            <h3>📝 To-Do (\${todo.length})</h3>
+            \${todo.length ? \`<ul>\${todo.map(t => \`<li>\${esc(t)}</li>\`).join('')}</ul>\` : '<p class="empty">No pending tasks</p>'}
+          </div>
+          <div class="pdf-section">
+            <h3>✅ Accomplished (\${accomplished.length})</h3>
+            \${accomplished.length ? \`<ul>\${accomplished.map(t => \`<li>\${esc(t)}</li>\`).join('')}</ul>\` : '<p class="empty">No accomplished tasks</p>'}
+          </div>
         </div>
-        <div class="pdf-section">
-          <h3>✅ Accomplished (\${done.length})</h3>
-          \${done.length ? \`<ul>\${done.map(t => \`<li>\${esc(t.text)}</li>\`).join('')}</ul>\` : '<p class="empty">No accomplished tasks</p>'}
-        </div>
-      </div>
-    \`;
-  }).join('');
+      \`;
+    }).join('');
 
-  const printWindow = window.open('', '_blank');
-  printWindow.document.write(\`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Team Tasks - \${new Date().toLocaleDateString()}</title>
-      <style>
-        @media print { @page { margin: 1.5cm; } }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-        h1 { text-align: center; margin-bottom: 30px; color: #333; }
-        .pdf-member { page-break-inside: avoid; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
-        .pdf-member:last-child { border-bottom: none; }
-        h2 { color: #4f46e5; margin-bottom: 20px; font-size: 24px; }
-        .pdf-section { margin-bottom: 25px; }
-        h3 { color: #666; font-size: 16px; margin-bottom: 10px; }
-        ul { list-style-type: disc; padding-left: 25px; }
-        li { margin-bottom: 8px; line-height: 1.5; }
-        .empty { color: #999; font-style: italic; }
-        .date { text-align: center; color: #666; margin-bottom: 20px; }
-      </style>
-    </head>
-    <body>
-      <h1>Team Tasks Report</h1>
-      <div class="date">Generated on \${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
-      \${content}
-    </body>
-    </html>
-  \`);
-  printWindow.document.close();
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(\`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Team Tasks - \${new Date().toLocaleDateString()}</title>
+        <style>
+          @media print { @page { margin: 1.5cm; } }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+          h1 { text-align: center; margin-bottom: 30px; color: #333; }
+          .pdf-member { page-break-inside: avoid; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
+          .pdf-member:last-child { border-bottom: none; }
+          h2 { color: #4f46e5; margin-bottom: 10px; font-size: 24px; }
+          .overview { color: #666; font-size: 14px; margin-bottom: 20px; line-height: 1.6; font-style: italic; }
+          .pdf-section { margin-bottom: 25px; }
+          h3 { color: #666; font-size: 16px; margin-bottom: 10px; }
+          ul { list-style-type: disc; padding-left: 25px; }
+          li { margin-bottom: 8px; line-height: 1.5; }
+          .empty { color: #999; font-style: italic; }
+          .date { text-align: center; color: #666; margin-bottom: 20px; }
+        </style>
+      </head>
+      <body>
+        <h1>Team Tasks Report</h1>
+        <div class="date">Generated on \${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+        \${content}
+      </body>
+      </html>
+    \`);
+    printWindow.document.close();
 
-  setTimeout(() => {
-    printWindow.print();
-  }, 250);
+    setTimeout(() => {
+      printWindow.print();
+    }, 250);
+  } catch (e) {
+    alert('Failed to generate PDF: ' + e.message);
+  }
 }
 function renderTeamTab(){
   const el = G('tab-team');
