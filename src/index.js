@@ -503,10 +503,9 @@ export default {
 
       // ── Tracking tasks from Munshot notetaker ────────────────────────────
       if (pathname === '/api/tracking-tasks') {
-        if (!env.MUNSBOT_TOKEN) return json({ error: 'MUNSBOT_TOKEN not configured' }, 503);
         try {
           const res = await fetch('https://munshot-notetaker-frontend.amazon-review-radar-489675.workers.dev/api/public/tracking', {
-            headers: { 'Authorization': 'Bearer ' + env.MUNSBOT_TOKEN }
+            headers: { 'Authorization': 'Bearer quackquackquackquack' }
           });
           if (!res.ok) return json({ error: 'Failed to fetch tracking data', status: res.status }, 502);
           const data = await res.json();
