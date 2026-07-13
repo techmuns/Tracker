@@ -1570,7 +1570,6 @@ function renderPage(data, opts) {
       <button class="side-item" data-tab="team"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Team</span></button>
       <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
       <button class="side-item" data-tab="assign"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0zM7 8h10"/></svg><span>Assign</span></button>
-      <button class="side-item" data-tab="checklist"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L20 6"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Requests</span></button>
       <button class="side-item" data-tab="standup"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 8a4 4 0 0 0-4 4v2a4 4 0 0 0 8 0v-2a4 4 0 0 0-4-4z"/><path d="M5 12a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg><span>Standup</span></button>
     </nav>
     <div class="side-foot"><button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button></div>
@@ -1596,7 +1595,6 @@ function renderPage(data, opts) {
 <section class="tabview" id="tab-overview">
 <div class="legend" id="legend"></div>
 <div class="eod" id="eod"></div>
-<div class="insights" id="insights"></div>
 
 ${opts.manualEnabled ? `
 <div class="modal-bg" id="formModalBg"><div class="modal modal-form" id="formModal">
@@ -1682,7 +1680,6 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-team" hidden></section>
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
-<section class="tabview" id="tab-checklist" hidden></section>
 <section class="tabview" id="tab-standup" hidden></section>
 
 </div></main></div>
@@ -1833,82 +1830,6 @@ function clearAllFilters(){
   stateFilter.clear(); prioOnly = false;
   ['q','customer','owner'].forEach(id => document.getElementById(id).value = '');
   liveOnlyEl().checked = false;
-}
-// ── Insights (SVG donut + bar charts, no external libs) ────────────────────
-function donutSvg(){
-  const total = DATA.total || 1, r = 54, c = 2*Math.PI*r; let off = 0, segs = '';
-  STATES.forEach(s => {
-    const v = DATA.counts[s.id]||0; if (!v) return;
-    const len = v/total*c;
-    segs += \`<circle cx="66" cy="66" r="\${r}" fill="none" stroke="\${s.color}" stroke-width="15" stroke-dasharray="\${len} \${c-len}" stroke-dashoffset="\${-off}" transform="rotate(-90 66 66)" style="transition:stroke-dasharray .5s"></circle>\`;
-    off += len;
-  });
-  return \`<svg width="132" height="132" viewBox="0 0 132 132">\${segs}</svg>\`;
-}
-function barChart(items, statsFn, attr, useAvatar){
-  const rows = items.map(name => ({ name, s: statsFn(name) })).filter(r => r.s.total).sort((a,b) => b.s.total - a.s.total).slice(0,6);
-  if (!rows.length) return '<div class="sub">No data yet.</div>';
-  const max = Math.max(1, ...rows.map(r => r.s.total));
-  return \`<div class="bc">\${rows.map(r => \`<div class="bc-row" \${attr}="\${esc(r.name)}">
-    <div class="bc-top">\${useAvatar?avatar(r.name):''}<span class="nm">\${esc(r.name)}</span><span class="ct">\${r.s.total}</span></div>
-    <div class="bc-track" style="width:\${Math.max(8,r.s.total/max*100)}%">\${STATES.filter(x => r.s.c[x.id]).map(x => \`<i style="width:\${r.s.c[x.id]/r.s.total*100}%;background:\${x.color}" title="\${x.label}: \${r.s.c[x.id]}"></i>\`).join('')}</div>
-  </div>\`).join('')}</div>\`;
-}
-let insightsOpen = true;
-const STAGE_SHORT = { not_started:'Not started', ui_ux:'UI/UX', data_integration:'Data', final_check:'QA', feedback_open:'Feedback', feedback_incorp:'Incorp', completed:'Done' };
-const SVG = (p) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
-const ATT_ICN = {
-  user: SVG('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>'),
-  star: SVG('<polygon points="12 2 15 9 22 9 16 14 18 21 12 17 6 21 8 14 2 9 9 9"/>'),
-  load: SVG('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
-  msg: SVG('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
-  circle: SVG('<circle cx="12" cy="12" r="9"/>'),
-  check: SVG('<path d="M20 6L9 17l-5-5"/>'),
-};
-// Data-driven, clickable "what needs attention" callouts.
-function attentionItems(){
-  const un = DATA.dashboards.filter(d => !d.owner).length;
-  const awaiting = DATA.counts['feedback_open']||0, incorp = DATA.counts['feedback_incorp']||0, notStarted = DATA.counts['not_started']||0;
-  const prio = DATA.dashboards.filter(d => d.priorityLevel>0 && d.state!=='completed').length;
-  const out = [];
-  if (un) out.push({ tone:'warn', icon:ATT_ICN.user, big:un, main:'No owner assigned', sub:'give them an owner', act:'assign' });
-  if (prio) out.push({ tone:'warn', icon:ATT_ICN.star, big:prio, main:'Priority still open', sub:'high-priority, not done yet', act:'prio' });
-  if (awaiting) out.push({ tone:'accent', icon:ATT_ICN.msg, big:awaiting, main:'Awaiting client feedback', sub:'follow up with the client', act:'state:feedback_open' });
-  if (out.length<3 && incorp) out.push({ tone:'accent', icon:ATT_ICN.load, big:incorp, main:'Feedback to incorporate', sub:'client changes in progress', act:'state:feedback_incorp' });
-  if (out.length<3 && notStarted) out.push({ tone:'muted', icon:ATT_ICN.circle, big:notStarted, main:'Not started yet', sub:'kick these off soon', act:'state:not_started' });
-  if (!out.length) out.push({ tone:'good', icon:ATT_ICN.check, big:'✓', main:'All clear', sub:'nothing needs attention', act:'' });
-  return out.slice(0,3);
-}
-function renderInsights(){
-  const el = document.getElementById('insights'); if (!el) return;
-  const total = DATA.total||0, done = DATA.counts['completed']||0, pct = total ? Math.round(done/total*100) : 0;
-  const stepper = STATES.map(s => \`<div class="step" data-leg="\${s.id}" title="\${esc(s.label)}: \${DATA.counts[s.id]||0}"><div class="step-n">\${DATA.counts[s.id]||0}</div><span class="step-bar" style="background:\${s.color}"></span><div class="step-lbl">\${STAGE_SHORT[s.id]}</div></div>\`).join('');
-  const att = attentionItems().map(a => \`<button class="att-row att-\${a.tone}"\${a.act?' data-act="'+esc(a.act)+'"':' disabled'}><span class="att-ic">\${a.icon}</span><div class="att-big">\${a.big}</div><div class="att-txt"><div class="att-main">\${a.main}</div><div class="att-sub">\${a.sub}</div></div>\${a.act?'<svg class="att-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>':''}</button>\`).join('');
-  const body = insightsOpen ? \`<div class="ins-grid">
-    <div class="ins-card"><h4>Overall progress</h4>
-      <div class="ov-head"><span class="ov-pct">\${pct}%</span><span class="ov-cap">\${total ? done+' of '+total+' dashboard'+(total===1?'':'s')+' completed' : 'No dashboards yet'}</span></div>
-      <div class="ov-bar"><i style="width:\${pct}%"></i></div>
-      <div class="stepper">\${stepper}</div>
-    </div>
-    <div class="ins-card"><h4>Needs attention</h4><div class="att-list">\${att}</div></div>
-    <div class="ins-card"><h4>Top team members</h4>\${barChart(DATA.owners, ownerStats, 'data-bc-owner', true)}</div>
-    <div class="ins-card"><h4>Top clients</h4>\${barChart(DATA.customers, clientStats, 'data-bc-customer', false)}</div>
-  </div>\` : '';
-  el.innerHTML = \`<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px"><button class="ins-toggle" id="insToggle">📊 Insights \${insightsOpen?'▾':'▸'}</button>\${insightsOpen?'<button class="btn ghost sm" id="viewTableBtn">📋 View Table</button>':''}</div>\${body}\`;
-  document.getElementById('insToggle').onclick = () => { insightsOpen = !insightsOpen; renderInsights(); };
-  { const vtb = document.getElementById('viewTableBtn'); if (vtb) vtb.onclick = () => { dashView = 'table'; localStorage.setItem('dashView', 'table'); syncViewSeg(); render(); }; }
-  if (insightsOpen){
-    el.querySelectorAll('[data-leg]').forEach(li => li.onclick = () => { isolateState(li.dataset.leg); window.scrollTo({top:0,behavior:'smooth'}); });
-    el.querySelectorAll('[data-bc-owner]').forEach(b => b.onclick = () => openOwner(b.getAttribute('data-bc-owner')));
-    el.querySelectorAll('[data-bc-customer]').forEach(b => b.onclick = () => openClient(b.getAttribute('data-bc-customer')));
-    el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
-      const a = b.dataset.act;
-      if (a === 'assign') switchTab('assign');
-      else if (a === 'prio'){ clearAllFilters(); prioOnly = true; render(); window.scrollTo({top:0,behavior:'smooth'}); }
-      else if (a.slice(0,6) === 'owner:') openOwner(a.slice(6));
-      else if (a.slice(0,6) === 'state:'){ isolateState(a.slice(6)); window.scrollTo({top:0,behavior:'smooth'}); }
-    });
-  }
 }
 
 let dashView = (localStorage.getItem('dashView') === 'cards') ? 'cards' : 'table';
@@ -2970,72 +2891,11 @@ let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients','assign','checklist','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','team','clients','assign','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
   if (tab === 'assign') renderAssignTab();
-  if (tab === 'checklist') renderChecklistTab();
   if (tab === 'standup') renderStandupTab();
-}
-// ── Checklist / proof tab: every client feedback as a tick-off item with proof ──
-async function toggleFbDone(id, fbId, checked, el){
-  const r = await api('POST','/api/feedback',{ id, fbId, implemented: checked });
-  if (!r.ok){ alert('Could not update.'); if(el) el.checked = !checked; return; }
-  const d = DATA.dashboards.find(x=>x.id===id); if(d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.implemented=checked; }
-  renderChecklistTab();
-}
-async function addProof(id, fbId){
-  const up = await uploadFile(); if (!up) return;
-  const r = await api('POST','/api/feedback',{ id, fbId, addFile: up });
-  if (!r.ok){ alert('Upload failed.'); return; }
-  const j = await r.json().catch(()=>({})); const d = DATA.dashboards.find(x=>x.id===id);
-  if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||f.files; }
-  renderChecklistTab();
-}
-async function removeProof(id, fbId, fileId){
-  const r = await api('POST','/api/feedback',{ id, fbId, removeFile: fileId });
-  if (!r.ok){ alert('Could not remove.'); return; }
-  const j = await r.json().catch(()=>({})); const d = DATA.dashboards.find(x=>x.id===id);
-  if (d){ const f=(d.feedbacks||[]).find(f=>f.id===fbId); if(f) f.files = j.files||[]; }
-  renderChecklistTab();
-}
-let ckSearch = '', ckClient = '';
-function renderChecklistTab(){
-  const el = G('tab-checklist'), ed = CFG.manualEnabled;
-  const reqs = [];
-  DATA.dashboards.forEach(d => (d.feedbacks||[]).forEach(f => reqs.push({ d, f, client:(d.customers && d.customers[0]) || 'No client', owner:d.owner||'' })));
-  const clients = [...new Set(reqs.map(r => r.client))].sort();
-  const q = ckSearch.trim().toLowerCase();
-  const fil = reqs.filter(r => (!ckClient || r.client===ckClient) && (!q || ((r.f.label||'')+' '+(r.f.text||'')+' '+r.client+' '+r.d.name).toLowerCase().indexOf(q)>=0));
-  const total = fil.length, done = fil.filter(r=>r.f.implemented).length, pending = total-done, noProof = fil.filter(r=>!r.f.implemented && !(r.f.files||[]).length).length, pct = total?Math.round(done/total*100):0;
-
-  const card = (r) => {
-    const f=r.f, d=r.d, editable = ed && d.source==='manual';
-    const proof = (f.files||[]).slice(0,5).map(x => '<a class="rq-pf" href="'+esc(x.url||('/api/file?id='+x.id))+'" target="_blank" rel="noopener" title="'+esc(x.name||'proof')+'">'+((x.type||'').startsWith('image/')?'🖼':'📄')+'</a>').join('');
-    return '<div class="rq-card'+(f.implemented?' rq-done':'')+'">'
-      + '<div class="rq-ctop"><span class="rq-cl"><span class="rq-dot" style="background:'+nameColor('c·'+r.client)+'"></span>'+esc(r.client)+'</span>'+(r.owner?'<span class="rq-av" title="'+esc(r.owner)+'">'+avatar(r.owner)+'</span>':'')+'</div>'
-      + '<div class="rq-ttl">'+esc(f.label||'Change')+'</div>'
-      + (f.text?'<div class="rq-txt">'+esc(f.text)+'</div>':'')
-      + '<div class="rq-dash">📊 '+esc(d.name)+'</div>'
-      + '<div class="rq-foot"><div class="rq-pfs">'+(proof||'<span class="rq-np">no proof yet</span>')+(editable?'<button class="rq-add" data-addproof="'+esc(f.id)+'" data-dash="'+esc(d.id)+'" title="Attach proof">＋</button>':'')+'</div>'
-      + (editable ? '<button class="rq-btn'+(f.implemented?' undo':'')+'" data-ck="'+esc(f.id)+'" data-dash="'+esc(d.id)+'" data-cur="'+(f.implemented?1:0)+'">'+(f.implemented?'✓ Done':'Mark done')+'</button>' : '<span class="rq-tag'+(f.implemented?' ok':'')+'">'+(f.implemented?'Done':'Pending')+'</span>')
-      + '</div></div>';
-  };
-  const col = (title, arr, cls) => '<div class="rq-col"><div class="rq-ch '+cls+'"><span>'+title+'</span><b>'+arr.length+'</b></div><div class="rq-list">'+(arr.map(card).join('')||'<div class="rq-empty">— none —</div>')+'</div></div>';
-
-  el.innerHTML = '<div class="tabhead"><h2>📋 Client Requests</h2><div class="sub">Every change each client asked for — track it to done, with proof</div></div>'
-    + '<div class="rq-hero"><div class="rq-heroL"><div class="rq-pct">'+pct+'%</div><div class="rq-pcap">'+done+' of '+total+' client requests done</div><div class="rq-hbar"><i style="width:'+pct+'%"></i></div></div>'
-      + '<div class="rq-kpis"><div class="rq-k"><b>'+pending+'</b><span>pending</span></div><div class="rq-k"><b class="ok">'+done+'</b><span>done</span></div><div class="rq-k"><b class="warn">'+noProof+'</b><span>no proof</span></div></div></div>'
-    + '<div class="rq-tools"><input id="ckSearch" class="rq-srch" placeholder="Search requests, clients, dashboards…" value="'+esc(ckSearch)+'"><select id="ckClient" class="rq-sel"><option value="">All clients</option>'+clients.map(c=>'<option'+(c===ckClient?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select></div>'
-    + (reqs.length ? '<div class="rq-board">'+col('🕓 Pending', fil.filter(r=>!r.f.implemented), 'pend')+col('✅ Completed', fil.filter(r=>r.f.implemented), 'done')+'</div>'
-        : '<div class="empty">No client requests yet.<br>Open a dashboard → add a feedback (the client\\'s requested change) → it appears here.</div>');
-
-  const sb=G('ckSearch'); if(sb) sb.oninput=()=>{ const p=sb.selectionStart; ckSearch=sb.value; renderChecklistTab(); const s2=G('ckSearch'); if(s2){ s2.focus(); try{ s2.setSelectionRange(p,p); }catch(e){} } };
-  const cs=G('ckClient'); if(cs) cs.onchange=()=>{ ckClient=cs.value; renderChecklistTab(); };
-  if(ed){
-    el.querySelectorAll('[data-ck]').forEach(b => b.onclick = () => toggleFbDone(b.dataset.dash, b.dataset.ck, b.dataset.cur!=='1', b));
-    el.querySelectorAll('[data-addproof]').forEach(b => b.onclick = () => addProof(b.dataset.dash, b.dataset.addproof));
-  }
 }
 
 // ── Workload-balanced auto-assignment ──────────────────────────────────────
@@ -3881,7 +3741,6 @@ document.getElementById('prioToggle').onclick = () => {
   if (prioOnly){ stateFilter.clear(); liveOnlyEl().checked = false; }
   render();
 };
-renderInsights();
 render();
 renderEod();
 
