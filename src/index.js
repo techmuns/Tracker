@@ -2965,7 +2965,7 @@ function renderAssignTab(){
   const el = G('tab-assign'), owners = assignOwners(), un = unassignedDashboards();
   const board = owners.length ? owners.map(o => { const { load, active } = ownerLoad(o); const [cls,lab] = loadStatus(load,active); const pct = Math.min(100, load/CAP*100);
     return \`<div class="wl-card"><div class="wl-head">\${avatar(o)}<div class="wl-name">\${esc(o)}</div><span class="wl-pill \${cls}">\${lab}</span></div>
-      <div class="wl-meta">\${active} active · load \${load.toFixed(1)} / \${CAP}</div><div class="wl-bar"><i class="\${cls}" style="width:\${pct}%"></i></div></div>\`;
+      <div class="wl-meta">\${active} active dashboard\${active!==1?'s':''}</div><div class="wl-bar"><i class="\${cls}" style="width:\${pct}%"></i></div></div>\`;
     }).join('') : '<div class="empty">No team members yet — add them in the Team tab.</div>';
   const rec = planAutoAssign();
   const queue = un.length ? un.slice().sort((a,b)=>(b.priorityLevel-a.priorityLevel)||((a.serial||1e9)-(b.serial||1e9))).map(d => {
