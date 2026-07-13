@@ -22,6 +22,9 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # Optional endpoint override (defaults to https://devde.muns.io/email/send/raw):
 #   MUNS_EMAIL_URL = "https://devde.muns.io/email/send/raw"
 
+# Munshot notetaker API token for tracking tasks (set as SECRET):
+#   npx wrangler secret put MUNSBOT_TOKEN
+
 # Nightly Build Update digest recipient. Defaults to tech@muns.io (your test
 # inbox). Once verified, switch to the founder:
 #   npx wrangler secret put DIGEST_TO     # then enter ceekay@muns.io
