@@ -290,7 +290,25 @@ export function manualToDashboard(m) {
     manualStatus: clean(m.manualStatus),
     requirementFiles: Array.isArray(m.requirementFiles) ? m.requirementFiles : [],
     feedbacks: normalizeFeedbacks(m.feedbacks),
+    sections: normalizeSections(m.sections),
+    publishedAt: m.publishedAt || '',
+    publishRef: m.publishRef || '',
   };
+}
+
+// Sections/subsections tree (admin-page structure), capped at MAX_SECTION_DEPTH
+// levels. Each node is { name, children:[…] }; empty/garbage nodes are dropped.
+export const MAX_SECTION_DEPTH = 4;
+export function normalizeSections(list, depth = 1) {
+  if (!Array.isArray(list) || depth > MAX_SECTION_DEPTH) return [];
+  const out = [];
+  for (const n of list) {
+    if (!n || typeof n !== 'object') continue;
+    const name = clean(n.name);
+    const children = depth < MAX_SECTION_DEPTH ? normalizeSections(n.children, depth + 1) : [];
+    if (name || children.length) out.push({ name, children });
+  }
+  return out;
 }
 
 // Structured feedbacks: each is a dated client comment with optional link/files

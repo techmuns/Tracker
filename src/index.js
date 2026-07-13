@@ -9,7 +9,7 @@
 // All dashboards live in the KV namespace bound as MANUAL — there is no
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
-import { buildDataset, manualToDashboard, STATES } from './classify.js';
+import { buildDataset, manualToDashboard, normalizeSections, STATES } from './classify.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -135,6 +135,37 @@ async function fetchMunsDirectory(env) {
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e), clients: [], team: [] };
   }
+}
+
+// ── Publish a dashboard onto the Munshot admin page ─────────────────────────
+// POSTs the dashboard (title + link + description + the section/subsection tree)
+// to the Munshot create-dashboard endpoint so it goes live on the admin page,
+// instead of re-entering it there by hand. The endpoint is configurable via
+// MUNS_DASHBOARD_URL; the token comes from the Worker env (never the browser).
+// NOTE: the payload keys below are a best-effort mapping — adjust them to the
+// exact Munshot create-dashboard contract once known (see PUBLISH_PAYLOAD).
+async function publishToMuns(env, entry) {
+  if (!env.MUNS_TOKEN) return { ok: false, error: 'MUNS_TOKEN is not set in the Worker environment.' };
+  const endpoint = env.MUNS_DASHBOARD_URL;
+  if (!endpoint) return { ok: false, error: 'MUNS_DASHBOARD_URL is not set — add the Munshot create-dashboard endpoint as a Worker var/secret.' };
+  const payload = {                                   // PUBLISH_PAYLOAD
+    title: String(entry.name || '').trim(),
+    type: entry.dashboardType || 'iframe',            // URL Embed (Iframe) by default
+    link: String(entry.dashboardUrl || '').trim(),
+    description: String(entry.note || '').trim(),
+    sections: normalizeSections(entry.sections),      // [{ name, children:[…] }]
+  };
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch (e) {}
+    const ref = j && (j.id || j._id || j.dashboardId || (j.data && (j.data.id || j.data._id)));
+    return { ok: r.ok, status: r.status, ref: ref ? String(ref) : '', response: (t || '').slice(0, 600) };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
 
 // Nightly digest recipient — override with the DIGEST_TO env var/secret.
@@ -270,6 +301,7 @@ export default {
             manualStatus: body.manualStatus || '',
             requirementFiles: Array.isArray(body.requirementFiles) ? body.requirementFiles : [],
             feedbacks: Array.isArray(body.feedbacks) ? body.feedbacks : [],
+            sections: Array.isArray(body.sections) ? body.sections : [],
           };
           const list = await readManual(env);
           list.push(entry);
@@ -286,7 +318,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -302,6 +334,28 @@ export default {
           return json({ ok: true, removed: list.length - next.length });
         }
         return json({ error: 'Method not allowed.' }, 405);
+      }
+
+      // ── Publish a dashboard onto the Munshot admin page ──────────────────
+      if (pathname === '/api/publish') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        const body = await request.json().catch(() => ({}));
+        const id = String(body.id || '').trim();
+        if (!id) return json({ error: 'id is required.' }, 400);
+        const list = await readManual(env);
+        const i = list.findIndex((e) => e.id === id);
+        if (i === -1) return json({ error: 'Dashboard not found (only app-created cards can be published).' }, 404);
+        if (!String(list[i].name || '').trim()) return json({ error: 'A dashboard title is required before publishing.' }, 400);
+        const res = await publishToMuns(env, list[i]);
+        if (res.ok) {
+          list[i].publishedAt = new Date().toISOString();
+          if (res.ref) list[i].publishRef = res.ref;
+          list[i].updatedAt = list[i].publishedAt;
+          await writeManual(env, list);
+        }
+        return json({ ...res, id, publishedAt: res.ok ? list[i].publishedAt : undefined }, res.ok ? 200 : 502);
       }
 
       // ── Priority API — stores a level per dashboard (1 = highest) ────────
@@ -1091,6 +1145,7 @@ function renderPage(data, opts) {
   .tbtn { display:inline-grid; place-items:center; width:26px; height:26px; border:1px solid var(--line); background:var(--surface); border-radius:7px; cursor:pointer; color:var(--txt2); text-decoration:none; font-size:13px; margin-left:4px; }
   .tbtn:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-weak); }
   .tbtn.del:hover { border-color:var(--danger-line); color:var(--danger); background:var(--danger-bg); }
+  .tbtn.pubdone { color:var(--good); border-color:var(--good-line); background:var(--good-bg); }
   .dtable .grp td { background:var(--surface2); font-weight:700; font-size:12px; color:var(--txt2); }
   /* Insights / charts */
   .insights { padding:8px 28px 4px; }
@@ -1476,6 +1531,34 @@ function renderPage(data, opts) {
   .fchip .fx { border:0; background:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0 0 0 2px; }
   .fchip .fx:hover { color:var(--danger); }
   .card.clickable { cursor:pointer; }
+  /* ── Sections / subsections editor (admin-page structure, up to 4 levels) ── */
+  .sec-editor { background:var(--surface2); border:1px solid var(--line); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  .sec-empty { font-size:12.5px; color:var(--muted); text-align:center; padding:6px 0 2px; }
+  .sec-node { display:flex; flex-direction:column; gap:8px; }
+  .sec-node.depth-1 { background:var(--surface); border:1px solid var(--line); border-radius:11px; padding:11px 12px; box-shadow:var(--shadow); }
+  .sec-children { display:flex; flex-direction:column; gap:8px; padding-left:16px; border-left:2px solid var(--line2); margin-left:4px; }
+  .sec-node.depth-1 > .sec-children { border-left-color:var(--accent-line); }
+  .sec-row { display:flex; align-items:center; gap:9px; }
+  .sec-pill { flex:0 0 auto; font-size:11.5px; font-weight:700; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:7px; padding:5px 10px; white-space:nowrap; }
+  .modal-form .form-grid .sec-name { flex:1; min-width:0; width:auto; }
+  .sec-x { flex:0 0 auto; width:38px; align-self:stretch; border:1px solid var(--danger-line); background:var(--danger-bg); color:var(--danger); border-radius:8px; cursor:pointer; font-size:15px; line-height:1; }
+  .sec-x:hover { background:var(--danger); color:#fff; border-color:var(--danger); }
+  .sec-add { align-self:flex-start; font:inherit; font-size:12.5px; font-weight:700; cursor:pointer; border-radius:9px; padding:7px 13px; transition:background .12s,border-color .12s,color .12s; }
+  .sec-add.sub { color:var(--accent); background:transparent; border:1.5px dashed var(--accent-line); }
+  .sec-add.sub:hover { background:var(--accent-weak); border-color:var(--accent); }
+  .sec-add.section { color:var(--accent); background:var(--surface); border:1.5px solid var(--accent-line); }
+  .sec-add.section:hover { background:var(--accent-weak); border-color:var(--accent); }
+  /* Publish button (card + detail modal) */
+  .pub-btn { font:inherit; font-size:11.5px; font-weight:650; color:#fff; background:var(--grad); border:0; border-radius:999px; padding:5px 12px; cursor:pointer; white-space:nowrap; box-shadow:0 2px 8px rgba(79,70,229,.28); display:inline-flex; align-items:center; gap:4px; }
+  .pub-btn:hover { filter:brightness(1.05); }
+  .pub-btn[disabled] { opacity:.6; cursor:default; box-shadow:none; }
+  .pub-btn.done { background:var(--good-bg); color:var(--good); border:1px solid var(--good-line); box-shadow:none; }
+  .pub-btn.done:hover { filter:none; background:var(--good); color:#fff; }
+  /* Read-only sections tree (detail modal) */
+  .secview { list-style:none; margin:0; padding:0; }
+  .secview .secview { margin:4px 0 0 14px; padding-left:11px; border-left:2px solid var(--line2); }
+  .secview li { font-size:13.5px; color:var(--txt2); padding:3px 0; }
+  .secview-num { display:inline-block; min-width:36px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
@@ -1565,6 +1648,9 @@ ${opts.manualEnabled ? `
         <div id="fbRows"></div>
         <button class="btn ghost sm" id="addFb" type="button" title="Add feedback">+ Feedback</button>
       </label>
+      <div class="field wide">Sections <span style="color:var(--muted);font-weight:400;font-size:11px">(up to 4 levels — publishes to the admin page)</span>
+        <div class="sec-editor" id="sectionRows"></div>
+      </div>
       <input type="hidden" id="f_meeting">
     </div>
     <div class="panel-actions">
@@ -1671,6 +1757,29 @@ function progressBar(d){
     <div class="prog-track">\${segs}</div>
   </div>\`;
 }
+// Publish button (goes live on the Munshot admin page). Shows a "Published" state
+// once pushed; clicking again re-publishes the latest version.
+function publishBtnHtml(d){
+  const done = !!d.publishedAt, when = done ? String(d.publishedAt).slice(0,10) : '';
+  return \`<button class="pub-btn \${done?'done':''}" data-publish="\${esc(d.id)}" data-name="\${esc(d.name)}" onclick="event.stopPropagation()" title="\${done?'Published '+esc(when)+' — click to re-publish':'Publish to the admin page'}">\${done?'✓ Published':'⬆ Publish'}</button>\`;
+}
+async function publishDash(id, btn){
+  const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
+  const again = !!d.publishedAt;
+  if (!confirm('Publish "'+d.name+'" to the admin page now?'+(again?'\\n\\nAlready published — this pushes the latest version again.':''))) return;
+  const old = btn ? btn.innerHTML : '';
+  if (btn){ btn.disabled = true; btn.textContent = 'Publishing…'; }
+  const res = await api('POST', '/api/publish', { id });
+  const j = await res.json().catch(() => ({}));
+  if (res.ok){
+    d.publishedAt = j.publishedAt || new Date().toISOString(); if (j.ref) d.publishRef = j.ref;
+    render();
+    const dbg = G('detailBg'); if (dbg && dbg.classList.contains('open')) openDetail(id);
+  } else {
+    alert('Publish failed: ' + (j.error || j.response || ('HTTP '+res.status)));
+    if (btn){ btn.disabled = false; btn.innerHTML = old; }
+  }
+}
 function card(d, n){
   const s = SMAP[d.state];
   const fields = [['Requirements',d.requirements],['Improvements',d.improvement],['Feedback',d.feedback]].filter(([,v]) => v && v !== '-');
@@ -1701,6 +1810,7 @@ function card(d, n){
       <span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>
       <div class="foot-actions">
         \${d.dashboardUrl ? \`<a class="visit-btn" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : ''}
+        \${editable ? publishBtnHtml(d) : ''}
         \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
       </div>
     </div>
@@ -1815,6 +1925,7 @@ function rowHtml(d, n){
   const dash = d.dashboardUrl ? \`<a class="tlink" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : '<span class="tmut">—</span>';
   const meetCell = meet ? \`<a class="tlink" href="\${esc(meet.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="\${esc(meet.label||'Open link')}">▶ \${esc(meet.label||'Link')}</a>\` : '<span class="tmut">—</span>';
   const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add update">＋</button>\` : '';
+  const pub = editable ? \`<button class="tbtn \${d.publishedAt?'pubdone':''}" data-publish="\${esc(d.id)}" data-name="\${esc(d.name)}" title="\${d.publishedAt?'Published — click to re-publish':'Publish to the admin page'}">⬆</button>\` : '';
   const editDel = editable ? \`<button class="tbtn" data-edit="\${esc(d.id)}" title="Edit">✎</button><button class="tbtn del" data-del="\${esc(d.id)}" title="Delete">×</button>\` : '';
   return \`<tr class="drow" data-card="\${esc(d.id)}">
     <td class="tnum">\${n}</td>
@@ -1825,7 +1936,7 @@ function rowHtml(d, n){
     <td class="tstage"><span class="tstage-lbl"><span class="tdot" style="background:\${s.color}"></span>\${esc(s.label)}</span><div class="ttrack"><i style="width:\${pct}%;background:\${s.color}"></i></div></td>
     <td>\${dash}</td>
     <td>\${meetCell}</td>
-    <td class="tacts">\${upd}\${editDel}</td>
+    <td class="tacts">\${pub}\${upd}\${editDel}</td>
   </tr>\`;
 }
 function dashTable(bodyRows){
@@ -2117,6 +2228,39 @@ function updateDueFieldVisibility(){
   const dueField = G('dueField');
   if (stageSelect && dueField) dueField.hidden = stageSelect.value === 'completed';
 }
+// ── Sections / subsections editor (nested, up to 4 levels; mirrors the admin) ──
+const MAX_SEC_DEPTH = 4;
+let sectionsState = [];
+let secSeq = 0;
+function newSecNode(){ return { id: 'sec'+(secSeq++), name:'', children:[] }; }
+function cloneSecNodes(nodes){ return (Array.isArray(nodes)?nodes:[]).map(n => ({ id:'sec'+(secSeq++), name:(n&&n.name)||'', children:cloneSecNodes(n&&n.children) })); }
+function findSecNode(nodes, id){ for (const n of nodes){ if (n.id===id) return n; const f=findSecNode(n.children, id); if (f) return f; } return null; }
+function removeSecNode(nodes, id){ const i=nodes.findIndex(n=>n.id===id); if (i>=0){ nodes.splice(i,1); return true; } for (const n of nodes){ if (removeSecNode(n.children, id)) return true; } return false; }
+function pruneSecNodes(nodes){ return nodes.map(n=>({ name:(n.name||'').trim(), children:pruneSecNodes(n.children) })).filter(n=>n.name || n.children.length); }
+function getSections(){ return pruneSecNodes(sectionsState); }
+function secNodeHtml(node, num, depth){
+  const isSection = depth === 1;
+  const label = (isSection ? 'Section ' : 'Sub ') + num;
+  let kids = node.children.map((c,j) => secNodeHtml(c, num+'.'+(j+1), depth+1)).join('');
+  const addChild = depth < MAX_SEC_DEPTH
+    ? \`<button type="button" class="sec-add sub" data-secadd="\${node.id}">+ Sub \${num}.\${node.children.length+1}</button>\` : '';
+  return \`<div class="sec-node depth-\${depth}">
+    <div class="sec-row"><span class="sec-pill">\${label}</span><input class="sec-name" data-node="\${node.id}" placeholder="\${isSection?'Section name':'Subsection name'}" value="\${esc(node.name)}"><button type="button" class="sec-x" data-secdel="\${node.id}" title="Remove">×</button></div>
+    <div class="sec-children">\${kids}\${addChild}</div>
+  </div>\`;
+}
+function renderSections(focusId){
+  const box = G('sectionRows'); if (!box) return;
+  const empty = sectionsState.length ? '' : '<div class="sec-empty">No sections yet — add one to structure this dashboard on the admin page.</div>';
+  box.innerHTML = empty + sectionsState.map((n,i) => secNodeHtml(n, String(i+1), 1)).join('')
+    + \`<button type="button" class="sec-add section" id="addSection">+ Section \${sectionsState.length+1}</button>\`;
+  box.querySelectorAll('.sec-name').forEach(inp => inp.oninput = () => { const n=findSecNode(sectionsState, inp.dataset.node); if (n) n.name = inp.value; });
+  box.querySelectorAll('[data-secadd]').forEach(b => b.onclick = () => { const n=findSecNode(sectionsState, b.dataset.secadd); if (n){ const c=newSecNode(); n.children.push(c); renderSections(c.id); } });
+  box.querySelectorAll('[data-secdel]').forEach(b => b.onclick = () => { removeSecNode(sectionsState, b.dataset.secdel); renderSections(); });
+  const addS = G('addSection'); if (addS) addS.onclick = () => { const c=newSecNode(); sectionsState.push(c); renderSections(c.id); };
+  if (focusId){ const inp = box.querySelector('[data-node="'+focusId+'"]'); if (inp) inp.focus(); }
+}
+
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
@@ -2130,6 +2274,8 @@ function setForm(d){
   setDue(d ? (d.dueDate || '') : '');
   fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
   renderFbRows();
+  sectionsState = d && Array.isArray(d.sections) ? cloneSecNodes(d.sections) : [];
+  renderSections();
   G('formMsg').textContent = '';
   updateDueFieldVisibility();
 }
@@ -2203,6 +2349,7 @@ if (CFG.manualEnabled){
       dashboardUrl: G('f_url').value.trim(),
       dueDate: G('f_due').value,
       feedbacks: getFeedbacks(),
+      sections: getSections(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
     // New dashboard with no owner → auto-assign to the lightest-loaded teammate.
@@ -2695,6 +2842,14 @@ function fileGrid(files){
   }).join('');
 }
 function factCell(label, val){ return \`<div class="fact"><div class="fl">\${label}</div><div class="fv">\${val}</div></div>\`; }
+// Read-only render of the section/subsection tree with 1 / 1.1 / 1.1.1 numbering.
+function secViewHtml(nodes, prefix){
+  if (!Array.isArray(nodes) || !nodes.length) return '';
+  return '<ul class="secview">' + nodes.map((n,i) => {
+    const num = (prefix ? prefix+'.' : '') + (i+1);
+    return '<li><span class="secview-num">'+esc(num)+'</span> '+esc(n.name||'—')+secViewHtml(n.children, num)+'</li>';
+  }).join('') + '</ul>';
+}
 function fbView(did, f, editable){
   const u = f.link;
   return \`<div class="fbv">
@@ -2716,7 +2871,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Update</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -2732,6 +2887,7 @@ function openDetail(id){
       \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
       \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
       \${links.length?\`<div class="dsec"><h4>YouTube Links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
+      \${(d.sections&&d.sections.length)?\`<div class="dsec"><h4>Sections\${d.publishedAt?' · <span style="color:var(--good)">published '+esc(String(d.publishedAt).slice(0,10))+'</span>':''}</h4>\${secViewHtml(d.sections,'')}</div>\`:''}
       <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
       \${d.improvement&&d.improvement!=='-'?\`<div class="dsec"><h4>Improvements</h4><div class="dnote">\${esc(d.improvement)}</div></div>\`:''}
       \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
@@ -2740,6 +2896,7 @@ function openDetail(id){
   G('dX').onclick = closeDetail;
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
   const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
+  const pubBtn = detailModal.querySelector('[data-publish]'); if (pubBtn) pubBtn.onclick = () => publishDash(id, pubBtn);
   const pdfBtn = document.getElementById('dPdf'); if (pdfBtn) pdfBtn.onclick = () => genBuildUpdate(id, pdfBtn);
   const mailBtn = document.getElementById('dMail'); if (mailBtn) mailBtn.onclick = () => emailBuildUpdate(id, mailBtn);
   detailModal.querySelectorAll('[data-owner]').forEach(b => b.onclick = () => { closeDetail(); openOwner(b.dataset.owner); });
@@ -3023,6 +3180,7 @@ document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => swi
 // Click a card → open its detail modal (buttons/chips handled first).
 document.getElementById('grid').addEventListener('click', (e) => {
   const p = e.target.closest('[data-prio]'); if (p){ togglePriority(p.dataset.prio); return; }
+  const pub = e.target.closest('[data-publish]'); if (pub){ publishDash(pub.dataset.publish, pub); return; }
   const u = e.target.closest('[data-update]'); if (u){ openUpdate(u.dataset.update, u.dataset.name); return; }
   const ed = e.target.closest('[data-edit]'); if (ed){ openEdit(ed.dataset.edit); return; }
   if (e.target.closest('[data-setstage]') || e.target.closest('[data-del]')) return;
