@@ -982,6 +982,13 @@ function renderPage(data, opts) {
   .tag.state { font-weight:600; }
   .tag.live { color:var(--good); background:var(--good-bg); border-color:var(--good-line); }
   .tag.src { color:var(--accent); background:var(--accent-weak); border-color:var(--accent-line); }
+  .tag.unassigned-tag { color:#b45309; background:#fef3c7; border-color:#fcd9a5; font-weight:650; }
+  [data-theme="dark"] .tag.unassigned-tag { color:#fcd34d; background:#2a2410; border-color:#5a4a15; }
+  /* Light highlight for unassigned dashboards in the regular list */
+  .card.unassigned { border-color:#fcd9a5; background:color-mix(in srgb, #f59e0b 5%, var(--surface)); }
+  [data-theme="dark"] .card.unassigned { border-color:#5a4a15; background:color-mix(in srgb, #f59e0b 9%, var(--surface)); }
+  .dtable .drow.unassigned { background:color-mix(in srgb, #f59e0b 6%, transparent); }
+  .dtable .drow.unassigned:hover { background:color-mix(in srgb, #f59e0b 12%, transparent); }
   .status { font-size:13px; margin:9px 0 4px; color:var(--txt2); }
   .label { color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
   .field { margin-top:7px; }
@@ -1261,6 +1268,8 @@ function renderPage(data, opts) {
   .modal-form .form-grid label.wide, .modal-form .form-grid .field.wide { grid-column:1 / -1; }
   .modal-form .form-grid label, .modal-form .form-grid .field { margin:0; font-weight:600; }
   .modal-form .form-grid input, .modal-form .form-grid select { width:100%; margin:0; font-weight:400; }
+  .mini-check { display:flex; flex-direction:row; align-items:center; gap:7px; margin-top:7px; font-size:12px; font-weight:500; color:var(--muted); cursor:pointer; }
+  .modal-form .form-grid .mini-check input { width:15px; height:15px; margin:0; flex:0 0 auto; accent-color:var(--accent); cursor:pointer; }
   .rm-client { width:34px; border:1px solid var(--line); background:var(--surface); color:var(--muted); border-radius:8px; cursor:pointer; font-size:15px; }
   .rm-client:hover { color:var(--danger); border-color:var(--danger-line); }
   .modal-form .panel-actions { position:sticky; bottom:-20px; z-index:2; margin:18px -20px -20px; padding:14px 20px;
@@ -1600,6 +1609,7 @@ function renderPage(data, opts) {
       <button class="side-item" data-tab="team"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Team</span></button>
       <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
       <button class="side-item" data-tab="assign"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0zM7 8h10"/></svg><span>Assign</span></button>
+      <button class="side-item" data-tab="unassigned"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/></svg><span>Unassigned</span></button>
       <button class="side-item" data-tab="standup"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 8a4 4 0 0 0-4 4v2a4 4 0 0 0 8 0v-2a4 4 0 0 0-4-4z"/><path d="M5 12a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg><span>Standup</span></button>
     </nav>
     <div class="side-foot"><button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button></div>
@@ -1649,6 +1659,7 @@ ${opts.manualEnabled ? `
           <svg class="ms-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           <div class="dd-menu" id="ownerMenu"></div>
         </div>
+        <label class="mini-check"><input type="checkbox" id="f_unassigned"> Leave unassigned (no owner)</label>
       </label>
       <label>Stage<select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
@@ -1710,6 +1721,7 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-team" hidden></section>
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
+<section class="tabview" id="tab-unassigned" hidden></section>
 <section class="tabview" id="tab-standup" hidden></section>
 
 </div></main></div>
@@ -1819,14 +1831,14 @@ function card(d, n){
     ? \`<button class="star \${d.priorityLevel?'on':''}" title="\${d.priorityLevel?'Priority '+d.priorityLevel+' — click to clear':'Mark priority 1'}" data-prio="\${esc(d.id)}">\${d.priorityLevel?'★':'☆'}</button>\`
     : '';
   const cardBtns = (star || editable) ? \`<div class="cardbtns">\${star}\${editable?\`<button class="edit" title="Edit" data-edit="\${esc(d.id)}">✎</button><button class="del" title="Delete" data-del="\${esc(d.id)}">×</button>\`:''}</div>\` : '';
-  return \`<div class="card clickable \${showManualTag?'manual':''} \${d.priorityLevel?'prio':''}" data-card="\${esc(d.id)}" style="--cardc:\${s.color}">
+  return \`<div class="card clickable \${showManualTag?'manual':''} \${d.priorityLevel?'prio':''} \${!d.owner?'unassigned':''}" data-card="\${esc(d.id)}" style="--cardc:\${s.color}">
     \${cardBtns}
     <h3>\${prioBadge}\${title}</h3>
     \${progressBar(d)}
     <div class="meta">
       \${d.isLive ? '<span class="tag live">● Live on Munshot</span>' : ''}
       \${d.customers.map(c => clientTag(c)).join('')}
-      \${ownerTag(d.owner)}
+      \${d.owner ? ownerTag(d.owner) : '<span class="tag unassigned-tag">Unassigned</span>'}
       \${showManualTag ? '<span class="tag src">Manual</span>' : ''}
     </div>
     \${d.status && d.status!=='-' ? \`<div class="status"><span class="label">Current status</span><br>\${esc(d.status)}</div>\` : ''}
@@ -1878,11 +1890,11 @@ function rowHtml(d, n){
   const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add work update">＋</button>\` : '';
   const pub = editable ? \`<button class="tbtn \${d.publishedAt?'pubdone':''}" data-publish="\${esc(d.id)}" data-name="\${esc(d.name)}" title="\${d.publishedAt?'Published — click to re-publish':'Publish to the admin page'}">⬆</button>\` : '';
   const editDel = editable ? \`<button class="tbtn" data-edit="\${esc(d.id)}" title="Edit">✎</button><button class="tbtn del" data-del="\${esc(d.id)}" title="Delete">×</button>\` : '';
-  return \`<tr class="drow" data-card="\${esc(d.id)}">
+  return \`<tr class="drow \${!d.owner?'unassigned':''}" data-card="\${esc(d.id)}">
     <td class="tnum">\${n}</td>
     <td class="tname"><span class="tname-in">\${d.priorityLevel?'★ ':''}\${esc(d.name)}\${d.isLive?'<span class="tlive">● Live</span>':''}</span></td>
     <td><div class="tchips">\${clients}</div></td>
-    <td>\${d.owner?\`<span class="tchip" data-owner="\${esc(d.owner)}">\${esc(d.owner)}</span>\`:'<span class="tmut">—</span>'}</td>
+    <td>\${d.owner?\`<span class="tchip" data-owner="\${esc(d.owner)}">\${esc(d.owner)}</span>\`:'<span class="tag unassigned-tag">Unassigned</span>'}</td>
     <td class="tmut">\${fmtDueCell(d.dueDate)}</td>
     <td class="tstage"><span class="tstage-lbl"><span class="tdot" style="background:\${s.color}"></span>\${esc(s.label)}</span><div class="ttrack"><i style="width:\${pct}%;background:\${s.color}"></i></div></td>
     <td>\${dash}</td>
@@ -2212,12 +2224,21 @@ function renderSections(focusId){
   if (focusId){ const inp = box.querySelector('[data-node="'+focusId+'"]'); if (inp) inp.focus(); }
 }
 
+// Reflect the "Leave unassigned" checkbox on the owner field (disabled + dimmed).
+function applyUnassigned(){
+  const uc = G('f_unassigned'), ow = G('f_owner'); if (!uc || !ow) return;
+  ow.disabled = uc.checked;
+  ow.placeholder = uc.checked ? 'Unassigned' : 'e.g. Vipul';
+  const dd = G('ownerDD'); if (dd) dd.style.opacity = uc.checked ? '.5' : '';
+  if (uc.checked) closeOwnerDD();
+}
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
   setClients(d ? (d.customers || []) : []);
   setLinks(d ? (d.links || []) : []);
   G('f_owner').value = d ? d.owner : '';
+  { const uc = G('f_unassigned'); if (uc){ uc.checked = !!(d && !d.owner); applyUnassigned(); } }
   G('f_stage').value = d ? d.state : 'not_started';
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
@@ -2262,6 +2283,7 @@ if (CFG.manualEnabled){
   }
   const ow = G('f_owner');
   if (ow){ ow.onfocus = openOwnerDD; ow.oninput = () => { openOwnerDD(); }; ow.onkeydown = (e) => { if (e.key === 'Escape') closeOwnerDD(); }; }
+  { const uc = G('f_unassigned'); if (uc) uc.onchange = () => { if (uc.checked) G('f_owner').value = ''; applyUnassigned(); }; }
   document.addEventListener('mousedown', (e) => {
     if (cdd && !cdd.contains(e.target)) closeClientDD();
     const odd = G('ownerDD'); if (odd && !odd.contains(e.target)) closeOwnerDD();
@@ -2289,10 +2311,11 @@ if (CFG.manualEnabled){
     const msg = G('formMsg');
     const id = G('f_id').value;
     const links = getLinks();
+    const unassigned = !!(G('f_unassigned') && G('f_unassigned').checked);
     const body = {
       name: G('f_name').value,
       customer: getClients().join(' & '),
-      owner: G('f_owner').value,
+      owner: unassigned ? '' : G('f_owner').value,
       stage: G('f_stage').value,
       liveRaw: G('f_live').value,
       links,
@@ -2303,9 +2326,10 @@ if (CFG.manualEnabled){
       sections: getSections(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
-    // New dashboard with no owner → auto-assign to the lightest-loaded teammate.
+    // New dashboard with no owner → auto-assign to the lightest-loaded teammate,
+    // UNLESS the user ticked "Leave unassigned".
     let autoOwner = '';
-    if (!id && !body.owner.trim()){ const a = (typeof recommendOwner==='function') ? recommendOwner({}) : ''; if (a){ body.owner = a; autoOwner = a; } }
+    if (!id && !unassigned && !body.owner.trim()){ const a = (typeof recommendOwner==='function') ? recommendOwner({}) : ''; if (a){ body.owner = a; autoOwner = a; } }
     msg.className='msg'; msg.textContent='Saving…';
     const res = id ? await api('PUT', '/api/manual', { id, ...body }) : await api('POST', '/api/manual', body);
     if (!res.ok){ const e = await res.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||res.status); return; }
@@ -2918,11 +2942,23 @@ let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients','assign','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','team','clients','assign','unassigned','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
   if (tab === 'assign') renderAssignTab();
+  if (tab === 'unassigned') renderUnassignedTab();
   if (tab === 'standup') renderStandupTab();
+}
+// ── Unassigned tab: every dashboard with no owner, as cards ─────────────────
+function renderUnassignedTab(){
+  const el = G('tab-unassigned');
+  const list = DATA.dashboards.filter(d => !d.owner).sort((a,b)=>(b.priorityLevel-a.priorityLevel)||((a.serial||1e9)-(b.serial||1e9)));
+  const head = \`<div class="tabhead"><h2>🚩 Unassigned</h2><div class="sub">\${list.length} dashboard\${list.length!==1?'s':''} with no owner yet\${list.length&&CFG.manualEnabled?' · assign them in the Assign tab':''}</div></div>\`;
+  el.innerHTML = head + (list.length
+    ? \`<div class="grid" id="unGrid">\${list.map((d,i)=>card(d,i+1)).join('')}</div>\`
+    : '<div class="empty">Everything has an owner. 🎉<br>Tick “Leave unassigned” when adding a dashboard to keep one here.</div>');
+  bindCards();
+  const ug = G('unGrid'); if (ug) ug.addEventListener('click', onCardGridClick);
 }
 
 // ── Workload-balanced auto-assignment ──────────────────────────────────────
@@ -3076,7 +3112,7 @@ function renderStandupTab(){
 document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
 
 // Click a card → open its detail modal (buttons/chips handled first).
-document.getElementById('grid').addEventListener('click', (e) => {
+function onCardGridClick(e){
   const p = e.target.closest('[data-prio]'); if (p){ togglePriority(p.dataset.prio); return; }
   const pub = e.target.closest('[data-publish]'); if (pub){ publishDash(pub.dataset.publish, pub); return; }
   const u = e.target.closest('[data-update]'); if (u){ openUpdate(u.dataset.update, u.dataset.name); return; }
@@ -3086,7 +3122,8 @@ document.getElementById('grid').addEventListener('click', (e) => {
   const c = e.target.closest('[data-customer]'); if (c){ openClient(c.dataset.customer); return; }
   const a = e.target.closest('a'); if (a) return; // let links work
   const card = e.target.closest('[data-card]'); if (card){ openDetail(card.dataset.card); }
-});
+}
+document.getElementById('grid').addEventListener('click', onCardGridClick);
 async function setPriority(id, level){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   const res = await api('POST', '/api/priority', { id, level });
