@@ -302,6 +302,9 @@ export default {
             requirementFiles: Array.isArray(body.requirementFiles) ? body.requirementFiles : [],
             feedbacks: Array.isArray(body.feedbacks) ? body.feedbacks : [],
             sections: Array.isArray(body.sections) ? body.sections : [],
+            brief: body.brief || '',
+            briefFiles: Array.isArray(body.briefFiles) ? body.briefFiles : [],
+            briefLinks: Array.isArray(body.briefLinks) ? body.briefLinks : [],
           };
           const list = await readManual(env);
           list.push(entry);
@@ -318,7 +321,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -1296,6 +1299,10 @@ function renderPage(data, opts) {
   .link-row { display:flex; gap:6px; margin-bottom:6px; }
   .link-row .f_llabel { flex:0 0 42%; min-width:0; }
   .link-row .f_lurl { flex:1; min-width:0; }
+  /* Brief-for-the-assignee attach/link tools */
+  #f_brief { font-weight:400; line-height:1.5; }
+  .brief-links { margin-top:2px; }
+  .brief-tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:2px; }
   /* ── Custom attached dropdowns (Clients multi-select + Assigned-to combo) ── */
   .dd { position:relative; }
   .dd-menu { position:absolute; left:0; right:0; top:calc(100% + 5px); z-index:70;
@@ -1505,6 +1512,9 @@ function renderPage(data, opts) {
   .fact .fv { font-size:13.5px; font-weight:600; margin-top:3px; }
   .dsec { margin-top:16px; }
   .dsec h4 { margin:0 0 7px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
+  /* The assignee brief is the headline instruction — give it an accent heading. */
+  .dsec.brief-sec h4 { color:var(--accent); }
+  .dsec.brief-sec .dlinks { margin-top:8px; }
   .dnote { font-size:13.5px; color:var(--txt2); white-space:pre-wrap; }
   .dnote.big { font-size:14.5px; color:var(--txt); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:10px; padding:11px 13px; }
   .dnote.muted { color:var(--muted); }
@@ -1664,6 +1674,15 @@ ${opts.manualEnabled ? `
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
       <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
+      <div class="field wide">Brief for the assignee <span style="color:var(--muted);font-weight:400;font-size:11px">(what needs to be done — the teammate sees this)</span>
+        <textarea id="f_brief" rows="4" placeholder="Explain the task: the goal, the data to use, what to build, and any gotchas…"></textarea>
+        <div class="filebox" id="briefFiles"></div>
+        <div class="brief-links" id="briefLinkRows"></div>
+        <div class="brief-tools">
+          <button class="btn ghost sm" id="briefUpload" type="button">📎 Attach images / files</button>
+          <button class="btn ghost sm" id="addBriefLink" type="button">+ reference link</button>
+        </div>
+      </div>
       <label class="wide">YouTube Links
         <div id="linkRows"></div>
         <button class="btn ghost sm" id="addLinkRow" type="button">+ another link</button>
@@ -2127,6 +2146,28 @@ function getLinks(){
     url: r.querySelector('.f_lurl').value.trim(),
   })).filter(l => l.url);
 }
+// ── Brief for the assignee: attached images/files + reference links ─────────
+let briefFiles = [];
+function renderBriefFiles(){
+  const box = G('briefFiles'); if (!box) return;
+  box.innerHTML = briefFiles.map(f => fileChip(f, true)).join('');
+  box.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { briefFiles = briefFiles.filter(x => x.id !== b.dataset.fx); renderBriefFiles(); });
+}
+function briefLinkRowHtml(label, url){
+  return \`<div class="link-row"><input class="f_llabel" placeholder="label, e.g. Reference sheet" value="\${esc(label||'')}"><input class="f_lurl" placeholder="https://… reference link" value="\${esc(url||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`;
+}
+function setBriefLinks(arr){
+  const box = G('briefLinkRows'); if (!box) return;
+  box.innerHTML = (arr || []).map(l => briefLinkRowHtml(l.label, l.url)).join('');
+  box.querySelectorAll('.rm-client').forEach(b => b.onclick = () => b.parentElement.remove());
+}
+function getBriefLinks(){
+  const box = G('briefLinkRows'); if (!box) return [];
+  return [...box.querySelectorAll('.link-row')].map(r => ({
+    label: r.querySelector('.f_llabel').value.trim(),
+    url: r.querySelector('.f_lurl').value.trim(),
+  })).filter(l => l.url);
+}
 // ── File upload (PDF / image) → base64 in KV ───────────────────────────────
 function pickFiles(){
   return new Promise((resolve) => { const inp = G('filePick'); inp.value=''; inp.multiple = true; inp.onchange = () => resolve([...inp.files]); inp.click(); });
@@ -2248,6 +2289,10 @@ function setForm(d){
   renderFbRows();
   sectionsState = d && Array.isArray(d.sections) ? cloneSecNodes(d.sections) : [];
   renderSections();
+  if (G('f_brief')) G('f_brief').value = d ? (d.brief || '') : '';
+  briefFiles = d && Array.isArray(d.briefFiles) ? d.briefFiles.slice() : [];
+  renderBriefFiles();
+  setBriefLinks(d ? (d.briefLinks || []) : []);
   G('formMsg').textContent = '';
   updateDueFieldVisibility();
 }
@@ -2298,6 +2343,11 @@ if (CFG.manualEnabled){
     setLinks(cur.concat({ label: nextLabel, url:'' }));
     G('linkRows').lastElementChild.querySelector('.f_lurl').focus();
   };
+  if (G('briefUpload')) G('briefUpload').onclick = async () => { const ups = await uploadFiles(); if (ups.length){ briefFiles = briefFiles.concat(ups); renderBriefFiles(); } };
+  if (G('addBriefLink')) G('addBriefLink').onclick = () => {
+    setBriefLinks(getBriefLinks().concat({ label:'', url:'' }));
+    G('briefLinkRows').lastElementChild.querySelector('.f_lurl').focus();
+  };
   if (G('dueTrigger')){
     const toggleCal = () => { G('dueDD').classList.contains('open') ? closeCal() : openCal(); };
     G('dueTrigger').onclick = toggleCal;
@@ -2327,6 +2377,9 @@ if (CFG.manualEnabled){
       dueDate: G('f_due').value,
       feedbacks: getFeedbacks(),
       sections: getSections(),
+      brief: (G('f_brief') ? G('f_brief').value : '').trim(),
+      briefFiles,
+      briefLinks: getBriefLinks(),
     };
     if (!body.name.trim()){ msg.className='msg err'; msg.textContent='Name is required.'; return; }
     // New dashboard with no owner → auto-assign to the lightest-loaded teammate,
@@ -2820,6 +2873,7 @@ function openDetail(id){
         \${factCell('Live on Munshot', d.isLive?'Yes':'No')}
         \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
       </div>
+      \${(d.brief||(d.briefFiles&&d.briefFiles.length)||(d.briefLinks&&d.briefLinks.length))?\`<div class="dsec brief-sec"><h4>📋 Brief — what to do</h4>\${d.brief?\`<div class="dnote big">\${esc(d.brief)}</div>\`:''}\${d.briefFiles&&d.briefFiles.length?\`<div class="thumbs">\${fileGrid(d.briefFiles)}</div>\`:''}\${d.briefLinks&&d.briefLinks.length?\`<div class="dlinks">\${d.briefLinks.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">🔗 \${esc(l.label||'link')}</a>\`).join('')}</div>\`:''}</div>\`:''}
       \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
       \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
       \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}

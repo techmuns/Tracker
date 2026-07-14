@@ -234,6 +234,29 @@ test('manualToDashboard uses the same colour logic and is tagged manual', () => 
   assert.equal(d.meetingUrl, 'https://x.test/v');
 });
 
+test('manualToDashboard carries the assignee brief (text, files, links)', () => {
+  const d = manualToDashboard({
+    id: 'br', name: 'Brief dash', customer: 'C', owner: 'Vipul',
+    brief: '  Build the P&L tab from the Q2 export.  ',
+    briefFiles: [{ id: 'f1', name: 'shot.png', type: 'image/png', url: '/api/file?id=f1' }],
+    briefLinks: [
+      { label: 'Q2 export', url: 'https://docs.example.com/sheet' },
+      { label: 'skip me', url: 'not-a-url' },   // non-http dropped by normalizeLinks
+    ],
+  });
+  assert.equal(d.brief, 'Build the P&L tab from the Q2 export.');   // trimmed
+  assert.equal(d.briefFiles.length, 1);
+  assert.equal(d.briefFiles[0].id, 'f1');
+  assert.deepEqual(d.briefLinks, [{ label: 'Q2 export', url: 'https://docs.example.com/sheet' }]);
+});
+
+test('manualToDashboard brief fields default to empty when absent', () => {
+  const d = manualToDashboard({ id: 'nb', name: 'No brief', customer: 'C', owner: 'X' });
+  assert.equal(d.brief, '');
+  assert.deepEqual(d.briefFiles, []);
+  assert.deepEqual(d.briefLinks, []);
+});
+
 test('buildDataset merges manual entries after sheet rows and recounts', () => {
   const csv = [
     ',Dashboards,Name,Assigned,Live,Reqs,Imp,Fb,Status,Link,Updated,',

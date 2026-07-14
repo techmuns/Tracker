@@ -291,6 +291,10 @@ export function manualToDashboard(m) {
     requirementFiles: Array.isArray(m.requirementFiles) ? m.requirementFiles : [],
     feedbacks: normalizeFeedbacks(m.feedbacks),
     sections: normalizeSections(m.sections),
+    // Brief for the assignee: what to do + reference images/files + links.
+    brief: clean(m.brief),
+    briefFiles: Array.isArray(m.briefFiles) ? m.briefFiles : [],
+    briefLinks: normalizeLinks(m.briefLinks),
     publishedAt: m.publishedAt || '',
     publishRef: m.publishRef || '',
   };
