@@ -2266,6 +2266,9 @@ function openEdit(id){
 }
 
 if (CFG.manualEnabled){
+  // Move the add/edit modal out of the Overview section to <body> so it isn't
+  // hidden when another tab is active (it's position:fixed — DOM spot is moot).
+  { const fm = G('formModalBg'); if (fm && fm.parentElement !== document.body) document.body.appendChild(fm); }
   G('addToggle').onclick = openAdd;
   G('cancelBtn').onclick = closeForm;
   G('formX').onclick = closeForm;
