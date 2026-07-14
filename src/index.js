@@ -1874,6 +1874,7 @@ function clearAllFilters(){
 }
 
 let dashView = (localStorage.getItem('dashView') === 'cards') ? 'cards' : 'table';
+let unView = (localStorage.getItem('unView') === 'table') ? 'table' : 'cards';
 // Format a stored due date (ISO "YYYY-MM-DD" → "29 Jun 2026"; other formats shown as-is).
 function fmtDueCell(v){ return v ? (/^\\d{4}-\\d{2}-\\d{2}$/.test(v) ? esc(fmtDue(v)) : esc(v)) : '<span class="tmut">—</span>'; }
 // One row of the dashboards table (mirrors card() but tabular).
@@ -2952,12 +2953,16 @@ function switchTab(tab){
 function renderUnassignedTab(){
   const el = G('tab-unassigned');
   const list = DATA.dashboards.filter(d => !d.owner).sort((a,b)=>(b.priorityLevel-a.priorityLevel)||((a.serial||1e9)-(b.serial||1e9)));
-  const head = \`<div class="tabhead"><h2>🚩 Unassigned</h2><div class="sub">\${list.length} dashboard\${list.length!==1?'s':''} with no owner yet\${list.length&&CFG.manualEnabled?' · assign them in the Assign tab':''}</div></div>\`;
-  el.innerHTML = head + (list.length
-    ? \`<div class="grid" id="unGrid">\${list.map((d,i)=>card(d,i+1)).join('')}</div>\`
-    : '<div class="empty">Everything has an owner. 🎉<br>Tick “Leave unassigned” when adding a dashboard to keep one here.</div>');
+  const seg = list.length ? \`<div class="view-seg" id="unSeg"><button class="vseg \${unView==='table'?'on':''}" data-dview="table">▤ Table</button><button class="vseg \${unView==='cards'?'on':''}" data-dview="cards">▦ Cards</button></div>\` : '';
+  const head = \`<div class="tabhead" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><h2>🚩 Unassigned</h2><div class="sub">\${list.length} dashboard\${list.length!==1?'s':''} with no owner yet\${list.length&&CFG.manualEnabled?' · assign them in the Assign tab':''}</div></div>\${seg}</div>\`;
+  let body;
+  if (!list.length) body = '<div class="empty">Everything has an owner. 🎉<br>Tick “Leave unassigned” when adding a dashboard to keep one here.</div>';
+  else if (unView === 'table') body = \`<div class="grid table-mode un-grid" id="unGrid">\${dashTable(list.map((d,i)=>rowHtml(d,i+1)).join(''))}</div>\`;
+  else body = \`<div class="grid un-grid" id="unGrid">\${list.map((d,i)=>card(d,i+1)).join('')}</div>\`;
+  el.innerHTML = head + body;
   bindCards();
   const ug = G('unGrid'); if (ug) ug.addEventListener('click', onCardGridClick);
+  el.querySelectorAll('#unSeg .vseg').forEach(b => b.onclick = () => { unView = b.dataset.dview; localStorage.setItem('unView', unView); renderUnassignedTab(); });
 }
 
 // ── Workload-balanced auto-assignment ──────────────────────────────────────
