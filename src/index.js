@@ -573,7 +573,6 @@ export default {
           const norm = (s) => String(s || '').trim();
           const key = (m, t) => (norm(m) + '||' + norm(t)).toLowerCase();
           const seen = new Set(tasks.map((x) => key(x.member, x.text)));
-          const today = new Date().toISOString().slice(0, 10);
           let added = 0;
           for (const p of people) {
             const member = norm(p && p.name);
@@ -586,7 +585,8 @@ export default {
               const text = norm(it.text);
               if (!text || seen.has(key(member, text))) continue;
               seen.add(key(member, text));
-              tasks.push({ id: crypto.randomUUID(), member, date: today, text, dashboardId: '', dashboardName: '',
+              // date '' → this is backlog, not a dated daily-standup task.
+              tasks.push({ id: crypto.randomUUID(), member, date: '', text, dashboardId: '', dashboardName: '',
                 done: it.done, doneAt: it.done ? new Date().toISOString() : null, source: 'notetaker', createdAt: new Date().toISOString() });
               added++;
             }
@@ -1634,7 +1634,6 @@ function renderPage(data, opts) {
 
 <section class="tabview" id="tab-overview">
 <div class="legend" id="legend"></div>
-<div class="eod" id="eod"></div>
 
 ${opts.manualEnabled ? `
 <div class="modal-bg" id="formModalBg"><div class="modal modal-form" id="formModal">
@@ -3026,7 +3025,10 @@ function shiftISO(iso, days){ const p=String(iso).split('-').map(Number); const 
 function prettyDay(iso){ const p=String(iso).split('-').map(Number); const d=new Date(p[0],p[1]-1,p[2]); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
 function dashName(id){ const d=DATA.dashboards.find(x=>x.id===id); return d?d.name:''; }
 let standupDate = todayISO();
-function tasksFor(date){ return TASKS.filter(t => t.date===date); }
+// The daily views (Overview EOD + Standup) show only that day's standup tasks.
+// Notetaker-imported items are a per-person backlog (they live in the To-do tab
+// + the Tasks PDF), so they're excluded here to keep the daily views compact.
+function tasksFor(date){ return TASKS.filter(t => t.date===date && t.source!=='notetaker'); }
 function memberStats(list){ const done=list.filter(t=>t.done).length, total=list.length; return { done, total, pct: total?Math.round(done/total*100):0 }; }
 function groupByMember(list){ const g={}; list.forEach(t=>{ (g[t.member]=g[t.member]||[]).push(t); }); return g; }
 
