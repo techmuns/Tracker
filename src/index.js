@@ -2610,9 +2610,7 @@ function wireEmployee(name){
 function openClient(name){
   const s = clientStats(name);
   const det = (DATA.clientDetails && DATA.clientDetails[name]) || {};
-  const ed = CFG.manualEnabled;
   const logo = det.logo ? \`<img class="clogo lg" src="/api/file?id=\${esc(det.logo)}" alt="">\` : \`<span class="avatar lg" style="background:\${nameColor('c·'+name)}">🏢</span>\`;
-  const pf = (id,label,v,ph) => \`<label class="pf"><span>\${label}</span><input id="\${id}" value="\${esc(v||'')}" placeholder="\${ph||''}" \${ed?'':'disabled'}></label>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Clients</button>
@@ -2621,16 +2619,6 @@ function openClient(name){
       <button class="x" id="drawerX">×</button>
     </div>
     <div class="drawer-body">
-      <div class="emp"><div class="section-t">Client details</div>
-        <div class="pf-grid">
-          \${pf('cl_poc','Point of contact', det.poc)}
-          \${pf('cl_emails','Emails', Array.isArray(det.emails)?det.emails.join(', '):det.emails, 'comma separated')}
-          \${pf('cl_freq','Meeting frequency', det.meetingFreq, 'e.g. Every Thursday 4pm')}
-          \${pf('cl_web','Website', det.website)}
-          <label class="pf wide"><span>Notes</span><input id="cl_notes" value="\${esc(det.notes||'')}" \${ed?'':'disabled'}></label>
-        </div>
-        \${ed?'<div class="pf-actions"><button class="btn ghost sm" id="clLogo" type="button">🖼 Upload logo</button><button class="btn sm" id="clSave">Save details</button></div>':''}
-      </div>
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
       \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="av-tag owner-link" data-jump-owner="\${esc(o)}">\${avatar(o)}\${esc(o)}</span>\`).join('')}</div>\`:''}
@@ -2642,18 +2630,6 @@ function openClient(name){
   drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
   drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ customer:name, states:b.dataset.states.split(' ') }));
   drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = (e) => { if (e.target.closest('a.dlink')) return; closeDrawer(); openDetail(b.dataset.open); });
-  if (ed){
-    document.getElementById('clSave').onclick = async () => {
-      const emails = val('cl_emails').split(',').map(x=>x.trim()).filter(Boolean);
-      const res = await api('POST','/api/client',{ name, poc:val('cl_poc'), emails, meetingFreq:val('cl_freq'), website:val('cl_web'), notes:val('cl_notes') });
-      if (res.ok){ DATA.clientDetails[name] = (await res.json()).client; const b=document.getElementById('clSave'); b.textContent='Saved ✓'; setTimeout(()=>b.textContent='Save details',1500); } else alert('Save failed.');
-    };
-    document.getElementById('clLogo').onclick = async () => {
-      const up = await uploadFile(); if (!up) return;
-      const res = await api('POST','/api/client',{ name, logo:up.id });
-      if (res.ok){ DATA.clientDetails[name] = (await res.json()).client; openClient(name); }
-    };
-  }
 }
 
 // ── Team & Clients tabs ────────────────────────────────────────────────────
