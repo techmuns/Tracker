@@ -97,10 +97,11 @@ async function sendMuns(env, recipients, subject, html, text) {
 }
 
 // ── People directory from the Muns platform ─────────────────────────────
-// Clients = every organization (the org name).  Team  = the members of the
-// munshot org (id 1) — the interns work is assigned to. The token comes from
-// the Worker env and is never exposed to the browser. Responses are edge-
-// cached briefly so we don't hammer the upstream on every page load.
+// Clients = every organization (the org name), including munshot itself.
+// Team = the members of the munshot org (id 1) — the interns work is
+// assigned to. The token comes from the Worker env and is never exposed to
+// the browser. Responses are edge-cached briefly so we don't hammer the
+// upstream on every page load.
 async function fetchMunsDirectory(env) {
   if (!env.MUNS_TOKEN) return { ok: false, error: 'MUNS_TOKEN not set', clients: [], team: [] };
   const base = env.MUNS_USERS_URL || 'https://devde.muns.io/orgs/users';
@@ -119,9 +120,8 @@ async function fetchMunsDirectory(env) {
     const allJson = await allR.json().catch(() => ({}));
     const teamJson = teamR.ok ? await teamR.json().catch(() => ({})) : {};
     const orgs = Array.isArray(allJson.data) ? allJson.data : [];
-    // Clients = all organizations except munshot itself (id 1, the internal team).
+    // Clients = every organization, including munshot itself (id 1).
     const clients = dedupe(orgs
-      .filter((o) => o && o.organization_id !== 1)
       .map((o) => String((o && o.name) || '').trim())
       .filter(Boolean));
     // Team = active, named members of the munshot org.
