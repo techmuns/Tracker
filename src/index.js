@@ -1047,9 +1047,13 @@ function renderPage(data, opts) {
   .wl-pill.ok, .wl-bar i.ok { background:#e8f0fe; color:#1d4ed8; } .wl-bar i.ok { background:#3b82f6; }
   .wl-pill.busy, .wl-bar i.busy { background:#fef3dc; color:#b45309; } .wl-bar i.busy { background:#f59e0b; }
   .wl-pill.full, .wl-bar i.full { background:#fdeee3; color:#c2410c; } .wl-bar i.full { background:#ef4444; }
-  .asg-row { display:flex; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line2); }
-  .asg-row .dn { font-weight:550; font-size:13.5px; } .asg-row .dmeta { font-size:12px; color:var(--muted); }
-  .asg-act { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  /* Assign tab: pad the body to line up with the header, and keep it readable
+     instead of stretching edge-to-edge on wide screens. */
+  .asg-wrap { padding:6px 28px 60px; }
+  .asg-queue { max-width:900px; display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+  .asg-row { display:flex; gap:12px; align-items:center; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:11px 14px; box-shadow:var(--shadow); }
+  .asg-row .dn { font-weight:600; font-size:13.5px; } .asg-row .dmeta { font-size:12px; color:var(--muted); margin-top:1px; }
+  .asg-act { margin-left:auto; display:flex; gap:8px; align-items:center; flex:0 0 auto; }
   .asg-sel { font:inherit; font-size:12.5px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); }
   .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
   .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
@@ -1870,7 +1874,7 @@ function card(d, n){
       <span>\${d.lastUpdated ? 'Updated '+esc(d.lastUpdated) : ''}</span>
       <div class="foot-actions">
         \${d.dashboardUrl ? \`<a class="visit-btn" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : ''}
-        \${editable ? publishBtnHtml(d) : ''}
+        \${(editable && d.owner) ? publishBtnHtml(d) : ''}
         \${CFG.manualEnabled ? \`<button class="upd-btn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}">＋ Work update\${d.updates&&d.updates.length?' ('+d.updates.length+')':''}</button>\` : ''}
       </div>
     </div>
@@ -1910,7 +1914,7 @@ function rowHtml(d, n){
   const dash = d.dashboardUrl ? \`<a class="tlink" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Munshot">↗ Visit</a>\` : '<span class="tmut">—</span>';
   const meetCell = meet ? \`<a class="tlink" href="\${esc(meet.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="\${esc(meet.label||'Open link')}">▶ \${esc(meet.label||'Link')}</a>\` : '<span class="tmut">—</span>';
   const upd = CFG.manualEnabled ? \`<button class="tbtn" data-update="\${esc(d.id)}" data-name="\${esc(d.name)}" title="Add work update">＋</button>\` : '';
-  const pub = editable ? \`<button class="tbtn \${d.publishedAt?'pubdone':''}" data-publish="\${esc(d.id)}" data-name="\${esc(d.name)}" title="\${d.publishedAt?'Published — click to re-publish':'Publish to the admin page'}">⬆</button>\` : '';
+  const pub = (editable && d.owner) ? \`<button class="tbtn \${d.publishedAt?'pubdone':''}" data-publish="\${esc(d.id)}" data-name="\${esc(d.name)}" title="\${d.publishedAt?'Published — click to re-publish':'Publish to the admin page'}">⬆</button>\` : '';
   const editDel = editable ? \`<button class="tbtn" data-edit="\${esc(d.id)}" title="Edit">✎</button><button class="tbtn del" data-del="\${esc(d.id)}" title="Delete">×</button>\` : '';
   return \`<tr class="drow \${!d.owner?'unassigned':''}" data-card="\${esc(d.id)}">
     <td class="tnum">\${n}</td>
@@ -2864,7 +2868,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${editable?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -2977,6 +2981,10 @@ function applyFilter({ owner='', customer='', states=null }){
 let activeTab = 'overview';
 function switchTab(tab){
   activeTab = tab;
+  // Remember the tab so an in-app reload (edit/assign/delete → location.reload)
+  // returns here instead of snapping back to Overview. sessionStorage keeps it
+  // for the tab's lifetime but resets to Overview on a fresh browser session.
+  try { sessionStorage.setItem('trk_tab', tab); } catch(e){}
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   ['overview','team','clients','assign','unassigned','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
@@ -3050,9 +3058,12 @@ function renderAssignTab(){
     return \`<div class="asg-row"><div><div class="dn">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</div><div class="dmeta">\${esc(d.customer||'—')} · \${SMAP[d.state]?SMAP[d.state].label:esc(d.state)}</div></div><div class="asg-act">\${sel}</div></div>\`;
   }).join('') : '<div class="empty">Everything is assigned. 🎉</div>';
   el.innerHTML = \`<div class="tabhead"><h2>⚖️ Assign</h2><div class="sub">Workload-balanced · \${un.length} unassigned · least-loaded teammate gets the next one</div></div>
+    <div class="asg-wrap">
     \${CFG.manualEnabled && un.length ? \`<div class="roster-add"><button class="btn" id="autoAll">⚡ Auto-assign all \${un.length}</button><span class="sub" style="align-self:center">picks the lightest plate for each dashboard</span></div>\` : ''}
     <div class="section-t">Team workload</div><div class="wl-grid">\${board}</div>
-    <div class="section-t" style="margin-top:18px">Needs an owner</div>\${queue}\`;
+    <div class="section-t" style="margin-top:18px">Needs an owner</div>
+    \${un.length ? \`<div class="asg-queue">\${queue}</div>\` : queue}
+    </div>\`;
   if (CFG.manualEnabled){
     const aa = G('autoAll'); if (aa) aa.onclick = () => autoAssignAll(aa);
     el.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => { const row=b.closest('.asg-row'), sel=row.querySelector('.asg-sel'); assignOne(b.dataset.assign, sel?sel.value:''); });
@@ -3155,6 +3166,8 @@ function renderStandupTab(){
 }
 
 document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+// Restore the last-open tab after an in-app reload (see switchTab).
+try { const _t = sessionStorage.getItem('trk_tab'); if (_t && _t !== 'overview' && G('tab-'+_t)) switchTab(_t); } catch(e){}
 
 // Click a card → open its detail modal (buttons/chips handled first).
 function onCardGridClick(e){
