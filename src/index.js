@@ -1439,6 +1439,9 @@ function renderPage(data, opts) {
   .su-dash { display:inline-block; font-size:11px; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:6px; padding:1px 7px; margin-top:3px; }
   .su-del { border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:16px; line-height:1; padding:0 2px; }
   .su-del:hover { color:var(--danger); }
+  .su-madd { display:flex; gap:7px; margin-top:11px; }
+  .su-madd .su-grow { min-width:0; }
+  .su-empty-m { font-size:12px; color:var(--muted); padding:5px 0 2px; }
   .su-bot { margin-top:16px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:2px 15px; }
   .su-bot summary { cursor:pointer; font-size:12.5px; font-weight:600; padding:11px 0; color:var(--txt2); }
   .su-bot-body { font-size:12px; color:var(--muted); padding-bottom:13px; line-height:1.6; }
@@ -3107,46 +3110,48 @@ function renderEod(){
 
 function renderStandupTab(){
   const el = G('tab-standup'); if(!el) return;
-  const list = tasksFor(standupDate), st = memberStats(list), g = groupByMember(list);
-  const members = Object.keys(g).sort((a,b)=>a.localeCompare(b));
-  const isToday = standupDate===todayISO();
+  const ed = CFG.manualEnabled;
+  // Roll-up of EVERY team member's to-do list (the same list shown on their
+  // profile) — one section per person: full roster plus anyone who has tasks.
+  const roster = (DATA.owners || []).slice();
+  // Include anyone who has tasks but isn't on the roster (e.g. bot-imported), so
+  // no one's to-dos are hidden; append those extras in alphabetical order.
+  [...new Set(TASKS.map(t=>t.member).filter(m => m && !roster.includes(m)))].sort((a,b)=>a.localeCompare(b)).forEach(m => roster.push(m));
+  const allTotal = TASKS.length, allDone = TASKS.filter(t=>t.done).length;
+  const allPct = allTotal ? Math.round(allDone/allTotal*100) : 0;
   const meetingCard = \`<div class="mtg-card"><div class="mtg-l"><div class="mtg-ico">🎥</div><div><div class="mtg-t">Team meeting</div><div class="mtg-s">\${MEETING.link?esc(MEETING.link):'No meeting link set yet'}</div></div></div>
     <div class="mtg-r">\${MEETING.link?\`<a class="btn sm" href="\${esc(MEETING.link)}" target="_blank" rel="noopener">Join ↗</a>\`:''}\${CFG.manualEnabled?\`<button class="btn ghost sm" id="mtgEdit">\${MEETING.link?'Edit link':'+ Add link'}</button>\`:''}</div></div>\`;
-  const dateNav = \`<div class="su-datenav"><button class="su-arrow" data-daynav="-1" title="Previous day">‹</button>
-    <div class="su-date"><b>\${prettyDay(standupDate)}</b>\${isToday?'<span class="su-today">Today</span>':''}</div>
-    <button class="su-arrow" data-daynav="1" \${isToday?'disabled':''} title="Next day">›</button>
-    \${!isToday?'<button class="btn ghost sm" data-daynav="today">Jump to today</button>':''}</div>\`;
-  const composer = CFG.manualEnabled ? \`<div class="su-add">
-    <input id="suMember" class="su-in" list="ownersList" placeholder="Team member" autocomplete="off">
-    <input id="suText" class="su-in su-grow" placeholder="What needs to be done…">
-    <select id="suDash" class="su-in"><option value="">(link a dashboard — optional)</option>\${DATA.dashboards.map(d=>\`<option value="\${esc(d.id)}">\${esc(d.name)}</option>\`).join('')}</select>
-    <button class="btn sm" id="suAdd">+ Add</button></div>\` : '';
-  const overall = list.length ? \`<div class="su-overall"><div class="su-overall-top"><span>Everyone · \${prettyDay(standupDate)}</span><span>\${st.done}/\${st.total} done · \${st.pct}%</span></div><div class="su-bar"><i style="width:\${st.pct}%"></i></div></div>\` : '';
-  const cards = members.length ? members.map(m => { const items=g[m], ms=memberStats(items);
-    const rows = items.map(t => \`<div class="su-task \${t.done?'done':''}"><label class="su-check"><input type="checkbox" \${t.done?'checked':''} data-task="\${esc(t.id)}"><span class="su-box"></span></label>
+  const overall = allTotal ? \`<div class="su-overall"><div class="su-overall-top"><span>Whole team · to-dos</span><span>\${allDone}/\${allTotal} done · \${allPct}%</span></div><div class="su-bar"><i style="width:\${allPct}%"></i></div></div>\` : '';
+  const taskHtml = (t) => \`<div class="su-task \${t.done?'done':''}"><label class="su-check"><input type="checkbox" \${t.done?'checked':''} data-task="\${esc(t.id)}"><span class="su-box"></span></label>
       <div class="su-body"><div class="su-txt">\${esc(t.text)}</div>\${(t.dashboardName||t.dashboardId)?\`<span class="su-dash">\${esc(t.dashboardName||dashName(t.dashboardId))}</span>\`:''}</div>
-      \${CFG.manualEnabled?\`<button class="su-del" data-taskdel="\${esc(t.id)}" title="Remove">×</button>\`:''}</div>\`).join('');
-    return \`<div class="su-member"><div class="su-mhead">\${avatar(m)}<div class="su-mname">\${esc(m)}</div><div class="su-mstat \${ms.pct===100?'full':''}">\${ms.done}/\${ms.total} · \${ms.pct}%</div></div>
-      <div class="su-mbar"><i style="width:\${ms.pct}%"></i></div><div class="su-tasks">\${rows}</div></div>\`;
-  }).join('') : \`<div class="empty">No to-dos for \${prettyDay(standupDate)} yet.\${CFG.manualEnabled?' Add one above, or your meeting bot can push them in.':''}</div>\`;
-  const botHelp = CFG.manualEnabled ? \`<details class="su-bot"><summary>🤖 Connect your meeting-transcription bot</summary><div class="su-bot-body">After the bot transcribes the meeting, have it POST each person's generated to-dos to <code>/api/tasks</code>:<pre>POST /api/tasks
+      \${ed?\`<button class="su-del" data-taskdel="\${esc(t.id)}" title="Remove">×</button>\`:''}</div>\`;
+  const cards = roster.map(name => {
+    const mine = TASKS.filter(t => t.member === name);
+    const pend = mine.filter(t=>!t.done), done = mine.filter(t=>t.done);
+    const ms = memberStats(mine);
+    const listHtml = mine.length ? pend.concat(done).map(taskHtml).join('') : '<div class="su-empty-m">No to-dos yet.</div>';
+    const composer = ed ? \`<div class="su-madd"><input class="su-in su-grow su-addin" data-add="\${esc(name)}" placeholder="Add a to-do for \${esc(name)}…" autocomplete="off"><button class="btn sm" data-addbtn="\${esc(name)}">+ Add</button></div>\` : '';
+    const stat = pend.length ? (pend.length+' to-do'+(pend.length!==1?'s':'')) : (ms.total?'all done ✓':'no to-dos');
+    return \`<div class="su-member"><div class="su-mhead">\${avatar(name)}<div class="su-mname">\${esc(name)}</div><div class="su-mstat \${pend.length===0&&ms.total?'full':''}">\${stat}</div></div>
+      \${ms.total?\`<div class="su-mbar"><i style="width:\${ms.pct}%"></i></div>\`:''}
+      <div class="su-tasks">\${listHtml}</div>\${composer}</div>\`;
+  }).join('');
+  const board = roster.length ? \`<div class="su-grid">\${cards}</div>\` : '<div class="empty">No team members yet — add them on the Team tab.</div>';
+  const botHelp = ed ? \`<details class="su-bot"><summary>🤖 Connect your meeting-transcription bot</summary><div class="su-bot-body">After the bot transcribes the meeting, have it POST each person's generated to-dos to <code>/api/tasks</code>:<pre>POST /api/tasks
 {
   "action": "add",
-  "date": "\${standupDate}",
   "tasks": [
     { "member": "Naval",   "text": "Fix the P&L tab on the Beas dashboard" },
     { "member": "Aashita", "text": "Implement client change #3" }
   ]
 }</pre>\${CFG.editProtected?'Include the header <code>x-edit-token: YOUR_TOKEN</code>.':'No auth header is needed (no edit token is configured).'}</div></details>\` : '';
-  el.innerHTML = \`<div class="tabhead"><h2>🎙️ Daily Standup</h2><div class="sub">Each member's work for the day — what they did and how much</div></div>
-    \${meetingCard}\${dateNav}\${composer}\${overall}<div class="su-grid">\${cards}</div>\${botHelp}
-    <datalist id="ownersList">\${ownerOptions().map(o=>\`<option value="\${esc(o)}">\`).join('')}</datalist>\`;
+  el.innerHTML = \`<div class="tabhead"><h2>🎙️ Daily Standup</h2><div class="sub">Every team member's to-do list in one place</div></div>
+    \${meetingCard}\${overall}\${board}\${botHelp}\`;
   // wire
-  el.querySelectorAll('[data-daynav]').forEach(b => b.onclick = () => { const v=b.dataset.daynav; standupDate = v==='today'?todayISO():shiftISO(standupDate, +v); renderStandupTab(); });
+  const me=G('mtgEdit'); if(me) me.onclick = async () => { const v=prompt('Team meeting link (Google Meet / Zoom):', MEETING.link||''); if(v===null) return; const r=await meetingSave(v.trim()); if(r.ok) renderStandupTab(); else alert('Could not save the link.'); };
   el.querySelectorAll('[data-task]').forEach(cb => cb.onchange = async () => { const t=TASKS.find(x=>x.id===cb.dataset.task); if(!t) return; const want=cb.checked; const r=await taskToggle(t, want); if(!r.ok){ cb.checked=!want; alert('Could not update.'); return; } renderStandupTab(); renderEod(); });
   el.querySelectorAll('[data-taskdel]').forEach(b => b.onclick = async () => { if(!confirm('Remove this to-do?')) return; const r=await taskDelete(b.dataset.taskdel); if(!r.ok){ alert('Could not remove.'); return; } renderStandupTab(); renderEod(); });
-  const me=G('mtgEdit'); if(me) me.onclick = async () => { const v=prompt('Team meeting link (Google Meet / Zoom):', MEETING.link||''); if(v===null) return; const r=await meetingSave(v.trim()); if(r.ok) renderStandupTab(); else alert('Could not save the link.'); };
-  const add=G('suAdd'); if(add) add.onclick = async () => { const member=G('suMember').value.trim(), text=G('suText').value.trim(), dashId=G('suDash').value; if(!member){ alert('Pick a team member.'); return; } if(!text){ alert('Enter what needs to be done.'); return; } const r=await taskAdd({ member, text, date:standupDate, dashboardId:dashId, dashboardName:dashId?dashName(dashId):'', source:'manual' }); if(r.ok){ renderStandupTab(); renderEod(); } else alert('Could not add the to-do.'); };
+  el.querySelectorAll('[data-addbtn]').forEach(btn => { const name=btn.dataset.addbtn; const box=btn.closest('.su-madd'); const inp=box?box.querySelector('.su-addin'):null; const doAdd=async () => { const text=(inp?inp.value:'').trim(); if(!text){ if(inp) inp.focus(); return; } const r=await taskAdd({ member:name, text, source:'manual' }); if(r.ok){ renderStandupTab(); renderEod(); } else alert('Could not add the to-do.'); }; btn.onclick=doAdd; if(inp) inp.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); doAdd(); } }; });
 }
 
 document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
