@@ -52,15 +52,19 @@ const writeTasks = (env, t) => env.MANUAL.put(KV_TASKS, JSON.stringify(t));
 const KV_MEETING = 'meeting';
 const readMeeting = (env) => kvGet(env, KV_MEETING, {});
 const writeMeeting = (env, m) => env.MANUAL.put(KV_MEETING, JSON.stringify(m));
+const KV_TUTORIALS = 'tutorials';
+const readTutorials = (env) => kvGet(env, KV_TUTORIALS, []);
+const writeTutorials = (env, t) => env.MANUAL.put(KV_TUTORIALS, JSON.stringify(t));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, priority, clients, assignments, tasks, meeting] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env), readTasks(env), readMeeting(env),
+  const [manual, roster, updates, people, priority, clients, assignments, tasks, meeting, tutorials] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env), readTasks(env), readMeeting(env), readTutorials(env),
   ]);
   // All dashboards live in the app (KV) — there is no external Google Sheet.
   const ds = buildDataset([], manual, { roster, updates, people, priority, clients, assignments, standalone: true });
   ds.tasks = Array.isArray(tasks) ? tasks : [];
   ds.meeting = meeting && typeof meeting === 'object' ? meeting : {};
+  ds.tutorials = Array.isArray(tutorials) ? tutorials : [];
   return ds;
 }
 
@@ -556,6 +560,48 @@ export default {
         if ('note' in body) m.note = String(body.note || '').trim();
         await writeMeeting(env, m);
         return json({ ok: true, meeting: m });
+      }
+
+      // ── Tutorials — company how-to guides shown on the Tutorial tab ───────
+      // GET is open (any team member can read); add/edit/delete use the same
+      // edit-token gate as the other write endpoints.
+      if (pathname === '/api/tutorials') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (request.method === 'GET') return json({ ok: true, tutorials: await readTutorials(env) });
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const action = String(body.action || 'add');
+        let list = await readTutorials(env);
+        const cl = (v) => String(v == null ? '' : v).trim();
+        const normLinks = (a) => Array.isArray(a) ? a.map((l) => ({ label: cl(l && l.label), url: cl(l && l.url) })).filter((l) => /^https?:\/\//i.test(l.url)) : [];
+        const normFiles = (a) => Array.isArray(a) ? a.filter((f) => f && f.id).map((f) => ({ id: String(f.id), name: cl(f.name), type: cl(f.type), url: cl(f.url) })) : [];
+        if (action === 'add') {
+          const t = { id: crypto.randomUUID(), title: cl(body.title), body: cl(body.body), links: normLinks(body.links), files: normFiles(body.files), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+          if (!t.title && !t.body && !t.links.length && !t.files.length) return json({ error: 'Add a title or some content first.' }, 400);
+          list.push(t);
+          await writeTutorials(env, list);
+          return json({ ok: true, tutorial: t }, 201);
+        }
+        if (action === 'edit') {
+          const i = list.findIndex((x) => x.id === String(body.id));
+          if (i === -1) return json({ error: 'Tutorial not found.' }, 404);
+          if ('title' in body) list[i].title = cl(body.title);
+          if ('body' in body) list[i].body = cl(body.body);
+          if ('links' in body) list[i].links = normLinks(body.links);
+          if ('files' in body) list[i].files = normFiles(body.files);
+          list[i].updatedAt = new Date().toISOString();
+          await writeTutorials(env, list);
+          return json({ ok: true, tutorial: list[i] });
+        }
+        if (action === 'delete') {
+          const before = list.length;
+          list = list.filter((x) => x.id !== String(body.id));
+          if (list.length === before) return json({ error: 'Tutorial not found.' }, 404);
+          await writeTutorials(env, list);
+          return json({ ok: true });
+        }
+        return json({ error: 'Unknown action.' }, 400);
       }
 
       // ── Tracking tasks from Munshot notetaker ────────────────────────────
@@ -1055,6 +1101,25 @@ function renderPage(data, opts) {
   .asg-row .dn { font-weight:600; font-size:13.5px; } .asg-row .dmeta { font-size:12px; color:var(--muted); margin-top:1px; }
   .asg-act { margin-left:auto; display:flex; gap:8px; align-items:center; flex:0 0 auto; }
   .asg-sel { font:inherit; font-size:12.5px; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); }
+  /* Tutorials tab */
+  .tut-wrap { padding:6px 28px 60px; max-width:920px; }
+  .tut-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:16px; box-shadow:var(--shadow); }
+  .tut-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+  .tut-head h3 { margin:0; font-size:16px; font-weight:680; }
+  .tut-actions { display:flex; gap:6px; flex:0 0 auto; }
+  .tut-body { font-size:13.5px; color:var(--txt2); white-space:pre-wrap; line-height:1.6; margin-top:8px; }
+  .tut-videos { display:grid; gap:12px; margin-top:12px; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
+  .tut-video { position:relative; padding-top:56.25%; border-radius:10px; overflow:hidden; background:#000; border:1px solid var(--line); }
+  .tut-video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .tut-card .thumbs, .tut-card .dlinks { margin-top:12px; }
+  /* Unassigned tab — client-wise grouping */
+  .un-groups { padding:8px 28px 64px; }
+  .un-group { margin-bottom:22px; }
+  .un-ghead { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:700; color:var(--txt); margin:0 0 11px; padding-bottom:7px; border-bottom:2px solid var(--accent-line); }
+  .un-gcount { font-size:11px; font-weight:700; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:1px 9px; }
+  .un-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; }
+  .dtable .tgroup td { background:var(--surface2); font-weight:700; font-size:11.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--txt2); padding:9px 12px; }
+  .dtable .tgroup .tgcount { display:inline-block; margin-left:9px; color:var(--accent); }
   .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
   .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
   .ck-name { font-weight:650; font-size:15px; }
@@ -1628,6 +1693,7 @@ function renderPage(data, opts) {
       <button class="side-item" data-tab="assign"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0zM7 8h10"/></svg><span>Assign</span></button>
       <button class="side-item" data-tab="unassigned"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/></svg><span>Unassigned</span></button>
       <button class="side-item" data-tab="standup"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 8a4 4 0 0 0-4 4v2a4 4 0 0 0 8 0v-2a4 4 0 0 0-4-4z"/><path d="M5 12a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg><span>Standup</span></button>
+      <button class="side-item" data-tab="tutorial"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span>Tutorial</span></button>
     </nav>
     <div class="side-foot"><button class="theme-toggle" id="themeToggle" title="Toggle light / dark">🌙</button></div>
   </aside>
@@ -1748,10 +1814,12 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-assign" hidden></section>
 <section class="tabview" id="tab-unassigned" hidden></section>
 <section class="tabview" id="tab-standup" hidden></section>
+<section class="tabview" id="tab-tutorial" hidden></section>
 
 </div></main></div>
 <div class="overlay" id="overlay"><div class="drawer" id="drawer"></div></div>
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
+<div class="modal-bg" id="tutModalBg"><div class="modal" id="tutModal"></div></div>
 <div class="modal-bg" id="detailBg"><div class="modal modal-detail" id="detailModal"></div></div>
 <input type="file" id="filePick" hidden>
 
@@ -2959,6 +3027,100 @@ function openUpdate(id, name){
   });
 }
 
+// ── Tutorials: company how-to guides (everyone can read; admins add/edit) ────
+let TUTORIALS = Array.isArray(DATA.tutorials) ? DATA.tutorials : [];
+const tutModalBg = document.getElementById('tutModalBg');
+const tutModal = document.getElementById('tutModal');
+function closeTut(){ tutModalBg.classList.remove('open'); }
+if (tutModalBg) tutModalBg.addEventListener('click', (e) => { if (e.target === tutModalBg) closeTut(); });
+// Pull a YouTube video id out of common URL shapes → embed URL, else null.
+function ytEmbed(url){
+  const m = String(url||'').match(/(?:youtube\\.com\\/(?:watch\\?(?:.*&)?v=|embed\\/|shorts\\/|v\\/)|youtu\\.be\\/)([\\w-]{11})/);
+  return m ? 'https://www.youtube.com/embed/' + m[1] : null;
+}
+function tutorialCard(t){
+  const ed = CFG.manualEnabled;
+  const embeds = (t.links||[]).map(l => ytEmbed(l.url)).filter(Boolean);
+  const otherLinks = (t.links||[]).filter(l => !ytEmbed(l.url));
+  const videoHtml = embeds.length ? \`<div class="tut-videos">\${embeds.map(u => \`<div class="tut-video"><iframe src="\${esc(u)}" title="tutorial video" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\`).join('')}</div>\` : '';
+  const linksHtml = otherLinks.length ? \`<div class="dlinks">\${otherLinks.map(l => \`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">🔗 \${esc(l.label||'link')}</a>\`).join('')}</div>\` : '';
+  const filesHtml = (t.files&&t.files.length) ? \`<div class="thumbs">\${fileGrid(t.files)}</div>\` : '';
+  const bodyHtml = t.body ? \`<div class="tut-body">\${esc(t.body)}</div>\` : '';
+  const admin = ed ? \`<div class="tut-actions"><button class="btn ghost sm" data-tut-edit="\${esc(t.id)}">✎ Edit</button><button class="btn ghost sm" data-tut-del="\${esc(t.id)}">🗑 Delete</button></div>\` : '';
+  return \`<div class="tut-card"><div class="tut-head"><h3>\${esc(t.title||'Untitled tutorial')}</h3>\${admin}</div>\${bodyHtml}\${videoHtml}\${filesHtml}\${linksHtml}</div>\`;
+}
+function renderTutorialTab(){
+  const el = G('tab-tutorial'); if(!el) return;
+  const ed = CFG.manualEnabled;
+  const add = ed ? \`<button class="btn" id="tutAdd">＋ Add tutorial</button>\` : '';
+  const cards = TUTORIALS.length ? TUTORIALS.map(tutorialCard).join('')
+    : \`<div class="empty">No tutorials yet.\${ed?' Click “Add tutorial” to create the first guide for your team.':' Check back soon — your team will add guides here.'}</div>\`;
+  el.innerHTML = \`<div class="tabhead"><h2>📚 Tutorials</h2><div class="sub">How we work — guides & walkthroughs for the team</div>\${add}</div><div class="tut-wrap">\${cards}</div>\`;
+  if (ed){ const a=G('tutAdd'); if(a) a.onclick = () => openTutorial(null); }
+  el.querySelectorAll('[data-tut-edit]').forEach(b => b.onclick = () => openTutorial(b.dataset.tutEdit));
+  el.querySelectorAll('[data-tut-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this tutorial?')) return;
+    const r = await api('POST','/api/tutorials',{ action:'delete', id:b.dataset.tutDel });
+    if (r.ok){ TUTORIALS = TUTORIALS.filter(x=>x.id!==b.dataset.tutDel); renderTutorialTab(); } else alert('Could not delete.');
+  });
+}
+let tutFiles = [];
+function renderTutFiles(){
+  const box = G('tut_files'); if(!box) return;
+  box.innerHTML = tutFiles.map(f => fileChip(f, true)).join('');
+  box.querySelectorAll('[data-fx]').forEach(b => b.onclick = () => { tutFiles = tutFiles.filter(x=>x.id!==b.dataset.fx); renderTutFiles(); });
+}
+function tutLinkRowHtml(label, url){
+  return \`<div class="link-row"><input class="f_llabel" placeholder="label, e.g. Intro video" value="\${esc(label||'')}"><input class="f_lurl" placeholder="https://youtu.be/… or any link" value="\${esc(url||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`;
+}
+function setTutLinks(arr){
+  const box = G('tut_links'); if(!box) return;
+  box.innerHTML = (arr||[]).map(l => tutLinkRowHtml(l.label, l.url)).join('');
+  box.querySelectorAll('.rm-client').forEach(b => b.onclick = () => b.parentElement.remove());
+}
+function getTutLinks(){
+  const box = G('tut_links'); if(!box) return [];
+  return [...box.querySelectorAll('.link-row')].map(r => ({ label:r.querySelector('.f_llabel').value.trim(), url:r.querySelector('.f_lurl').value.trim() })).filter(l=>l.url);
+}
+function openTutorial(id){
+  const t = id ? TUTORIALS.find(x=>x.id===id) : null;
+  tutFiles = t && Array.isArray(t.files) ? t.files.slice() : [];
+  tutModal.innerHTML = \`
+    <div class="modal-head"><div><h3>\${t?'Edit tutorial':'Add tutorial'}</h3><div class="sub">Shown to everyone on the Tutorial tab</div></div><button class="x" id="tutX">×</button></div>
+    <div class="modal-body">
+      <label>Title</label>
+      <input id="tut_title" placeholder="e.g. How we build a client dashboard" value="\${t?esc(t.title||''):''}">
+      <label>Details / steps</label>
+      <textarea id="tut_body" rows="6" placeholder="Explain the process, step by step…">\${t?esc(t.body||''):''}</textarea>
+      <label>Video / reference links <span class="tmut" style="font-weight:400">(YouTube links play inline)</span></label>
+      <div id="tut_links"></div>
+      <button class="btn ghost sm" id="tut_addlink" type="button">+ add link</button>
+      <label style="margin-top:14px">Attachments (images / PDFs)</label>
+      <div class="filebox" id="tut_files"></div>
+      <button class="btn ghost sm" id="tut_upload" type="button">📎 Add images / files</button>
+      <button class="btn" id="tut_save" style="margin-top:16px">\${t?'Save changes':'Add tutorial'}</button>
+      <span class="msg" id="tut_msg"></span>
+    </div>\`;
+  setTutLinks(t ? (t.links||[]) : [{label:'',url:''}]);
+  renderTutFiles();
+  tutModalBg.classList.add('open');
+  G('tutX').onclick = closeTut;
+  G('tut_addlink').onclick = () => { setTutLinks(getTutLinks().concat({label:'',url:''})); G('tut_links').lastElementChild.querySelector('.f_lurl').focus(); };
+  G('tut_upload').onclick = async () => { const ups = await uploadFiles(); if (ups.length){ tutFiles = tutFiles.concat(ups); renderTutFiles(); } };
+  G('tut_save').onclick = async () => {
+    const msg = G('tut_msg');
+    const payload = { title:G('tut_title').value.trim(), body:G('tut_body').value.trim(), links:getTutLinks(), files:tutFiles };
+    if (!payload.title && !payload.body && !payload.links.length && !payload.files.length){ msg.className='msg err'; msg.textContent='Add a title or some content.'; return; }
+    msg.className='msg'; msg.textContent='Saving…';
+    const r = id ? await api('POST','/api/tutorials',{ action:'edit', id, ...payload }) : await api('POST','/api/tutorials',{ action:'add', ...payload });
+    if (!r.ok){ const e=await r.json().catch(()=>({})); msg.className='msg err'; msg.textContent='Error: '+(e.error||r.status); return; }
+    const j = await r.json().catch(()=>({}));
+    if (id){ const i=TUTORIALS.findIndex(x=>x.id===id); if(i!==-1&&j.tutorial) TUTORIALS[i]=j.tutorial; }
+    else if (j.tutorial){ TUTORIALS.push(j.tutorial); }
+    closeTut(); renderTutorialTab();
+  };
+}
+
 // Apply a profile click as a filter on the main board.
 function applyFilter({ owner='', customer='', states=null }){
   closeDrawer();
@@ -2986,12 +3148,13 @@ function switchTab(tab){
   // for the tab's lifetime but resets to Overview on a fresh browser session.
   try { sessionStorage.setItem('trk_tab', tab); } catch(e){}
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients','assign','unassigned','standup'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
   if (tab === 'assign') renderAssignTab();
   if (tab === 'unassigned') renderUnassignedTab();
   if (tab === 'standup') renderStandupTab();
+  if (tab === 'tutorial') renderTutorialTab();
 }
 // ── Unassigned tab: every dashboard with no owner, as cards ─────────────────
 function renderUnassignedTab(){
@@ -3001,8 +3164,20 @@ function renderUnassignedTab(){
   const head = \`<div class="tabhead" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><h2>🚩 Unassigned</h2><div class="sub">\${list.length} dashboard\${list.length!==1?'s':''} with no owner yet\${list.length&&CFG.manualEnabled?' · assign them in the Assign tab':''}</div></div>\${seg}</div>\`;
   let body;
   if (!list.length) body = '<div class="empty">Everything has an owner. 🎉<br>Tick “Leave unassigned” when adding a dashboard to keep one here.</div>';
-  else if (unView === 'table') body = \`<div class="grid table-mode un-grid" id="unGrid">\${dashTable(list.map((d,i)=>rowHtml(d,i+1)).join(''))}</div>\`;
-  else body = \`<div class="grid un-grid" id="unGrid">\${list.map((d,i)=>card(d,i+1)).join('')}</div>\`;
+  else {
+    // Segregate by client — client name as a heading, its dashboards below.
+    // Biggest client first, then alphabetical; "No client" last.
+    const map = new Map();
+    list.forEach(d => { const k = d.customer || 'No client'; if (!map.has(k)) map.set(k, []); map.get(k).push(d); });
+    const groups = [...map.entries()].sort((a,b) => ((a[0]==='No client')-(b[0]==='No client')) || (b[1].length-a[1].length) || a[0].localeCompare(b[0]));
+    let n = 0;
+    if (unView === 'table'){
+      const rows = groups.map(([client, ds]) => \`<tr class="tgroup"><td colspan="9">\${esc(client)}<span class="tgcount">\${ds.length}</span></td></tr>\` + ds.map(d => rowHtml(d, ++n)).join('')).join('');
+      body = \`<div class="grid table-mode un-grid" id="unGrid">\${dashTable(rows)}</div>\`;
+    } else {
+      body = \`<div class="un-groups" id="unGrid">\${groups.map(([client, ds]) => \`<div class="un-group"><div class="un-ghead">\${esc(client)}<span class="un-gcount">\${ds.length}</span></div><div class="un-cards">\${ds.map(d => card(d, ++n)).join('')}</div></div>\`).join('')}</div>\`;
+    }
+  }
   el.innerHTML = head + body;
   bindCards();
   const ug = G('unGrid'); if (ug) ug.addEventListener('click', onCardGridClick);
