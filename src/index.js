@@ -1120,6 +1120,49 @@ function renderPage(data, opts) {
   .un-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; }
   .dtable .tgroup td { background:var(--surface2); font-weight:700; font-size:11.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--txt2); padding:9px 12px; }
   .dtable .tgroup .tgcount { display:inline-block; margin-left:9px; color:var(--accent); }
+  /* My Work tab */
+  .mw-wrap { padding:6px 28px 60px; max-width:1000px; }
+  .who-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:18px; }
+  .who-lbl { font-size:12px; color:var(--muted); font-weight:600; }
+  .who-chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .who-chip { display:inline-flex; align-items:center; gap:7px; font:inherit; font-size:13px; font-weight:600; color:var(--txt2); background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:4px 13px 4px 4px; cursor:pointer; }
+  .who-chip:hover { border-color:var(--accent-line); }
+  .who-chip.on { background:var(--accent-weak); border-color:var(--accent); color:var(--accent); }
+  .mw-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
+  @media (max-width:640px){ .mw-kpis { grid-template-columns:repeat(2,1fr); } }
+  .mw-kpi { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px 14px; box-shadow:var(--shadow); }
+  .mw-kpi.warn { border-color:var(--warn-line); background:var(--warn-bg); }
+  .mw-kpi.bad { border-color:var(--danger); background:color-mix(in srgb, var(--danger) 9%, transparent); }
+  .mw-k-n { font-size:24px; font-weight:800; line-height:1; }
+  .mw-k-l { font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .mw-alerts { display:flex; flex-direction:column; gap:8px; }
+  .mw-alert { display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--warn-line); border-radius:10px; padding:11px 14px; cursor:pointer; box-shadow:var(--shadow); }
+  .mw-alert.over { border-left-color:var(--danger); }
+  .mw-alert:hover { border-color:var(--accent-line); }
+  .mw-a-due { flex:0 0 auto; min-width:96px; }
+  .mw-a-name { font-weight:650; font-size:13.5px; }
+  .mw-a-meta { font-size:12px; color:var(--muted); margin-top:2px; }
+  .mw-clear { font-size:13px; color:var(--good); background:var(--good-bg); border:1px solid var(--good-line); border-radius:10px; padding:12px 14px; }
+  .mw-client { margin-top:12px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:4px 14px 8px; box-shadow:var(--shadow); }
+  .mw-ch { display:flex; align-items:center; gap:9px; padding:10px 0 8px; border-bottom:1px solid var(--line2); margin-bottom:2px; }
+  .mw-cn { font-weight:700; font-size:13.5px; }
+  .mw-cc { font-size:11px; font-weight:700; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:1px 8px; }
+  .mw-row { display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid var(--line2); cursor:pointer; }
+  .mw-row:last-child { border-bottom:0; }
+  .mw-row:hover .mw-r-name { color:var(--accent); }
+  .mw-row.done { opacity:.55; }
+  .mw-r-main { flex:1; min-width:0; }
+  .mw-r-name { font-weight:600; font-size:13.5px; }
+  .mw-r-stage { font-size:12px; color:var(--txt2); margin-top:3px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .mw-dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+  .mw-next { color:var(--muted); }
+  .mw-r-track { height:5px; border-radius:4px; background:var(--line2); overflow:hidden; margin-top:6px; max-width:320px; }
+  .mw-r-track i { display:block; height:100%; }
+  .mw-r-due { flex:0 0 auto; }
+  .due-chip { font-size:11.5px; font-weight:700; border-radius:999px; padding:3px 10px; white-space:nowrap; background:var(--surface2); border:1px solid var(--line); color:var(--txt2); }
+  .due-chip.soon { color:var(--warn-txt); background:var(--warn-bg); border-color:var(--warn-line); }
+  .due-chip.over { color:#fff; background:var(--danger); border-color:var(--danger); }
+  .due-chip.none { color:var(--muted); font-weight:500; }
   .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
   .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
   .ck-name { font-weight:650; font-size:15px; }
@@ -1688,6 +1731,7 @@ function renderPage(data, opts) {
     <div class="side-brand"><div class="logo">◆</div><span>Tracker</span></div>
     <nav class="side-nav" id="tabs">
       <button class="side-item on" data-tab="overview"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span>Overview</span></button>
+      <button class="side-item" data-tab="mywork"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg><span>My Work</span></button>
       <button class="side-item" data-tab="team"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Team</span></button>
       <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
       <button class="side-item" data-tab="assign"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0zM7 8h10"/></svg><span>Assign</span></button>
@@ -1813,6 +1857,7 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
 <section class="tabview" id="tab-unassigned" hidden></section>
+<section class="tabview" id="tab-mywork" hidden></section>
 <section class="tabview" id="tab-standup" hidden></section>
 <section class="tabview" id="tab-tutorial" hidden></section>
 
@@ -3148,7 +3193,8 @@ function switchTab(tab){
   // for the tab's lifetime but resets to Overview on a fresh browser session.
   try { sessionStorage.setItem('trk_tab', tab); } catch(e){}
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','mywork','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  if (tab === 'mywork') renderMyWorkTab();
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
   if (tab === 'assign') renderAssignTab();
@@ -3182,6 +3228,70 @@ function renderUnassignedTab(){
   bindCards();
   const ug = G('unGrid'); if (ug) ug.addEventListener('click', onCardGridClick);
   el.querySelectorAll('#unSeg .vseg').forEach(b => b.onclick = () => { unView = b.dataset.dview; localStorage.setItem('unView', unView); renderUnassignedTab(); });
+}
+
+// ── My Work: a teammate's deadline-first, customer-grouped personal view ─────
+let myWho = '';
+try { myWho = localStorage.getItem('myWho') || ''; } catch(e){}
+// Whole days from today to an ISO due date (negative = overdue). null if not a date.
+function daysUntil(iso){
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(iso || '')) return null;
+  const t = new Date(); t.setHours(0,0,0,0);
+  return Math.round((parseISO(iso) - t) / 86400000);
+}
+function dueChip(d){
+  const n = daysUntil(d.dueDate);
+  if (n === null) return d.dueDate ? \`<span class="due-chip">\${esc(d.dueDate)}</span>\` : '<span class="due-chip none">no deadline</span>';
+  const lbl = n < 0 ? ('Overdue '+(-n)+'d') : n===0 ? 'Due today' : n===1 ? 'Due tomorrow' : ('Due in '+n+'d');
+  const cls = n < 0 ? 'over' : n <= 7 ? 'soon' : 'ok';
+  return \`<span class="due-chip \${cls}" title="Due \${esc(fmtDue(d.dueDate))}">\${lbl}</span>\`;
+}
+function renderMyWorkTab(){
+  const el = G('tab-mywork'); if(!el) return;
+  const people = DATA.owners.filter(Boolean);
+  if (myWho && !people.includes(myWho)) myWho = '';
+  const chips = people.length ? people.map(p => \`<button class="who-chip \${p===myWho?'on':''}" data-who="\${esc(p)}">\${avatar(p)}<span>\${esc(p)}</span></button>\`).join('') : '<span class="tmut">No team members yet — add them in the Team tab.</span>';
+  const picker = \`<div class="who-row"><span class="who-lbl">Show work for</span><div class="who-chips">\${chips}</div></div>\`;
+  let body = '';
+  if (!myWho){
+    body = '<div class="empty">Pick your name above to see your customers, what stage each dashboard is at, and what\\'s due.</div>';
+  } else {
+    const mine = DATA.dashboards.filter(d => d.owner === myWho);
+    const active = mine.filter(d => d.state !== 'completed');
+    const dated = active.filter(d => daysUntil(d.dueDate) !== null);
+    const overdueN = dated.filter(d => daysUntil(d.dueDate) < 0).length;
+    const soonN = dated.filter(d => { const n = daysUntil(d.dueDate); return n >= 0 && n <= 7; }).length;
+    const urgent = dated.filter(d => daysUntil(d.dueDate) <= 7).sort((a,b) => daysUntil(a.dueDate) - daysUntil(b.dueDate));
+    const clients = [...new Set(mine.flatMap(d => d.customers))];
+    const kpi = \`<div class="mw-kpis">
+      <div class="mw-kpi"><div class="mw-k-n">\${clients.length}</div><div class="mw-k-l">customer\${clients.length!==1?'s':''}</div></div>
+      <div class="mw-kpi"><div class="mw-k-n">\${active.length}</div><div class="mw-k-l">active dashboard\${active.length!==1?'s':''}</div></div>
+      <div class="mw-kpi \${soonN?'warn':''}"><div class="mw-k-n">\${soonN}</div><div class="mw-k-l">due this week</div></div>
+      <div class="mw-kpi \${overdueN?'bad':''}"><div class="mw-k-n">\${overdueN}</div><div class="mw-k-l">overdue</div></div>
+    </div>\`;
+    const alertRows = urgent.map(d => { const s = SMAP[d.state] || {};
+      return \`<div class="mw-alert \${daysUntil(d.dueDate)<0?'over':'soon'}" data-card="\${esc(d.id)}"><div class="mw-a-due">\${dueChip(d)}</div><div class="mw-a-main"><div class="mw-a-name">\${d.priorityLevel?'★ ':''}\${esc(d.name)}</div><div class="mw-a-meta">\${esc(d.customer||'—')} · <span style="color:\${s.color||'inherit'}">\${esc(s.label||d.state)}</span></div></div></div>\`;
+    }).join('');
+    const alerts = urgent.length ? \`<div class="section-t">⏰ Needs attention — due this week or overdue</div><div class="mw-alerts">\${alertRows}</div>\`
+      : \`<div class="mw-clear">✅ Nothing overdue or due this week.\${dated.length?'':' Add a due date to a dashboard and it\\'ll show up here.'}</div>\`;
+    // group all their dashboards by customer; customer with the nearest deadline first
+    const map = new Map();
+    mine.forEach(d => { (d.customers.length ? d.customers : ['No client']).forEach(c => { if (!map.has(c)) map.set(c, []); map.get(c).push(d); }); });
+    const soonestOf = (ds) => Math.min(...ds.map(d => { const n = daysUntil(d.dueDate); return n === null ? 99999 : n; }));
+    const groups = [...map.entries()].sort((a,b) => soonestOf(a[1]) - soonestOf(b[1]) || b[1].length - a[1].length || a[0].localeCompare(b[0]));
+    const byClient = groups.map(([client, ds]) => {
+      const rows = ds.slice().sort((a,b) => { const na = daysUntil(a.dueDate), nb = daysUntil(b.dueDate); return (na===null?99999:na) - (nb===null?99999:nb); }).map(d => {
+        const s = SMAP[d.state] || {}; const cur = STATES.findIndex(x => x.id === d.state); const pct = Math.round((d.progress||0)*100);
+        const nextStage = (cur >= 0 && cur < STATES.length-1) ? STATES[cur+1].label : null;
+        return \`<div class="mw-row \${d.state==='completed'?'done':''}" data-card="\${esc(d.id)}"><div class="mw-r-main"><div class="mw-r-name">\${d.priorityLevel?'★ ':''}\${esc(d.name)}\${d.isLive?'<span class="tlive">● Live</span>':''}</div><div class="mw-r-stage"><span class="mw-dot" style="background:\${s.color||'#ccc'}"></span>\${esc(s.label||d.state)}\${nextStage?\` <span class="mw-next">→ next: \${esc(nextStage)}</span>\`:''}</div><div class="mw-r-track"><i style="width:\${pct}%;background:\${s.color||'#ccc'}"></i></div></div><div class="mw-r-due">\${dueChip(d)}</div></div>\`;
+      }).join('');
+      return \`<div class="mw-client"><div class="mw-ch"><span class="mw-cn">\${esc(client)}</span><span class="mw-cc">\${ds.length}</span></div>\${rows}</div>\`;
+    }).join('') || '<div class="empty">No dashboards are assigned to you yet.</div>';
+    body = kpi + alerts + '<div class="section-t" style="margin-top:22px">Your work by customer</div>' + byClient;
+  }
+  el.innerHTML = \`<div class="tabhead"><h2>🎯 My Work</h2><div class="sub">Your customers, what stage each dashboard is at, and what's due — so nothing slips</div></div><div class="mw-wrap">\${picker}\${body}</div>\`;
+  el.querySelectorAll('[data-who]').forEach(b => b.onclick = () => { myWho = b.dataset.who; try{ localStorage.setItem('myWho', myWho); }catch(e){} renderMyWorkTab(); });
+  el.querySelectorAll('[data-card]').forEach(c => c.onclick = () => openDetail(c.dataset.card));
 }
 
 // ── Workload-balanced auto-assignment ──────────────────────────────────────
