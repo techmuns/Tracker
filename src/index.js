@@ -9,7 +9,7 @@
 // All dashboards live in the KV namespace bound as MANUAL — there is no
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
-import { buildDataset, manualToDashboard, normalizeSections, STATES } from './classify.js';
+import { buildDataset, manualToDashboard, normalizeSections, dedupeTasks, STATES } from './classify.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -65,7 +65,7 @@ async function getDataset(env) {
   ]);
   // All dashboards live in the app (KV) — there is no external Google Sheet.
   const ds = buildDataset([], manual, { roster, updates, people, priority, clients, assignments, notes, standalone: true });
-  ds.tasks = Array.isArray(tasks) ? tasks : [];
+  ds.tasks = dedupeTasks(Array.isArray(tasks) ? tasks : []); // collapse repeated to-dos
   ds.meeting = meeting && typeof meeting === 'object' ? meeting : {};
   ds.tutorials = Array.isArray(tutorials) ? tutorials : [];
   return ds;
@@ -608,10 +608,12 @@ export default {
       }
 
       // ── Tracking tasks from Munshot notetaker ────────────────────────────
-      // Pulls the notetaker's per-member to-dos and folds them into the SAME KV
-      // task store the profile To-do lists use, then returns the merged list.
-      // Upsert-only + dedup by (member, text) so re-syncing never duplicates and
-      // never clobbers a task's locally-toggled done status.
+      // MIRRORS the notetaker's CURRENT per-member to-dos into the shared KV task
+      // store (not an ever-growing accumulation): each reported person's
+      // notetaker tasks are rebuilt from the latest response, so stale phrasings
+      // the notetaker no longer lists drop off instead of piling up. Manual tasks
+      // and locally-toggled "done" states are preserved, and a person missing
+      // from a (partial) response keeps their existing tasks untouched.
       if (pathname === '/api/tracking-tasks') {
         let tasks = await readTasks(env).catch(() => []);
         try {
@@ -619,13 +621,19 @@ export default {
           const res = await fetch(trackingUrl, {
             headers: { 'Authorization': 'Bearer ' + (env.MUNSBOT_TOKEN || 'quackquackquackquack') }
           });
-          if (!res.ok) return json({ ok: true, tasks, warning: 'notetaker returned ' + res.status });
+          if (!res.ok) return json({ ok: true, tasks: dedupeTasks(tasks), warning: 'notetaker returned ' + res.status });
           const data = await res.json();
           const people = Array.isArray(data && data.people) ? data.people : [];
           const norm = (s) => String(s || '').trim();
           const key = (m, t) => (norm(m) + '||' + norm(t)).toLowerCase();
-          const seen = new Set(tasks.map((x) => key(x.member, x.text)));
-          let added = 0;
+          const reported = new Set(people.map((p) => norm(p && p.name).toLowerCase()).filter(Boolean));
+          // Existing notetaker tasks indexed by (member,text) → preserve id + done.
+          const existing = new Map();
+          for (const t of tasks) if (t.source === 'notetaker') existing.set(key(t.member, t.text), t);
+          // Keep manual tasks, and notetaker tasks of anyone NOT in this response.
+          const kept = tasks.filter((t) => t.source !== 'notetaker' || !reported.has(norm(t.member).toLowerCase()));
+          // Rebuild each reported person's notetaker tasks from the current list.
+          const rebuilt = [];
           for (const p of people) {
             const member = norm(p && p.name);
             if (!member) continue;
@@ -635,18 +643,19 @@ export default {
             ];
             for (const it of items) {
               const text = norm(it.text);
-              if (!text || seen.has(key(member, text))) continue;
-              seen.add(key(member, text));
-              // date '' → this is backlog, not a dated daily-standup task.
-              tasks.push({ id: crypto.randomUUID(), member, date: '', text, dashboardId: '', dashboardName: '',
-                done: it.done, doneAt: it.done ? new Date().toISOString() : null, source: 'notetaker', createdAt: new Date().toISOString() });
-              added++;
+              if (!text) continue;
+              const prev = existing.get(key(member, text));
+              rebuilt.push(prev
+                ? { ...prev, member, text, source: 'notetaker' }   // keep id + local done toggle
+                : { id: crypto.randomUUID(), member, date: '', text, dashboardId: '', dashboardName: '',
+                    done: it.done, doneAt: it.done ? new Date().toISOString() : null, source: 'notetaker', createdAt: new Date().toISOString() });
             }
           }
-          if (added && env.MANUAL) await writeTasks(env, tasks);
-          return json({ ok: true, tasks, imported: added });
+          const next = dedupeTasks(kept.concat(rebuilt));
+          if (env.MANUAL) await writeTasks(env, next);
+          return json({ ok: true, tasks: next, mirrored: reported.size, before: tasks.length, after: next.length });
         } catch (e) {
-          return json({ ok: true, tasks, warning: 'notetaker fetch failed: ' + e.message });
+          return json({ ok: true, tasks: dedupeTasks(tasks), warning: 'notetaker fetch failed: ' + e.message });
         }
       }
 

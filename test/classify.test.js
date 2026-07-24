@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, rowToDashboard, buildDataset, manualToDashboard, rowsToEntries, splitCustomers, isLiveValue } from '../src/classify.js';
+import { classify, rowToDashboard, buildDataset, manualToDashboard, rowsToEntries, splitCustomers, isLiveValue, dedupeTasks } from '../src/classify.js';
 import { parseCsv } from '../src/csv.js';
 
 test('isLiveValue reads the Live column', () => {
@@ -271,4 +271,30 @@ test('buildDataset merges manual entries after sheet rows and recounts', () => {
   assert.equal(data.dashboards[1].source, 'manual');  // manual after
   assert.equal(data.counts.not_started, 1);
   assert.equal(data.counts.data_integration, 1);      // "In Making" → data integration
+});
+
+test('dedupeTasks collapses repeated to-dos per member', () => {
+  const out = dedupeTasks([
+    { id: 'a', member: 'Naval', text: 'Fix the P&L tab', done: false, source: 'notetaker' },
+    { id: 'b', member: 'Naval', text: 'Fix the P&L tab', done: false, source: 'notetaker' }, // exact dup
+    { id: 'c', member: 'Naval', text: 'Fix the P&L tab.', done: true, source: 'notetaker' },  // trailing dot + done
+    { id: 'd', member: 'naval', text: 'fix  the   p&l tab', done: false, source: 'notetaker' }, // case + spacing
+    { id: 'e', member: 'Naval', text: 'Build Q2 dashboard', done: false, source: 'notetaker' }, // distinct
+  ]);
+  assert.equal(out.length, 2);                 // the four variants collapse to one
+  const pl = out.find((t) => /p&l/i.test(t.text));
+  assert.equal(pl.id, 'a');                    // first occurrence keeps its slot + id
+  assert.equal(pl.done, true);                 // a done duplicate promotes it to done
+  assert.ok(out.some((t) => t.text === 'Build Q2 dashboard'));
+});
+
+test('dedupeTasks keeps same text for different members and dashboards', () => {
+  const out = dedupeTasks([
+    { id: '1', member: 'Naval', text: 'QA pass', dashboardId: 'dashA' },
+    { id: '2', member: 'Aashita', text: 'QA pass', dashboardId: 'dashA' }, // different member
+    { id: '3', member: 'Naval', text: 'QA pass', dashboardId: 'dashB' },   // different dashboard
+    { id: '4', member: 'Naval', text: 'QA pass', dashboardId: 'dashA' },   // true dup of #1
+  ]);
+  assert.equal(out.length, 3);
+  assert.deepEqual(out.map((t) => t.id), ['1', '2', '3']);
 });

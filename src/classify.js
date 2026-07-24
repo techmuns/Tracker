@@ -315,6 +315,32 @@ export function normalizeSections(list, depth = 1) {
   return out;
 }
 
+// Collapse repetitive to-dos. The notetaker re-imports the same items across
+// meetings, so a person's list fills up with duplicates of identical work.
+// Keep ONE entry per (member, text, dashboard), where text is lower-cased,
+// whitespace-collapsed and stripped of trailing punctuation — so "Fix P&L tab"
+// and "Fix the P&L tab." don't both survive. First occurrence wins its slot
+// (order preserved); on a collision we still prefer a done state, a non-notetaker
+// source, and a real date, so nothing meaningful is lost.
+export function dedupeTasks(list) {
+  if (!Array.isArray(list)) return [];
+  const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').replace(/[.…!]+$/, '').trim();
+  const byKey = new Map();
+  const out = [];
+  for (const t of list) {
+    if (!t || typeof t !== 'object') continue;
+    const text = norm(t.text);
+    if (!text) { out.push(t); continue; }
+    const k = norm(t.member) + '||' + text + '||' + String(t.dashboardId || '');
+    const prev = byKey.get(k);
+    if (!prev) { const c = { ...t }; byKey.set(k, c); out.push(c); continue; }
+    if (t.done && !prev.done) { prev.done = true; prev.doneAt = t.doneAt || prev.doneAt || null; }
+    if (prev.source === 'notetaker' && t.source && t.source !== 'notetaker') prev.source = t.source;
+    if (!prev.date && t.date) prev.date = t.date;
+  }
+  return out;
+}
+
 // Structured feedbacks: each is a dated client comment with optional link/files
 // and a yes/no "implemented" toggle. Tolerates partially-filled objects.
 export function normalizeFeedbacks(list) {
