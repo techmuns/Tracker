@@ -1212,6 +1212,21 @@ function renderPage(data, opts) {
   .dnote-tx { flex:1; font-size:13px; color:var(--txt); white-space:pre-wrap; word-break:break-word; }
   .dnote-del { flex:0 0 auto; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:16px; line-height:1; padding:0 2px; }
   .dnote-del:hover { color:var(--danger); }
+  /* Profile → Dashboards: tap-to-expand inline notes */
+  .pnote-list { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
+  .pnote-dash { border:1px solid var(--line); border-radius:11px; background:var(--surface); overflow:hidden; }
+  .pnote-dash.done { opacity:.62; }
+  .pnote-row { display:flex; align-items:center; gap:11px; padding:11px 13px; cursor:pointer; user-select:none; }
+  .pnote-row:hover { background:var(--accent-weak); }
+  .pnote-chev { font-size:11px; color:var(--muted); transition:transform .15s; flex:0 0 auto; }
+  .pnote-dash.open .pnote-chev { transform:rotate(90deg); }
+  .pnote-main { flex:1; min-width:0; }
+  .pnote-name { font-weight:600; font-size:13.5px; }
+  .pnote-sub { font-size:12px; color:var(--muted); margin-top:3px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .pnote-count { font-size:11.5px; font-weight:600; color:var(--muted); flex:0 0 auto; }
+  .pnote-count.has { color:var(--accent); }
+  .pnote-panel { padding:0 13px 13px; border-top:1px solid var(--line2); }
+  .pnote-panel .dnote-add { margin:11px 0 10px; }
   .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
   .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
   .ck-name { font-weight:650; font-size:15px; }
@@ -2660,11 +2675,43 @@ function ownerTasksHtml(name){
     <div class="task-list">\${doneList}</div>
   </div>\`;
 }
+// A teammate's dashboards as a simple tap-to-expand list; expanding reveals an
+// inline working-notes scratchpad (add + delete) — no heavy modal to open.
+function pnoteItemHtml(nt){
+  return \`<div class="dnote-item" data-nid="\${nt.ts}"><span class="dnote-tx">\${esc(nt.text)}</span>\${CFG.manualEnabled?\`<button class="dnote-del pnote-del" data-ts="\${nt.ts}" title="Delete note">×</button>\`:''}</div>\`;
+}
+function ownerDashNotesHtml(name){
+  const mine = DATA.dashboards.filter(d => d.owner === name);
+  const active = mine.filter(d => d.state !== 'completed');
+  const done = mine.filter(d => d.state === 'completed');
+  const ordered = active.concat(done);
+  if (!ordered.length) return '<div class="empty">No dashboards assigned yet.</div>';
+  const ed = CFG.manualEnabled;
+  const row = (d) => {
+    const st = SMAP[d.state] || {};
+    const n = (d.notes||[]).length;
+    const notesHtml = (d.notes||[]).length ? d.notes.slice().reverse().map(pnoteItemHtml).join('') : '<div class="dnote muted">No notes yet — jot what you want to do here.</div>';
+    return \`<div class="pnote-dash \${d.state==='completed'?'done':''}" data-pd="\${esc(d.id)}">
+      <div class="pnote-row" data-pdtoggle="\${esc(d.id)}">
+        <span class="pnote-chev">▸</span>
+        <div class="pnote-main"><div class="pnote-name">\${d.priorityLevel?'★ ':''}\${esc(d.name)}\${d.isLive?'<span class="tlive">● Live</span>':''}</div>
+          <div class="pnote-sub"><span class="mw-dot" style="background:\${st.color||'#ccc'}"></span>\${esc(st.label||d.state)} · \${esc(d.customer||'—')} \${dueChip(d)}</div></div>
+        <span class="pnote-count \${n?'has':''}">📝 \${n}</span>
+      </div>
+      <div class="pnote-panel" hidden>
+        \${ed?\`<div class="dnote-add"><input class="pnote-input" placeholder="Add a note — what to do here…" autocomplete="off"><button class="btn sm pnote-add">Add</button></div>\`:''}
+        <div class="dnotes">\${notesHtml}</div>
+        <a class="lnk pnote-open" data-open="\${esc(d.id)}" style="margin-top:9px;display:inline-block">Open full dashboard ↗</a>
+      </div>
+    </div>\`;
+  };
+  return \`<div class="section-t">Your dashboards — tap one to add notes</div><div class="pnote-list">\${ordered.map(row).join('')}</div>\`;
+}
 function ownerBodyHtml(name, s){
   if (ownerSub === 'work'){
     return statRow(s) + \`<div class="bar">\${stateBar(s.c,s.total)}</div>\`
       + (s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:'')
-      + sectionsHtml(s, d => esc(d.customers.join(', '))+(d.status&&d.status!=='-'?' — '+esc(d.status):''));
+      + ownerDashNotesHtml(name);
   }
   if (ownerSub === 'todo' || ownerSub === 'tasks') return ownerTasksHtml(name);
   if (ownerSub === 'profile') return employeeProfileHtml(name);
@@ -2754,6 +2801,56 @@ function renderOwner(name){
   });
   if (ownerSub === 'profile') wireEmployeeProfile(name);
   if (ownerSub === 'todo' || ownerSub === 'tasks') wireOwnerTasks(name);
+  if (ownerSub === 'work') wireOwnerNotes(name);
+}
+// Tap-to-expand dashboard rows + inline working-notes (add / delete) in-place.
+function updateNoteCount(card){
+  const d = DATA.dashboards.find(x => x.id === card.dataset.pd);
+  const n = d ? (d.notes||[]).length : 0;
+  const c = card.querySelector('.pnote-count'); if (c){ c.textContent = '📝 ' + n; c.classList.toggle('has', n>0); }
+}
+function wireOwnerNoteDeletes(card){
+  const id = card.dataset.pd;
+  card.querySelectorAll('.pnote-del').forEach(b => b.onclick = async (e) => {
+    e.stopPropagation();
+    const ts = b.dataset.ts;
+    const res = await api('DELETE', \`/api/notes?id=\${encodeURIComponent(id)}&ts=\${ts}\`);
+    if (!res.ok){ alert('Could not delete the note.'); return; }
+    const d = DATA.dashboards.find(x => x.id === id); if (d) d.notes = (d.notes||[]).filter(n => String(n.ts) !== String(ts));
+    b.closest('.dnote-item').remove();
+    const box = card.querySelector('.dnotes'); if (!box.querySelector('.dnote-item')) box.innerHTML = '<div class="dnote muted">No notes yet — jot what you want to do here.</div>';
+    updateNoteCount(card);
+  });
+}
+function wireOwnerNotes(name){
+  drawer.querySelectorAll('.pnote-dash').forEach(card => {
+    const id = card.dataset.pd;
+    const row = card.querySelector('.pnote-row');
+    const panel = card.querySelector('.pnote-panel');
+    row.onclick = () => {
+      const open = panel.hasAttribute('hidden');
+      if (open){ panel.removeAttribute('hidden'); card.classList.add('open'); const inp = card.querySelector('.pnote-input'); if (inp) inp.focus(); }
+      else { panel.setAttribute('hidden', ''); card.classList.remove('open'); }
+    };
+    const inp = card.querySelector('.pnote-input'), addBtn = card.querySelector('.pnote-add');
+    if (addBtn && inp){
+      const add = async () => {
+        const text = inp.value.trim(); if (!text){ inp.focus(); return; }
+        const res = await api('POST', '/api/notes', { id, text });
+        if (!res.ok){ const e = await res.json().catch(()=>({})); alert('Could not add: ' + (e.error||res.status)); return; }
+        const j = await res.json().catch(()=>({}));
+        const d = DATA.dashboards.find(x => x.id === id); if (d){ if (!Array.isArray(d.notes)) d.notes = []; if (j.entry) d.notes.push(j.entry); }
+        const box = card.querySelector('.dnotes'); const muted = box.querySelector('.dnote.muted'); if (muted) muted.remove();
+        if (j.entry) box.insertAdjacentHTML('afterbegin', pnoteItemHtml(j.entry));
+        wireOwnerNoteDeletes(card);
+        inp.value = ''; inp.focus();
+        updateNoteCount(card);
+      };
+      addBtn.onclick = add;
+      inp.onkeydown = (e) => { if (e.key === 'Enter'){ e.preventDefault(); add(); } };
+    }
+    wireOwnerNoteDeletes(card);
+  });
 }
 
 // ── Employee terminal: join date + attendance calendar (manual day log) ─────
