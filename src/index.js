@@ -55,13 +55,16 @@ const writeMeeting = (env, m) => env.MANUAL.put(KV_MEETING, JSON.stringify(m));
 const KV_TUTORIALS = 'tutorials';
 const readTutorials = (env) => kvGet(env, KV_TUTORIALS, []);
 const writeTutorials = (env, t) => env.MANUAL.put(KV_TUTORIALS, JSON.stringify(t));
+const KV_NOTES = 'dash_notes';
+const readNotes = (env) => kvGet(env, KV_NOTES, {});
+const writeNotes = (env, n) => env.MANUAL.put(KV_NOTES, JSON.stringify(n));
 
 async function getDataset(env) {
-  const [manual, roster, updates, people, priority, clients, assignments, tasks, meeting, tutorials] = await Promise.all([
-    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env), readTasks(env), readMeeting(env), readTutorials(env),
+  const [manual, roster, updates, people, priority, clients, assignments, tasks, meeting, tutorials, notes] = await Promise.all([
+    readManual(env), readRoster(env), readUpdates(env), readPeople(env), readPriority(env), readClients(env), readAssign(env), readTasks(env), readMeeting(env), readTutorials(env), readNotes(env),
   ]);
   // All dashboards live in the app (KV) — there is no external Google Sheet.
-  const ds = buildDataset([], manual, { roster, updates, people, priority, clients, assignments, standalone: true });
+  const ds = buildDataset([], manual, { roster, updates, people, priority, clients, assignments, notes, standalone: true });
   ds.tasks = Array.isArray(tasks) ? tasks : [];
   ds.meeting = meeting && typeof meeting === 'object' ? meeting : {};
   ds.tutorials = Array.isArray(tutorials) ? tutorials : [];
@@ -833,6 +836,38 @@ export default {
         return json({ error: 'Method not allowed.' }, 405);
       }
 
+      // ── Per-dashboard working notes — a teammate's scratchpad on a card ───
+      // A quick list of jottings per dashboard ("what I want to do here"),
+      // added and deleted as they work. Keyed by dashboard id in KV.
+      if (pathname === '/api/notes') {
+        if (!env.MANUAL) return json({ error: 'Storage not enabled.' }, 503);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const notes = await readNotes(env);
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          const id = String(body.id || '').trim();
+          const text = String(body.text || '').trim();
+          if (!id) return json({ error: 'id is required.' }, 400);
+          if (!text) return json({ error: 'Write a note first.' }, 400);
+          const entry = { ts: Date.now(), text, by: String(body.by || '').trim() };
+          if (!Array.isArray(notes[id])) notes[id] = [];
+          notes[id].push(entry);
+          await writeNotes(env, notes);
+          return json({ ok: true, entry }, 201);
+        }
+        if (request.method === 'DELETE') {
+          const id = url.searchParams.get('id');
+          const ts = Number(url.searchParams.get('ts'));
+          if (Array.isArray(notes[id])) {
+            notes[id] = notes[id].filter((e) => e.ts !== ts);
+            if (!notes[id].length) delete notes[id];
+            await writeNotes(env, notes);
+          }
+          return json({ ok: true });
+        }
+        return json({ error: 'Method not allowed.' }, 405);
+      }
+
       // ── Read endpoints ──────────────────────────────────────────────────
       const data = await getDataset(env);
 
@@ -1163,6 +1198,20 @@ function renderPage(data, opts) {
   .due-chip.soon { color:var(--warn-txt); background:var(--warn-bg); border-color:var(--warn-line); }
   .due-chip.over { color:#fff; background:var(--danger); border-color:var(--danger); }
   .due-chip.none { color:var(--muted); font-weight:500; }
+  /* Team card deadline badge */
+  .dl-badge { font-size:10.5px; font-weight:700; border-radius:999px; padding:2px 8px; white-space:nowrap; }
+  .dl-badge.over { color:#fff; background:var(--danger); }
+  .dl-badge.soon { color:var(--warn-txt); background:var(--warn-bg); border:1px solid var(--warn-line); }
+  /* Per-dashboard working notes (detail-modal scratchpad) */
+  .dnotes-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .dnotes-hint { font-size:11px; color:var(--muted); font-weight:400; }
+  .dnote-add { display:flex; gap:8px; margin:8px 0 10px; }
+  .dnote-add input { flex:1; min-width:0; margin:0; }
+  .dnotes { display:flex; flex-direction:column; gap:6px; }
+  .dnote-item { display:flex; align-items:flex-start; gap:10px; background:var(--surface2); border:1px solid var(--line); border-radius:9px; padding:8px 11px; }
+  .dnote-tx { flex:1; font-size:13px; color:var(--txt); white-space:pre-wrap; word-break:break-word; }
+  .dnote-del { flex:0 0 auto; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:16px; line-height:1; padding:0 2px; }
+  .dnote-del:hover { color:var(--danger); }
   .ck-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
   .ck-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
   .ck-name { font-weight:650; font-size:15px; }
@@ -2888,10 +2937,14 @@ function renderTeamTab(){
   const cards = DATA.owners.map(name => {
     const s = ownerStats(name), p = (DATA.people&&DATA.people[name])||{};
     const pend = TASKS.filter(t => t.member === name && !t.done).length;
+    const dl = DATA.dashboards.filter(d => d.owner === name && d.state !== 'completed');
+    const odue = dl.filter(d => { const n = daysUntil(d.dueDate); return n !== null && n < 0; }).length;
+    const dsoon = dl.filter(d => { const n = daysUntil(d.dueDate); return n !== null && n >= 0 && n <= 7; }).length;
+    const dlBadge = odue ? \`<span class="dl-badge over" title="Overdue dashboards">🔴 \${odue} overdue</span>\` : dsoon ? \`<span class="dl-badge soon" title="Due within 7 days">🟠 \${dsoon} due soon</span>\` : '';
     return \`<div class="profile-card" data-member="\${esc(name)}">
       \${CFG.manualEnabled?\`<button class="rm" data-rmown="\${esc(name)}" data-total="\${s.total}" title="Delete">×</button>\`:''}
       <div class="pc-head">\${avatar(name,'lg')}<div><div class="pc-name">\${esc(name)}</div><div class="pc-role">\${esc(p.role||'Team member')}</div></div></div>
-      <div class="pc-stats"><span><b>\${s.total}</b> dashboard\${s.total!==1?'s':''}</span><span><b>\${s.completed}</b> done</span>\${pend?\`<span class="warnpill">\${pend} to-do</span>\`:''}</div>
+      <div class="pc-stats"><span><b>\${s.total}</b> dashboard\${s.total!==1?'s':''}</span><span><b>\${s.completed}</b> done</span>\${pend?\`<span class="warnpill">\${pend} to-do</span>\`:''}\${dlBadge}</div>
       <div class="bar" style="margin-top:8px">\${stateBar(s.c,s.total)}</div>
     </div>\`;
   }).join('');
@@ -2994,6 +3047,7 @@ function openDetail(id){
         \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
       </div>
       \${(d.brief||(d.briefFiles&&d.briefFiles.length)||(d.briefLinks&&d.briefLinks.length))?\`<div class="dsec brief-sec"><h4>📋 Brief — what to do</h4>\${d.brief?\`<div class="dnote big">\${esc(d.brief)}</div>\`:''}\${d.briefFiles&&d.briefFiles.length?\`<div class="thumbs">\${fileGrid(d.briefFiles)}</div>\`:''}\${d.briefLinks&&d.briefLinks.length?\`<div class="dlinks">\${d.briefLinks.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">🔗 \${esc(l.label||'link')}</a>\`).join('')}</div>\`:''}</div>\`:''}
+      <div class="dsec dnotes-sec"><div class="dnotes-head"><h4>📝 Working notes</h4>\${editable?'<span class="dnotes-hint">jot what to do here · delete when done</span>':''}</div>\${editable?\`<div class="dnote-add"><input id="dnoteInput" placeholder="Add a note — e.g. redo the P&amp;L chart colours…" autocomplete="off"><button class="btn sm" id="dnoteAdd">Add</button></div>\`:''}<div class="dnotes">\${(d.notes&&d.notes.length)?d.notes.slice().reverse().map(nt=>\`<div class="dnote-item"><span class="dnote-tx">\${esc(nt.text)}</span>\${editable?\`<button class="dnote-del" data-notedel="\${nt.ts}" title="Delete note">×</button>\`:''}</div>\`).join(''):'<div class="dnote muted">No notes yet — add what you want to do on this dashboard.</div>'}</div></div>
       \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
       \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
       \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
@@ -3017,6 +3071,25 @@ function openDetail(id){
     const f = (d.feedbacks||[]).find(x => x.id === el.dataset.fbid); if (!f) return;
     const res = await api('POST','/api/feedback',{ id, fbId:el.dataset.fbid, implemented:!f.implemented });
     if (res.ok){ f.implemented = !f.implemented; openDetail(id); } else alert('Failed.');
+  });
+  // Working notes: add (input + Enter/button) and delete each.
+  const dnAdd = document.getElementById('dnoteAdd');
+  if (dnAdd){
+    const addNote = async () => {
+      const inp = document.getElementById('dnoteInput'); const text = (inp ? inp.value : '').trim();
+      if (!text){ if (inp) inp.focus(); return; }
+      const res = await api('POST', '/api/notes', { id, text });
+      if (res.ok){ const j = await res.json().catch(()=>({})); if (!Array.isArray(d.notes)) d.notes = []; if (j.entry) d.notes.push(j.entry); openDetail(id); const ni = document.getElementById('dnoteInput'); if (ni) ni.focus(); }
+      else { const e = await res.json().catch(()=>({})); alert('Could not add the note: ' + (e.error || res.status)); }
+    };
+    dnAdd.onclick = addNote;
+    const inp = document.getElementById('dnoteInput'); if (inp) inp.onkeydown = (e) => { if (e.key === 'Enter'){ e.preventDefault(); addNote(); } };
+  }
+  detailModal.querySelectorAll('[data-notedel]').forEach(b => b.onclick = async () => {
+    const ts = b.dataset.notedel;
+    const res = await api('DELETE', \`/api/notes?id=\${encodeURIComponent(id)}&ts=\${ts}\`);
+    if (res.ok){ d.notes = (d.notes||[]).filter(n => String(n.ts) !== String(ts)); openDetail(id); }
+    else alert('Could not delete the note.');
   });
 }
 

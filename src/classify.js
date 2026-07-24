@@ -405,9 +405,12 @@ export function buildDataset(rows, manual = [], opts = {}) {
   // override it (so you can advance a sheet card without touching the sheet).
   // The latest update always supplies the display note + date.
   const updates = opts.updates || {};
+  const notes = opts.notes || {};
   for (const d of dashboards) {
     const log = Array.isArray(updates[d.id]) ? updates[d.id] : [];
     d.updates = log;
+    // Free-form working notes a teammate jots while working the dashboard.
+    d.notes = Array.isArray(notes[d.id]) ? notes[d.id] : [];
     if (log.length) {
       const latest = log[log.length - 1];
       if (d.source === 'sheet' && latest.state && STATE_IDS.has(latest.state)) d.state = latest.state;
