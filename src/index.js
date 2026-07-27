@@ -3140,7 +3140,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}\${editable?'<button class="btn ghost sm" id="dDel" style="color:var(--danger)" title="Delete this dashboard">🗑 Delete</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
@@ -3167,6 +3167,11 @@ function openDetail(id){
   detailBg.classList.add('open');
   G('dX').onclick = closeDetail;
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
+  { const dd = document.getElementById('dDel'); if (dd) dd.onclick = async () => {
+    if (!confirm('Delete "' + (d.name || 'this dashboard') + '"?\\nThis removes it for everyone and can\\'t be undone.')) return;
+    const res = await api('DELETE', '/api/manual?id=' + encodeURIComponent(id));
+    if (res.ok){ closeDetail(); location.reload(); } else alert('Delete failed: ' + ((await res.json().catch(()=>({}))).error || res.status));
+  }; }
   const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
   const pubBtn = detailModal.querySelector('[data-publish]'); if (pubBtn) pubBtn.onclick = () => publishDash(id, pubBtn);
   const pdfBtn = document.getElementById('dPdf'); if (pdfBtn) pdfBtn.onclick = () => genBuildUpdate(id, pdfBtn);
