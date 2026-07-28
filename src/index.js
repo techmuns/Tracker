@@ -2259,6 +2259,7 @@ function renderClientMenu(){
       if (clientSel.some(c => c.toLowerCase() === name.toLowerCase())) clientSel = clientSel.filter(c => c.toLowerCase() !== name.toLowerCase());
       else clientSel.push(name);
       const nowOn = clientSel.includes(name);
+      const cse = G('clientSearch'); if (cse) cse.value = '';   // clear the search text after picking
       cb.checked = nowOn; row.classList.toggle('on', nowOn); renderClientChips(); closeClientDD();
     };
     menu.appendChild(row);
