@@ -3067,6 +3067,7 @@ async function exportTeamTasksPdf(){
     }).join('');
 
     const printWindow = window.open('', '_blank');
+    if (!printWindow){ uiToast('Allow pop-ups for this site to export the PDF, or open the tracker in its own browser tab.'); return; }
     printWindow.document.write(\`
       <!DOCTYPE html>
       <html>
