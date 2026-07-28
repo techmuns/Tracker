@@ -1698,6 +1698,9 @@ function renderPage(data, opts) {
   .fact { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:9px 11px; }
   .fact .fl { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
   .fact .fv { font-size:13.5px; font-weight:600; margin-top:3px; }
+  .fact .fact-in { width:100%; margin-top:4px; font-size:13px; font-weight:600; padding:5px 7px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--txt); }
+  .fact .fact-in:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
+  .prog-hint { font-size:11px; color:var(--muted); margin-top:7px; }
   .dsec { margin-top:16px; }
   .dsec h4 { margin:0 0 7px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
   /* The assignee brief is the headline instruction — give it an accent heading. */
@@ -3111,6 +3114,10 @@ function fileGrid(files){
   }).join('');
 }
 function factCell(label, val){ return \`<div class="fact"><div class="fl">\${label}</div><div class="fv">\${val}</div></div>\`; }
+// Inline-editable facts for the detail hub (change owner/priority/due without the Edit form).
+function factOwnerEdit(d){ return \`<div class="fact"><div class="fl">Owner</div><select class="fact-in" id="d_owner"><option value="">— Unassigned</option>\${ownerOptions().map(o=>\`<option \${o===d.owner?'selected':''}>\${esc(o)}</option>\`).join('')}</select></div>\`; }
+function factPrioEdit(d){ return \`<div class="fact"><div class="fl">Priority</div><select class="fact-in" id="d_prio">\${[0,1,2,3,4,5].map(l=>\`<option value="\${l}" \${(d.priorityLevel||0)===l?'selected':''}>\${l===0?'None':'P'+l}</option>\`).join('')}</select></div>\`; }
+function factDueEdit(d){ const iso=/^\\d{4}-\\d{2}-\\d{2}$/.test(d.dueDate||'')?d.dueDate:''; return \`<div class="fact"><div class="fl">Due date</div><input type="date" class="fact-in" id="d_due" value="\${iso}"></div>\`; }
 // Read-only render of the section/subsection tree with 1 / 1.1 / 1.1.1 numbering.
 function secViewHtml(nodes, prefix){
   if (!Array.isArray(nodes) || !nodes.length) return '';
@@ -3140,27 +3147,27 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}\${editable?'<button class="btn ghost sm" id="dDel" style="color:var(--danger)" title="Delete this dashboard">🗑 Delete</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${d.dashboardUrl?\`<a class="btn ghost sm" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" title="Open the live dashboard">↗ Visit</a>\`:''}\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}\${editable?'<button class="btn ghost sm" id="dDel" style="color:var(--danger)" title="Delete this dashboard">🗑 Delete</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
-      <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''}" style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}"></i>\`).join('')}</div></div>
+      <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''} \${editable?'set':''}" \${editable?\`data-setstage="\${esc(d.id)}" data-stage="\${x.id}"\`:''} style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}\${editable?' — tap to set':''}"></i>\`).join('')}</div>\${editable?'<div class="prog-hint">Tap a step to move the stage</div>':''}</div>
       <div class="dgrid">
-        \${factCell('Owner', d.owner ? esc(d.owner) : '—')}
+        \${editable ? factOwnerEdit(d) : factCell('Owner', d.owner ? esc(d.owner) : '—')}
         \${factCell('Client(s)', esc(d.customer))}
-        \${factCell('Due date', d.dueDate?(/^\\d{4}-\\d{2}-\\d{2}$/.test(d.dueDate)?esc(fmtDue(d.dueDate)):esc(d.dueDate)):'—')}
-        \${factCell('Priority', d.priorityLevel?('P'+d.priorityLevel):'—')}
+        \${editable ? factDueEdit(d) : factCell('Due date', d.dueDate?(/^\\d{4}-\\d{2}-\\d{2}$/.test(d.dueDate)?esc(fmtDue(d.dueDate)):esc(d.dueDate)):'—')}
+        \${editable ? factPrioEdit(d) : factCell('Priority', d.priorityLevel?('P'+d.priorityLevel):'—')}
         \${factCell('Live on Munshot', d.isLive?'Yes':'No')}
         \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
       </div>
       \${(d.brief||(d.briefFiles&&d.briefFiles.length)||(d.briefLinks&&d.briefLinks.length))?\`<div class="dsec brief-sec"><h4>📋 Brief — what to do</h4>\${d.brief?\`<div class="dnote big">\${esc(d.brief)}</div>\`:''}\${d.briefFiles&&d.briefFiles.length?\`<div class="thumbs">\${fileGrid(d.briefFiles)}</div>\`:''}\${d.briefLinks&&d.briefLinks.length?\`<div class="dlinks">\${d.briefLinks.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">🔗 \${esc(l.label||'link')}</a>\`).join('')}</div>\`:''}</div>\`:''}
       <div class="dsec dnotes-sec"><div class="dnotes-head"><h4>📝 Working notes</h4>\${editable?'<span class="dnotes-hint">jot what to do here · delete when done</span>':''}</div>\${editable?\`<div class="dnote-add"><input id="dnoteInput" placeholder="Add a note — e.g. redo the P&amp;L chart colours…" autocomplete="off"><button class="btn sm" id="dnoteAdd">Add</button></div>\`:''}<div class="dnotes">\${(d.notes&&d.notes.length)?d.notes.slice().reverse().map(nt=>\`<div class="dnote-item"><span class="dnote-tx">\${esc(nt.text)}</span>\${editable?\`<button class="dnote-del" data-notedel="\${nt.ts}" title="Delete note">×</button>\`:''}</div>\`).join(''):'<div class="dnote muted">No notes yet — add what you want to do on this dashboard.</div>'}</div></div>
-      \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
-      \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
-      \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
+      <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
       \${links.length?\`<div class="dsec"><h4>YouTube Links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
       \${(d.sections&&d.sections.length)?\`<div class="dsec"><h4>Sections\${d.publishedAt?' · <span style="color:var(--good)">published '+esc(String(d.publishedAt).slice(0,10))+'</span>':''}</h4>\${secViewHtml(d.sections,'')}</div>\`:''}
       \${(d.updates&&d.updates.length)?\`<div class="dsec"><h4>Work updates (\${d.updates.length})</h4>\${d.updates.slice().reverse().map(e=>{const st=SMAP[e.state];return \`<div class="fbv"><div class="fbv-top"><b>\${esc(e.date||'')}</b>\${st?\`<span class="fbcat" style="color:\${st.color};background:color-mix(in srgb, \${st.color} 14%, transparent)">\${esc(st.label)}</span>\`:''}</div>\${e.note?\`<div class="dnote">\${esc(e.note)}</div>\`:''}\${e.files&&e.files.length?\`<div class="thumbs">\${fileGrid(e.files)}</div>\`:''}</div>\`;}).join('')}</div>\`:''}
-      <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
+      \${(d.requirements||(d.requirementFiles&&d.requirementFiles.length))?\`<div class="dsec"><h4>Original client requirement</h4>\${d.requirements?\`<div class="dnote">\${esc(d.requirements)}</div>\`:''}<div class="thumbs">\${fileGrid(d.requirementFiles)}</div></div>\`:''}
+      \${d.manualStatus?\`<div class="dsec"><h4>Manual status</h4><div class="dnote big">\${esc(d.manualStatus)}</div></div>\`:''}
+      \${d.status&&d.status!=='-'?\`<div class="dsec"><h4>Current status note</h4><div class="dnote">\${esc(d.status)}</div></div>\`:''}
       \${d.improvement&&d.improvement!=='-'?\`<div class="dsec"><h4>Improvements</h4><div class="dnote">\${esc(d.improvement)}</div></div>\`:''}
       \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
     </div>\`;
@@ -3202,6 +3209,34 @@ function openDetail(id){
     if (res.ok){ d.notes = (d.notes||[]).filter(n => String(n.ts) !== String(ts)); openDetail(id); }
     else alert('Could not delete the note.');
   });
+  // Inline quick-actions — change the stage / owner / priority / due date in place.
+  const reflect = () => { if (typeof render === 'function') render(); openDetail(id); };
+  detailModal.querySelectorAll('[data-setstage]').forEach(b => b.onclick = async () => {
+    const stage = b.dataset.stage; if (d.state === stage) return;
+    const res = await api('POST', '/api/stage', { id, stage });
+    if (res.ok){ d.state = stage; d.progress = STATES.findIndex(x => x.id === stage) / (STATES.length - 1); DATA.counts = recount(); reflect(); }
+    else alert('Could not change the stage.');
+  });
+  if (editable){
+    const ow = document.getElementById('d_owner');
+    if (ow) ow.onchange = async () => {
+      const v = ow.value;
+      const res = await api('PUT', '/api/manual', { id, name: d.name, owner: v });
+      await api('POST', '/api/assign', { id, owner: '' }); // clear any auto-assign overlay so this sticks
+      if (res.ok){ d.owner = v; reflect(); } else alert('Could not reassign.');
+    };
+    const pr = document.getElementById('d_prio');
+    if (pr) pr.onchange = async () => {
+      const level = parseInt(pr.value, 10) || 0;
+      const res = await api('POST', '/api/priority', { id, level });
+      if (res.ok){ d.priorityLevel = level; reflect(); } else alert('Could not set priority.');
+    };
+    const du = document.getElementById('d_due');
+    if (du) du.onchange = async () => {
+      const res = await api('PUT', '/api/manual', { id, name: d.name, dueDate: du.value });
+      if (res.ok){ d.dueDate = du.value; reflect(); } else alert('Could not set the due date.');
+    };
+  }
 }
 
 // ── Daily status update modal ──────────────────────────────────────────────
