@@ -1701,6 +1701,19 @@ function renderPage(data, opts) {
   .fact .fact-in { width:100%; margin-top:4px; font-size:13px; font-weight:600; padding:5px 7px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--txt); }
   .fact .fact-in:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
   .prog-hint { font-size:11px; color:var(--muted); margin-top:7px; }
+  /* In-app dialogs + toasts (iframe-safe replacements for confirm/alert/prompt) */
+  .ui-dlg-bg { position:fixed; inset:0; background:rgba(15,18,32,.55); backdrop-filter:blur(3px); display:grid; place-items:center; z-index:9998; opacity:0; transition:opacity .12s; padding:20px; }
+  .ui-dlg-bg.open { opacity:1; }
+  .ui-dlg { background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:0 24px 64px rgba(0,0,0,.4); padding:20px 21px; max-width:420px; width:100%; }
+  .ui-dlg-msg { font-size:14px; color:var(--txt); line-height:1.55; white-space:pre-line; }
+  .ui-dlg-in { width:100%; margin-top:13px; font-size:13.5px; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--txt); }
+  .ui-dlg-in:focus { outline:2px solid var(--accent-weak); border-color:var(--accent); }
+  .ui-dlg-btns { display:flex; justify-content:flex-end; gap:9px; margin-top:17px; }
+  .ui-dlg .btn.danger { background:var(--danger); border-color:var(--danger); color:#fff; }
+  .toast-host { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); display:flex; flex-direction:column; gap:8px; z-index:10000; pointer-events:none; align-items:center; }
+  .toast { background:var(--txt); color:var(--surface); font-size:13px; font-weight:550; padding:10px 16px; border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.3); opacity:0; transform:translateY(10px); transition:opacity .28s, transform .28s; max-width:min(90vw,460px); white-space:pre-line; text-align:center; }
+  .toast.in { opacity:.98; transform:translateY(0); }
+  .toast.err { background:var(--danger); color:#fff; }
   .dsec { margin-top:16px; }
   .dsec h4 { margin:0 0 7px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
   /* The assignee brief is the headline instruction — give it an accent heading. */
@@ -2019,7 +2032,7 @@ function publishBtnHtml(d){
 async function publishDash(id, btn){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   const again = !!d.publishedAt;
-  if (!confirm('Publish "'+d.name+'" to the admin page now?'+(again?'\\n\\nAlready published — this pushes the latest version again.':''))) return;
+  if (!(await uiConfirm('Publish "'+d.name+'" to the admin page now?'+(again?'\\n\\nAlready published — this pushes the latest version again.':''), {okText:'Publish'}))) return;
   const old = btn ? btn.innerHTML : '';
   if (btn){ btn.disabled = true; btn.textContent = 'Publishing…'; }
   const res = await api('POST', '/api/publish', { id });
@@ -2029,7 +2042,7 @@ async function publishDash(id, btn){
     render();
     const dbg = G('detailBg'); if (dbg && dbg.classList.contains('open')) openDetail(id);
   } else {
-    alert('Publish failed: ' + (j.error || j.response || ('HTTP '+res.status)));
+    uiToast('Publish failed: ' + (j.error || j.response || ('HTTP '+res.status)));
     if (btn){ btn.disabled = false; btn.innerHTML = old; }
   }
 }
@@ -2187,25 +2200,75 @@ function render(){
   bindCards();
 }
 
+// ── In-app dialogs (iframe-safe) ────────────────────────────────────────────
+// Native confirm()/alert()/prompt() are blocked inside sandboxed iframes, so
+// when the tracker is embedded on the Munshot site those popups never appear —
+// which is why Delete looked "broken". These render in the app's own DOM.
+function uiToast(msg, kind){
+  let host = document.getElementById('toastHost');
+  if (!host){ host = document.createElement('div'); host.id='toastHost'; host.className='toast-host'; document.body.appendChild(host); }
+  const el = document.createElement('div'); el.className = 'toast' + (kind==='err'?' err':''); el.textContent = String(msg);
+  host.appendChild(el);
+  requestAnimationFrame(()=>el.classList.add('in'));
+  const ms = Math.min(9000, 3500 + String(msg).length * 45);
+  setTimeout(()=>{ el.classList.remove('in'); setTimeout(()=>el.remove(), 320); }, ms);
+}
+function uiConfirm(message, opts){
+  opts = opts || {};
+  return new Promise((resolve)=>{
+    const bg = document.createElement('div'); bg.className='ui-dlg-bg';
+    bg.innerHTML = \`<div class="ui-dlg" role="dialog" aria-modal="true"><div class="ui-dlg-msg"></div><div class="ui-dlg-btns"><button class="btn ghost" data-no></button><button class="btn \${opts.danger?'danger':''}" data-yes></button></div></div>\`;
+    bg.querySelector('.ui-dlg-msg').textContent = String(message);
+    bg.querySelector('[data-no]').textContent = opts.cancelText || 'Cancel';
+    bg.querySelector('[data-yes]').textContent = opts.okText || 'OK';
+    const done = (v)=>{ document.removeEventListener('keydown', onKey); bg.remove(); resolve(v); };
+    const onKey = (e)=>{ if(e.key==='Escape') done(false); else if(e.key==='Enter') done(true); };
+    bg.querySelector('[data-no]').onclick = ()=>done(false);
+    bg.querySelector('[data-yes]').onclick = ()=>done(true);
+    bg.onclick = (e)=>{ if(e.target===bg) done(false); };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(bg);
+    requestAnimationFrame(()=>{ bg.classList.add('open'); const y=bg.querySelector('[data-yes]'); if(y) y.focus(); });
+  });
+}
+function uiPrompt(message, defVal, opts){
+  opts = opts || {};
+  return new Promise((resolve)=>{
+    const bg = document.createElement('div'); bg.className='ui-dlg-bg';
+    bg.innerHTML = \`<div class="ui-dlg" role="dialog" aria-modal="true"><div class="ui-dlg-msg"></div><input class="ui-dlg-in" type="text"><div class="ui-dlg-btns"><button class="btn ghost" data-no>Cancel</button><button class="btn" data-yes></button></div></div>\`;
+    bg.querySelector('.ui-dlg-msg').textContent = String(message);
+    bg.querySelector('[data-yes]').textContent = opts.okText || 'OK';
+    const inp = bg.querySelector('.ui-dlg-in'); inp.value = defVal==null?'':String(defVal);
+    const done = (v)=>{ document.removeEventListener('keydown', onKey); bg.remove(); resolve(v); };
+    const onKey = (e)=>{ if(e.key==='Escape') done(null); };
+    bg.querySelector('[data-no]').onclick = ()=>done(null);
+    bg.querySelector('[data-yes]').onclick = ()=>done(inp.value);
+    inp.onkeydown = (e)=>{ if(e.key==='Enter'){ e.preventDefault(); done(inp.value); } };
+    bg.onclick = (e)=>{ if(e.target===bg) done(null); };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(bg);
+    requestAnimationFrame(()=>{ bg.classList.add('open'); inp.focus(); inp.select(); });
+  });
+}
 // ── Manual entry: add + delete ────────────────────────────────────────────
-function editToken(){
+async function editToken(){
   if (!CFG.editProtected) return '';
   let t = localStorage.getItem('editToken');
-  if (!t){ t = prompt('Enter edit password:') || ''; if (t) localStorage.setItem('editToken', t); }
+  if (!t){ t = (await uiPrompt('Enter edit password:')) || ''; if (t) localStorage.setItem('editToken', t); }
   return t;
 }
 async function api(method, path, body){
   const headers = { 'content-type':'application/json' };
-  if (CFG.editProtected) headers['x-edit-token'] = editToken();
+  if (CFG.editProtected) headers['x-edit-token'] = await editToken();
   const res = await fetch(path, { method, headers, body: body?JSON.stringify(body):undefined });
   if (res.status === 401){ localStorage.removeItem('editToken'); }
   return res;
 }
 function bindCards(){
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this dashboard?')) return;
+    if (!(await uiConfirm('Delete this dashboard?', {danger:true, okText:'Delete'}))) return;
     const res = await api('DELETE', '/api/manual?id='+encodeURIComponent(b.dataset.del));
-    if (res.ok) location.reload(); else alert('Delete failed: '+(await res.json()).error);
+    if (res.ok) location.reload(); else uiToast('Delete failed: '+(await res.json()).error);
   });
   // (edit is handled by the grid click delegation)
   // Click a progress segment → set that stage on the dashboard.
@@ -2215,7 +2278,7 @@ function bindCards(){
     const d = DATA.dashboards.find(x => x.id === id); if (!d || d.state === stage) return;
     const res = await api('POST', '/api/stage', { id, stage });
     if (res.ok){ d.state = stage; d.progress = STATES.findIndex(x=>x.id===stage)/(STATES.length-1); DATA.counts = recount(); render(); }
-    else alert('Could not set stage: '+((await res.json()).error||res.status));
+    else uiToast('Could not set stage: '+((await res.json()).error||res.status));
   });
 }
 const bindDelete = bindCards; // back-compat
@@ -2374,11 +2437,11 @@ function fileToB64(file){ return new Promise((res, rej) => { const r = new FileR
 async function uploadFiles(){
   const files = await pickFiles(); const out = [];
   for (const file of files){
-    if (file.size > 4*1024*1024){ alert(file.name + ' is over 4 MB — skipped.'); continue; }
+    if (file.size > 4*1024*1024){ uiToast(file.name + ' is over 4 MB — skipped.'); continue; }
     const data = await fileToB64(file);
     const res = await api('POST', '/api/file', { name:file.name, type:file.type, data });
     if (res.ok){ const j = await res.json(); out.push({ id:j.id, name:j.name, type:j.type, url:j.url }); }
-    else alert('Upload failed for ' + file.name);
+    else uiToast('Upload failed for ' + file.name);
   }
   return out;
 }
@@ -2591,7 +2654,7 @@ if (CFG.manualEnabled){
     const level = parseInt(G('f_prio').value, 10) || 0;
     if (savedId) await api('POST', '/api/priority', { id: savedId, level });
     msg.className='msg ok'; msg.textContent='Saved.';
-    if (autoOwner) alert('Auto-assigned to ' + autoOwner + ' — they had the lightest workload.');
+    if (autoOwner) uiToast('Auto-assigned to ' + autoOwner + ' — they had the lightest workload.');
     location.reload();
   };
 }
@@ -2659,7 +2722,7 @@ function wireEmployeeProfile(name){
   const btn = document.getElementById('pfSave'); if (!btn) return;
   btn.onclick = async () => {
     const res = await api('POST', '/api/person', { name, role:val('pf_role'), qualification:val('pf_qual'), phone:val('pf_phone'), email:val('pf_email'), calendarUrl:val('pf_cal') });
-    if (res.ok){ DATA.people[name] = (await res.json()).person; btn.textContent = 'Saved ✓'; setTimeout(()=>btn.textContent='Save profile',1500); } else alert('Save failed.');
+    if (res.ok){ DATA.people[name] = (await res.json()).person; btn.textContent = 'Saved ✓'; setTimeout(()=>btn.textContent='Save profile',1500); } else uiToast('Save failed.');
   };
 }
 function ownerTasksHtml(name){
@@ -2746,7 +2809,7 @@ function wireOwnerTasks(name){
         taskInput.value = '';
         renderOwner(name);
       } else {
-        alert('Failed to add task');
+        uiToast('Failed to add task');
       }
     };
 
@@ -2764,21 +2827,21 @@ function wireOwnerTasks(name){
       if (res.ok) {
         renderOwner(name);
       } else {
-        alert('Failed to update task');
+        uiToast('Failed to update task');
       }
     };
   });
 
   drawer.querySelectorAll('.task-del').forEach(btn => {
     btn.onclick = async () => {
-      if (!confirm('Delete this task?')) return;
+      if (!(await uiConfirm('Delete this task?', {danger:true, okText:'Delete'}))) return;
 
       const taskId = btn.dataset.taskId;
       const res = await taskDelete(taskId);
       if (res.ok) {
         renderOwner(name);
       } else {
-        alert('Failed to delete task');
+        uiToast('Failed to delete task');
       }
     };
   });
@@ -2810,7 +2873,7 @@ function renderOwner(name){
   drawer.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
     const d = DATA.dashboards.find(x=>x.id===el.dataset.fbtoggle), f = (d.feedbacks||[]).find(x=>x.id===el.dataset.fbid); if(!f) return;
     const res = await api('POST','/api/feedback',{ id:el.dataset.fbtoggle, fbId:el.dataset.fbid, implemented:!f.implemented });
-    if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else alert('Failed.');
+    if (res.ok){ f.implemented=!f.implemented; renderOwner(name); } else uiToast('Failed.');
   });
   if (ownerSub === 'profile') wireEmployeeProfile(name);
   if (ownerSub === 'todo' || ownerSub === 'tasks') wireOwnerTasks(name);
@@ -2828,7 +2891,7 @@ function wireOwnerNoteDeletes(card){
     e.stopPropagation();
     const ts = b.dataset.ts;
     const res = await api('DELETE', \`/api/notes?id=\${encodeURIComponent(id)}&ts=\${ts}\`);
-    if (!res.ok){ alert('Could not delete the note.'); return; }
+    if (!res.ok){ uiToast('Could not delete the note.'); return; }
     const d = DATA.dashboards.find(x => x.id === id); if (d) d.notes = (d.notes||[]).filter(n => String(n.ts) !== String(ts));
     b.closest('.dnote-item').remove();
     const box = card.querySelector('.dnotes'); if (!box.querySelector('.dnote-item')) box.innerHTML = '<div class="dnote muted">No notes yet — jot what you want to do here.</div>';
@@ -2850,7 +2913,7 @@ function wireOwnerNotes(name){
       const add = async () => {
         const text = inp.value.trim(); if (!text){ inp.focus(); return; }
         const res = await api('POST', '/api/notes', { id, text });
-        if (!res.ok){ const e = await res.json().catch(()=>({})); alert('Could not add: ' + (e.error||res.status)); return; }
+        if (!res.ok){ const e = await res.json().catch(()=>({})); uiToast('Could not add: ' + (e.error||res.status)); return; }
         const j = await res.json().catch(()=>({}));
         const d = DATA.dashboards.find(x => x.id === id); if (d){ if (!Array.isArray(d.notes)) d.notes = []; if (j.entry) d.notes.push(j.entry); }
         const box = card.querySelector('.dnotes'); const muted = box.querySelector('.dnote.muted'); if (muted) muted.remove();
@@ -2919,7 +2982,7 @@ function wireEmployee(name){
   const save = document.getElementById('empJoinSave');
   if (save) save.onclick = async () => {
     const res = await api('POST', '/api/person', { name, joinDate: document.getElementById('empJoin').value });
-    if (res.ok){ DATA.people[name] = (await res.json()).person; renderEmp(name); } else alert('Save failed.');
+    if (res.ok){ DATA.people[name] = (await res.json()).person; renderEmp(name); } else uiToast('Save failed.');
   };
   const cal = document.getElementById('empCal');
   if (!cal) return;
@@ -2935,7 +2998,7 @@ function wireEmployee(name){
     const next = cur === undefined || cur === '' ? 'present' : cur === 'present' ? 'leave' : '';
     const res = await api('POST', '/api/person', { name, date: key, status: next });
     if (res.ok){ if (!DATA.people) DATA.people = {}; DATA.people[name] = (await res.json()).person; renderEmp(name); }
-    else alert('Could not save (need edit access?).');
+    else uiToast('Could not save (need edit access?).');
   });
 }
 
@@ -2972,16 +3035,16 @@ function rosterDelete(type, name, total){
     const warn = total > 0
       ? \`Delete \${what} "\${name}"?\\n\\nOn \${total} dashboard\${total!==1?'s':''}. \${type==='owner'?'Those lose their owner.':'Removed from those dashboards.'}\`
       : \`Delete \${what} "\${name}"?\`;
-    if (!confirm(warn)) return;
+    if (!(await uiConfirm(warn, {danger:true, okText:'Delete'}))) return;
     const res = await api('DELETE', \`/api/roster?type=\${type}&name=\${encodeURIComponent(name)}\`);
-    if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+    if (res.ok) location.reload(); else uiToast('Failed: '+((await res.json()).error||res.status));
   };
 }
 async function exportTeamTasksPdf(){
   try {
     await syncTrackingTasks(); // fold the latest notetaker to-dos into the shared KV store first
     const members = [...new Set([...(DATA.owners||[]), ...TASKS.map(t => t.member)])].filter(Boolean).sort();
-    if (!members.length){ alert('No tasks yet.'); return; }
+    if (!members.length){ uiToast('No tasks yet.'); return; }
 
     const content = members.map(name => {
       const mine = TASKS.filter(t => t.member === name);
@@ -3038,7 +3101,7 @@ async function exportTeamTasksPdf(){
       printWindow.print();
     }, 250);
   } catch (e) {
-    alert('Failed to generate PDF: ' + e.message);
+    uiToast('Failed to generate PDF: ' + e.message);
   }
 }
 function renderTeamTab(){
@@ -3061,7 +3124,7 @@ function renderTeamTab(){
   el.innerHTML = \`<div class="tabhead"><h2>👤 Team</h2><div class="sub">\${DATA.owners.length} members · open anyone for profile, attendance & to-dos</div><button class="btn ghost" id="exportTasksPdf">📄 Export Tasks PDF</button></div>\${add}<div class="profile-grid">\${cards||'<div class="empty">No team members yet.</div>'}</div>\`;
   G('exportTasksPdf').onclick = () => exportTeamTasksPdf();
   if (CFG.manualEnabled){
-    G('memAdd').onclick = async () => { const n = G('memInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'owner',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
+    G('memAdd').onclick = async () => { const n = G('memInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'owner',name:n}); if(r.ok) location.reload(); else uiToast('Failed.'); };
     el.querySelectorAll('[data-rmown]').forEach(b => b.onclick = rosterDelete('owner', b.dataset.rmown, +b.dataset.total));
   }
   el.querySelectorAll('[data-member]').forEach(c => c.onclick = (e) => { if (!e.target.closest('.rm')) openOwner(c.dataset.member); });
@@ -3085,7 +3148,7 @@ function renderClientsTab(){
   </div>\` : '';
   el.innerHTML = \`<div class="tabhead"><h2>🏢 Clients</h2><div class="sub">\${DATA.customers.length} clients · open any for details, team & dashboards</div></div>\${digest}\${add}<div class="profile-grid">\${cards||'<div class="empty">No clients yet.</div>'}</div>\`;
   if (CFG.manualEnabled){
-    G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else alert('Failed.'); };
+    G('cliAdd').onclick = async () => { const n = G('cliInput').value.trim(); if(!n) return; const r = await api('POST','/api/roster',{type:'customer',name:n}); if(r.ok) location.reload(); else uiToast('Failed.'); };
     el.querySelectorAll('[data-rmcli]').forEach(b => b.onclick = rosterDelete('customer', b.dataset.rmcli, +b.dataset.total));
     const dn = document.getElementById('digestNow'); if (dn) dn.onclick = () => sendDigestNow(dn);
     const dl = document.getElementById('dailyNow'); if (dl) dl.onclick = () => sendDailyNow(dl);
@@ -3176,9 +3239,9 @@ function openDetail(id){
   G('dX').onclick = closeDetail;
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
   { const dd = document.getElementById('dDel'); if (dd) dd.onclick = async () => {
-    if (!confirm('Delete "' + (d.name || 'this dashboard') + '"?\\nThis removes it for everyone and can\\'t be undone.')) return;
+    if (!(await uiConfirm('Delete "' + (d.name || 'this dashboard') + '"?\\nThis removes it for everyone and can\\'t be undone.', {danger:true, okText:'Delete'}))) return;
     const res = await api('DELETE', '/api/manual?id=' + encodeURIComponent(id));
-    if (res.ok){ closeDetail(); location.reload(); } else alert('Delete failed: ' + ((await res.json().catch(()=>({}))).error || res.status));
+    if (res.ok){ closeDetail(); location.reload(); } else uiToast('Delete failed: ' + ((await res.json().catch(()=>({}))).error || res.status));
   }; }
   const up = document.getElementById('dUpd'); if (up) up.onclick = () => { closeDetail(); openUpdate(id, d.name); };
   const pubBtn = detailModal.querySelector('[data-publish]'); if (pubBtn) pubBtn.onclick = () => publishDash(id, pubBtn);
@@ -3189,7 +3252,7 @@ function openDetail(id){
   detailModal.querySelectorAll('[data-fbtoggle]').forEach(el => el.onclick = async () => {
     const f = (d.feedbacks||[]).find(x => x.id === el.dataset.fbid); if (!f) return;
     const res = await api('POST','/api/feedback',{ id, fbId:el.dataset.fbid, implemented:!f.implemented });
-    if (res.ok){ f.implemented = !f.implemented; openDetail(id); } else alert('Failed.');
+    if (res.ok){ f.implemented = !f.implemented; openDetail(id); } else uiToast('Failed.');
   });
   // Working notes: add (input + Enter/button) and delete each.
   const dnAdd = document.getElementById('dnoteAdd');
@@ -3199,7 +3262,7 @@ function openDetail(id){
       if (!text){ if (inp) inp.focus(); return; }
       const res = await api('POST', '/api/notes', { id, text });
       if (res.ok){ const j = await res.json().catch(()=>({})); if (!Array.isArray(d.notes)) d.notes = []; if (j.entry) d.notes.push(j.entry); openDetail(id); const ni = document.getElementById('dnoteInput'); if (ni) ni.focus(); }
-      else { const e = await res.json().catch(()=>({})); alert('Could not add the note: ' + (e.error || res.status)); }
+      else { const e = await res.json().catch(()=>({})); uiToast('Could not add the note: ' + (e.error || res.status)); }
     };
     dnAdd.onclick = addNote;
     const inp = document.getElementById('dnoteInput'); if (inp) inp.onkeydown = (e) => { if (e.key === 'Enter'){ e.preventDefault(); addNote(); } };
@@ -3208,7 +3271,7 @@ function openDetail(id){
     const ts = b.dataset.notedel;
     const res = await api('DELETE', \`/api/notes?id=\${encodeURIComponent(id)}&ts=\${ts}\`);
     if (res.ok){ d.notes = (d.notes||[]).filter(n => String(n.ts) !== String(ts)); openDetail(id); }
-    else alert('Could not delete the note.');
+    else uiToast('Could not delete the note.');
   });
   // Inline quick-actions — change the stage / owner / priority / due date in place.
   const reflect = () => { if (typeof render === 'function') render(); openDetail(id); };
@@ -3216,7 +3279,7 @@ function openDetail(id){
     const stage = b.dataset.stage; if (d.state === stage) return;
     const res = await api('POST', '/api/stage', { id, stage });
     if (res.ok){ d.state = stage; d.progress = STATES.findIndex(x => x.id === stage) / (STATES.length - 1); DATA.counts = recount(); reflect(); }
-    else alert('Could not change the stage.');
+    else uiToast('Could not change the stage.');
   });
   if (editable){
     const ow = document.getElementById('d_owner');
@@ -3224,18 +3287,18 @@ function openDetail(id){
       const v = ow.value;
       const res = await api('PUT', '/api/manual', { id, name: d.name, owner: v });
       await api('POST', '/api/assign', { id, owner: '' }); // clear any auto-assign overlay so this sticks
-      if (res.ok){ d.owner = v; reflect(); } else alert('Could not reassign.');
+      if (res.ok){ d.owner = v; reflect(); } else uiToast('Could not reassign.');
     };
     const pr = document.getElementById('d_prio');
     if (pr) pr.onchange = async () => {
       const level = parseInt(pr.value, 10) || 0;
       const res = await api('POST', '/api/priority', { id, level });
-      if (res.ok){ d.priorityLevel = level; reflect(); } else alert('Could not set priority.');
+      if (res.ok){ d.priorityLevel = level; reflect(); } else uiToast('Could not set priority.');
     };
     const du = document.getElementById('d_due');
     if (du) du.onchange = async () => {
       const res = await api('PUT', '/api/manual', { id, name: d.name, dueDate: du.value });
-      if (res.ok){ d.dueDate = du.value; reflect(); } else alert('Could not set the due date.');
+      if (res.ok){ d.dueDate = du.value; reflect(); } else uiToast('Could not set the due date.');
     };
   }
 }
@@ -3281,12 +3344,12 @@ function openUpdate(id, name){
   document.getElementById('u_save').onclick = async () => {
     const state = document.getElementById('u_state').value;
     const note = document.getElementById('u_note').value.trim();
-    if (!note && !updFiles.length){ alert('Write what you did, or attach a screenshot.'); return; }
+    if (!note && !updFiles.length){ uiToast('Write what you did, or attach a screenshot.'); return; }
     const res = await api('POST', '/api/update', { id, state, note, files: updFiles });
-    if (res.ok) location.reload(); else alert('Failed: '+((await res.json()).error||res.status));
+    if (res.ok) location.reload(); else uiToast('Failed: '+((await res.json()).error||res.status));
   };
   updModal.querySelectorAll('.tl-del').forEach(b => b.onclick = async () => {
-    if (!confirm('Remove this work update?')) return;
+    if (!(await uiConfirm('Remove this work update?', {danger:true, okText:'Remove'}))) return;
     const res = await api('DELETE', \`/api/update?id=\${encodeURIComponent(id)}&ts=\${b.dataset.ts}\`);
     if (res.ok) location.reload();
   });
@@ -3324,9 +3387,9 @@ function renderTutorialTab(){
   if (ed){ const a=G('tutAdd'); if(a) a.onclick = () => openTutorial(null); }
   el.querySelectorAll('[data-tut-edit]').forEach(b => b.onclick = () => openTutorial(b.dataset.tutEdit));
   el.querySelectorAll('[data-tut-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this tutorial?')) return;
+    if (!(await uiConfirm('Delete this tutorial?', {danger:true, okText:'Delete'}))) return;
     const r = await api('POST','/api/tutorials',{ action:'delete', id:b.dataset.tutDel });
-    if (r.ok){ TUTORIALS = TUTORIALS.filter(x=>x.id!==b.dataset.tutDel); renderTutorialTab(); } else alert('Could not delete.');
+    if (r.ok){ TUTORIALS = TUTORIALS.filter(x=>x.id!==b.dataset.tutDel); renderTutorialTab(); } else uiToast('Could not delete.');
   });
 }
 let tutFiles = [];
@@ -3542,14 +3605,14 @@ function planAutoAssign(){
   return overrides;
 }
 async function autoAssignAll(btn){
-  if (!assignOwners().length){ alert('Add at least one team member first (Team tab).'); return; }
+  if (!assignOwners().length){ uiToast('Add at least one team member first (Team tab).'); return; }
   const plan = planAutoAssign();
-  if (!Object.keys(plan).length){ alert('No unassigned dashboards. 🎉'); return; }
+  if (!Object.keys(plan).length){ uiToast('No unassigned dashboards. 🎉'); return; }
   if (btn){ btn.disabled=true; btn.textContent='Assigning…'; }
   const r = await api('POST','/api/assign',{ assignments: plan });
-  if (r.ok) location.reload(); else { alert('Assign failed.'); if(btn){ btn.disabled=false; btn.textContent='⚡ Auto-assign all'; } }
+  if (r.ok) location.reload(); else { uiToast('Assign failed.'); if(btn){ btn.disabled=false; btn.textContent='⚡ Auto-assign all'; } }
 }
-async function assignOne(id, owner){ const r = await api('POST','/api/assign',{ id, owner }); if (r.ok) location.reload(); else alert('Assign failed.'); }
+async function assignOne(id, owner){ const r = await api('POST','/api/assign',{ id, owner }); if (r.ok) location.reload(); else uiToast('Assign failed.'); }
 function renderAssignTab(){
   const el = G('tab-assign'), owners = assignOwners(), un = unassignedDashboards();
   const board = owners.length ? owners.map(o => { const { load, active } = ownerLoad(o); const [cls,lab] = loadStatus(load,active); const pct = Math.min(100, load/CAP*100);
@@ -3664,10 +3727,10 @@ function renderStandupTab(){
   el.innerHTML = \`<div class="tabhead"><h2>🎙️ Daily Standup</h2><div class="sub">Every team member's to-do list in one place</div></div>
     \${meetingCard}\${overall}\${board}\${botHelp}\`;
   // wire
-  const me=G('mtgEdit'); if(me) me.onclick = async () => { const v=prompt('Team meeting link (Google Meet / Zoom):', MEETING.link||''); if(v===null) return; const r=await meetingSave(v.trim()); if(r.ok) renderStandupTab(); else alert('Could not save the link.'); };
-  el.querySelectorAll('[data-task]').forEach(cb => cb.onchange = async () => { const t=TASKS.find(x=>x.id===cb.dataset.task); if(!t) return; const want=cb.checked; const r=await taskToggle(t, want); if(!r.ok){ cb.checked=!want; alert('Could not update.'); return; } renderStandupTab(); renderEod(); });
-  el.querySelectorAll('[data-taskdel]').forEach(b => b.onclick = async () => { if(!confirm('Remove this to-do?')) return; const r=await taskDelete(b.dataset.taskdel); if(!r.ok){ alert('Could not remove.'); return; } renderStandupTab(); renderEod(); });
-  el.querySelectorAll('[data-addbtn]').forEach(btn => { const name=btn.dataset.addbtn; const box=btn.closest('.su-madd'); const inp=box?box.querySelector('.su-addin'):null; const doAdd=async () => { const text=(inp?inp.value:'').trim(); if(!text){ if(inp) inp.focus(); return; } const r=await taskAdd({ member:name, text, source:'manual' }); if(r.ok){ renderStandupTab(); renderEod(); } else alert('Could not add the to-do.'); }; btn.onclick=doAdd; if(inp) inp.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); doAdd(); } }; });
+  const me=G('mtgEdit'); if(me) me.onclick = async () => { const v=await uiPrompt('Team meeting link (Google Meet / Zoom):', MEETING.link||'', {okText:'Save'}); if(v===null) return; const r=await meetingSave(v.trim()); if(r.ok) renderStandupTab(); else uiToast('Could not save the link.'); };
+  el.querySelectorAll('[data-task]').forEach(cb => cb.onchange = async () => { const t=TASKS.find(x=>x.id===cb.dataset.task); if(!t) return; const want=cb.checked; const r=await taskToggle(t, want); if(!r.ok){ cb.checked=!want; uiToast('Could not update.'); return; } renderStandupTab(); renderEod(); });
+  el.querySelectorAll('[data-taskdel]').forEach(b => b.onclick = async () => { if(!(await uiConfirm('Remove this to-do?', {danger:true, okText:'Remove'}))) return; const r=await taskDelete(b.dataset.taskdel); if(!r.ok){ uiToast('Could not remove.'); return; } renderStandupTab(); renderEod(); });
+  el.querySelectorAll('[data-addbtn]').forEach(btn => { const name=btn.dataset.addbtn; const box=btn.closest('.su-madd'); const inp=box?box.querySelector('.su-addin'):null; const doAdd=async () => { const text=(inp?inp.value:'').trim(); if(!text){ if(inp) inp.focus(); return; } const r=await taskAdd({ member:name, text, source:'manual' }); if(r.ok){ renderStandupTab(); renderEod(); } else uiToast('Could not add the to-do.'); }; btn.onclick=doAdd; if(inp) inp.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); doAdd(); } }; });
 }
 
 document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
@@ -3691,7 +3754,7 @@ async function setPriority(id, level){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   const res = await api('POST', '/api/priority', { id, level });
   if (res.ok){ d.priorityLevel = level||0; d.priority = d.priorityLevel>0; DATA.priorityCount = DATA.dashboards.filter(x => x.priority).length; render(); }
-  else alert('Could not update priority (need edit access?).');
+  else uiToast('Could not update priority (need edit access?).');
 }
 // Star quick-toggle: off → P1, any level → cleared. Exact rank is set in Edit.
 function togglePriority(id){
@@ -3918,7 +3981,7 @@ function makeReport(d, items){
 async function genBuildUpdate(id, btn){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   const fbs = d.feedbacks || [];
-  if (!fbs.length){ alert('Add at least one feedback/change (with screenshots) first.'); return; }
+  if (!fbs.length){ uiToast('Add at least one feedback/change (with screenshots) first.'); return; }
   if (btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
   try {
     await loadPdfLib();
@@ -3935,7 +3998,7 @@ async function genBuildUpdate(id, btn){
         queued = q.ok; }
     } catch(e){}
     if (btn && queued){ btn.textContent = 'Saved · queued for Wed digest ✓'; setTimeout(()=>{ if(btn) btn.textContent='📑 Build update PDF'; }, 2200); }
-  } catch (e){ alert(e.message || 'Could not build the PDF.'); }
+  } catch (e){ uiToast(e.message || 'Could not build the PDF.'); }
   finally { if (btn){ btn.disabled = false; if (btn.textContent==='Generating…') btn.textContent = '📑 Build update PDF'; } }
 }
 // Manually fire tonight's digest now — used to test the 8pm flow without waiting.
@@ -3944,10 +4007,10 @@ async function sendDigestNow(btn){
   try {
     const r = await api('POST','/api/digest',{ action:'send' });
     const j = await r.json().catch(()=>({}));
-    if (j.skipped==='empty') alert('Nothing queued.\\n\\nGenerate a Build Update PDF first — every PDF auto-queues for the weekly founder email.');
-    else if (j.ok) alert('✅ Sent the PDF digest ('+j.count+' update'+(j.count===1?'':'s')+') to '+j.to+'.');
-    else alert('Digest send failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
-  } catch(e){ alert('Digest error: '+e.message); }
+    if (j.skipped==='empty') uiToast('Nothing queued.\\n\\nGenerate a Build Update PDF first — every PDF auto-queues for the weekly founder email.');
+    else if (j.ok) uiToast('✅ Sent the PDF digest ('+j.count+' update'+(j.count===1?'':'s')+') to '+j.to+'.');
+    else uiToast('Digest send failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
+  } catch(e){ uiToast('Digest error: '+e.message); }
   finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'Send now'; } }
 }
 // Manually fire the daily status email now — to test it without waiting for 9pm.
@@ -3956,10 +4019,10 @@ async function sendDailyNow(btn){
   try {
     const r = await api('POST','/api/digest',{ action:'daily' });
     const j = await r.json().catch(()=>({}));
-    if (j.skipped==='no-feedback') alert('No dashboards have feedback yet — add some client changes (feedbacks) first, then the daily status will have something to report.');
-    else if (j.ok) alert('✅ Sent the daily status to '+j.to+'.\\n\\n+'+(j.doneToday||0)+' done since last · '+(j.pending||0)+' pending.');
-    else alert('Daily status failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
-  } catch(e){ alert('Daily status error: '+e.message); }
+    if (j.skipped==='no-feedback') uiToast('No dashboards have feedback yet — add some client changes (feedbacks) first, then the daily status will have something to report.');
+    else if (j.ok) uiToast('✅ Sent the daily status to '+j.to+'.\\n\\n+'+(j.doneToday||0)+' done since last · '+(j.pending||0)+' pending.');
+    else uiToast('Daily status failed:\\n'+String(j.error||JSON.stringify(j.results||j)).slice(0,300));
+  } catch(e){ uiToast('Daily status error: '+e.message); }
   finally { if (btn){ btn.disabled=false; btn.textContent=btn.dataset.o||'Send now'; } }
 }
 // Plain-text summary of a dashboard's changes (the raw email API sends text only).
@@ -4008,9 +4071,9 @@ function buildUpdateHtml(d, pdfUrl){
 function bytesToB64(bytes){ let bin=''; const ch=0x8000; for (let i=0;i<bytes.length;i+=ch) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+ch)); return btoa(bin); }
 async function emailBuildUpdate(id, btn){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
-  if (!(d.feedbacks||[]).length){ alert('Add at least one feedback/change first.'); return; }
+  if (!(d.feedbacks||[]).length){ uiToast('Add at least one feedback/change first.'); return; }
   const def = 'aashita1619@gmail.com'; // test recipient — change to ceekay@muns.io + team once verified
-  const to = prompt('Email this Build Update to (comma-separated):', def);
+  const to = await uiPrompt('Email this Build Update to (comma-separated):', def, {okText:'Send'});
   if (to === null || !to.trim()) return;
   if (btn){ btn.disabled = true; btn.textContent = 'Building PDF…'; }
   try {
@@ -4028,9 +4091,9 @@ async function emailBuildUpdate(id, btn){
     if (btn) btn.textContent = 'Sending…';
     const res = await api('POST', '/api/email', { to, subject: 'Build Update — ' + d.name, html: buildUpdateHtml(d, pdfUrl), text: buildUpdateText(d) });
     const j = await res.json().catch(() => ({}));
-    if (res.ok && j.ok) alert('✅ Email sent to ' + j.sent + ' recipient(s):\\n' + to + (pdfUrl?'\\n\\nWith a link to the full PDF.':'\\n\\n(PDF link unavailable — sent preview only.)'));
-    else alert('Email failed:\\n' + (j.error || JSON.stringify(j.results || j)).slice(0, 400));
-  } catch (e){ alert('Email error: ' + e.message); }
+    if (res.ok && j.ok) uiToast('✅ Email sent to ' + j.sent + ' recipient(s):\\n' + to + (pdfUrl?'\\n\\nWith a link to the full PDF.':'\\n\\n(PDF link unavailable — sent preview only.)'));
+    else uiToast('Email failed:\\n' + (j.error || JSON.stringify(j.results || j)).slice(0, 400));
+  } catch (e){ uiToast('Email error: ' + e.message); }
   finally { if (btn){ btn.disabled = false; btn.textContent = '📧 Email update'; } }
 }
 const ARGB = { not_started:'FF9CA3AF', ui_ux:'FF8B5CF6', data_integration:'FF3B82F6', final_check:'FF06B6D4', feedback_open:'FFF59E0B', feedback_incorp:'FFF97316', completed:'FF22C55E' };
@@ -4355,7 +4418,7 @@ async function doExport(kind){
       DATA.owners.forEach(o => detailSheet(wb, o, all.filter(d => d.owner === o)));
       await saveWb(wb, 'dashboard-tracker-by-owner.xlsx');
     }
-  } catch (e){ alert(e.message || 'Export failed.'); }
+  } catch (e){ uiToast(e.message || 'Export failed.'); }
 }
 const exportMenu = document.getElementById('exportMenu');
 document.getElementById('exportToggle').onclick = (e) => { e.stopPropagation(); exportMenu.classList.toggle('open'); };
