@@ -598,6 +598,15 @@ export default {
           await writeTasks(env, list);
           return json({ ok: true });
         }
+        // File a to-do under a specific dashboard (or clear it with an empty id).
+        if (action === 'assign') {
+          const t = list.find((x) => x.id === String(body.id));
+          if (!t) return json({ error: 'Task not found.' }, 404);
+          t.dashboardId = String(body.dashboardId || '');
+          t.dashboardName = String(body.dashboardName || '');
+          await writeTasks(env, list);
+          return json({ ok: true, task: t });
+        }
         return json({ error: 'Unknown action.' }, 400);
       }
 
@@ -1393,6 +1402,12 @@ function renderPage(data, opts) {
   .pf-dl-d { font-size:12px; font-weight:700; color:var(--txt2); }
   .pf-dl-c { font-size:12px; font-weight:800; color:#2f7d54; text-align:right; }
   .pf-dl-s { font-size:12.5px; color:var(--txt2); line-height:1.5; }
+  .pf-todochip { font-size:10.5px; font-weight:700; color:#2f7d54; background:color-mix(in srgb,#4f9d6e 14%, transparent); border:1px solid color-mix(in srgb,#4f9d6e 28%, transparent); border-radius:999px; padding:1px 8px; }
+  .pf-todos { padding:4px 0 8px; }
+  .pf-todos-h { font-size:11px; font-weight:700; color:var(--muted); letter-spacing:.02em; margin-bottom:6px; }
+  .pf-todo { display:flex; align-items:baseline; gap:8px; font-size:12.5px; color:var(--txt2); padding:4px 0; line-height:1.45; }
+  .pf-todo-x { flex:none; font-size:11px; }
+  .pf-todo.done span:last-child { text-decoration:line-through; color:var(--muted); }
   /* performance embedded in the Team profile / Client drawer */
   .pf-embed .pf-overall { box-shadow:none; }
   .pf-embed .pf-kpis { grid-template-columns:repeat(3,1fr); }
@@ -1944,7 +1959,13 @@ function renderPage(data, opts) {
   .task-check { width:20px; height:20px; border:2px solid var(--line); border-radius:5px; flex:none; margin-top:2px; cursor:pointer; display:grid; place-items:center; font-size:12px; color:#fff; transition:all .15s; background:none; padding:0; }
   .task-check:hover { border-color:var(--accent); }
   .task-check.done { background:var(--good); border-color:var(--good); }
-  .task-text { flex:1; font-size:13px; line-height:1.5; word-break:break-word; }
+  .task-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  .task-text { font-size:13px; line-height:1.5; word-break:break-word; }
+  .task-assign { display:flex; align-items:center; gap:6px; }
+  .task-assign .ta-ico { font-size:11px; opacity:.7; flex:none; }
+  .task-dash { font:inherit; font-size:12px; color:var(--muted); background:var(--surface2); border:1px dashed var(--line); border-radius:8px; padding:3px 8px; cursor:pointer; max-width:100%; }
+  .task-dash.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
+  .task-dashtag { font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 9px; }
   .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; padding:0; width:20px; height:20px; flex:none; }
   .task-del:hover { color:var(--danger); }
   .empty-tasks { padding:16px; text-align:center; color:var(--muted); font-size:13px; }
@@ -2122,7 +2143,7 @@ ${opts.manualEnabled ? `
 
 <div class="ov-switch" id="ovSwitch">
   <button class="ov-seg on" data-ovview="dash">📋 Dashboards</button>
-  <button class="ov-seg" data-ovview="perf">📊 Team performance</button>
+  <button class="ov-seg" data-ovview="perf">📊 Work done</button>
 </div>
 
 <div class="controls" id="ovControls">
@@ -2933,9 +2954,20 @@ function ownerTasksHtml(name){
   const accomplished = memberTasks.filter(t => t.done);
   const ed = CFG.manualEnabled;
 
+  // This member's dashboards — a to-do can be filed under any of them so the
+  // work counts toward that dashboard. Every one of their dashboards is listed.
+  const myDashes = DATA.dashboards.filter(d => d.owner === name);
+  const dashOpts = (sel) => '<option value="">— File under a dashboard…</option>' +
+    myDashes.map(d => \`<option value="\${esc(d.id)}" \${d.id===sel?'selected':''}>\${esc(d.name)}</option>\`).join('');
+
   const taskRow = (t) => \`<div class="task-row">
     <button class="task-check \${t.done?'done':''}" data-task-id="\${t.id}">\${t.done?'✓':'○'}</button>
-    <div class="task-text \${t.done?'done':''}">\${esc(t.text)}</div>
+    <div class="task-main">
+      <div class="task-text \${t.done?'done':''}">\${esc(t.text)}</div>
+      \${ed && myDashes.length
+        ? \`<div class="task-assign"><span class="ta-ico">📌</span><select class="task-dash \${t.dashboardId?'set':''}" data-task-id="\${esc(t.id)}" title="File this to-do under one of \${esc(name)}'s dashboards">\${dashOpts(t.dashboardId)}</select></div>\`
+        : ((t.dashboardName||t.dashboardId) ? \`<div class="task-assign"><span class="task-dashtag">📌 \${esc(t.dashboardName||dashName(t.dashboardId))}</span></div>\` : '')}
+    </div>
     \${ed?\`<button class="task-del" data-task-id="\${t.id}">×</button>\`:''}
   </div>\`;
 
@@ -3035,6 +3067,18 @@ function wireOwnerTasks(name){
     };
   });
 
+  // File a to-do under one of this member's dashboards.
+  drawer.querySelectorAll('.task-dash').forEach(sel => {
+    sel.onchange = async () => {
+      const task = TASKS.find(t => t.id === sel.dataset.taskId);
+      if (!task) return;
+      const d = DATA.dashboards.find(x => x.id === sel.value);
+      const res = await taskAssign(task, sel.value, d ? d.name : '');
+      if (res.ok){ uiToast(sel.value ? ('Filed under ' + (d ? d.name : 'dashboard')) : 'Removed from dashboard'); renderOwner(name); }
+      else { uiToast('Could not file this to-do.'); sel.value = task.dashboardId || ''; }
+    };
+  });
+
   drawer.querySelectorAll('.task-del').forEach(btn => {
     btn.onclick = async () => {
       if (!(await uiConfirm('Delete this task?', {danger:true, okText:'Delete'}))) return;
@@ -3056,7 +3100,7 @@ function renderOwner(name){
   const hr = ownerSub==='profile';
   const nav = hr
     ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button></nav>\`
-    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='performance'?'on':''}" data-sub="performance">📊 Performance</button><button class="subtab \${(ownerSub==='todo'||ownerSub==='tasks')?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
+    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='performance'?'on':''}" data-sub="performance">📊 Work done</button><button class="subtab \${(ownerSub==='todo'||ownerSub==='tasks')?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Team</button>
@@ -3756,7 +3800,7 @@ function perfBar(pct){ return \`<div class="pf-pct"><span>\${pct}%</span><div cl
 
 // GitHub commit activity, loaded once from /api/commits and cached for the tab.
 let perfCommits = null, perfCommitsLoading = false, perfReadyCb = null;
-function perfOnPerfTab(){ const t=G('ovPerf'); return t && !t.hidden; }
+function perfOnPerfTab(){ const t=G('ovPerf'); return !!t && !t.hidden && t.style.display !== 'none'; }
 function perfLoadCommits(force){
   if (force){ perfCommits = null; }
   if (perfCommits || perfCommitsLoading) return;
@@ -3779,7 +3823,7 @@ function perfPersonSummaryHtml(name){
   const all = DATA.dashboards;
   const list = perfSortByCommits(name==='Unassigned' ? all.filter(d=>!d.owner) : all.filter(d=>d.owner===name));
   const items = list.map(perfDashItem).join('') || '<div class="pf-empty">No dashboards.</div>';
-  return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · performance</h3>\${perfKpisFor(list)}</div>\${perfOffNote()}<div class="pf-pd-list" style="padding:0">\${items}</div></div>\`;
+  return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · work done</h3>\${perfKpisFor(list)}</div>\${perfOffNote()}<div class="pf-pd-list" style="padding:0">\${items}</div></div>\`;
 }
 function perfClientSummaryHtml(name){
   const all = DATA.dashboards.filter(d=>d.customers.includes(name));
@@ -3787,7 +3831,7 @@ function perfClientSummaryHtml(name){
   const groups = owners.map(o => ({ owner:o, list: perfSortByCommits(all.filter(d=>d.owner===o)) }));
   const noOwner = all.filter(d=>!d.owner); if (noOwner.length) groups.push({ owner:'Unassigned', list: perfSortByCommits(noOwner) });
   const groupsHtml = groups.map(g => \`<div class="pf-cgroup"><div class="pf-cg-head">\${g.owner!=='Unassigned'?avatar(g.owner):''}<b>\${esc(g.owner)}</b><span class="pf-cg-meta">\${g.list.length} dashboard\${g.list.length!==1?'s':''}\${(perfCommits&&perfCommits.enabled)?' · '+g.list.reduce((n,d)=>{const e=perfCE(d.id);return n+(e?e.last7:0);},0)+' commits · 7d':''}</span></div><div class="pf-pd-list" style="padding:8px 0 0">\${g.list.map(perfDashItem).join('')}</div></div>\`).join('') || '<div class="pf-empty">No dashboards for this client.</div>';
-  return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · performance</h3>\${perfKpisFor(all)}</div>\${perfOffNote()}<div class="section-t">By teammate</div>\${groupsHtml}</div>\`;
+  return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · work done</h3>\${perfKpisFor(all)}</div>\${perfOffNote()}<div class="section-t">By teammate</div>\${groupsHtml}</div>\`;
 }
 function wirePerfEmbed(root){
   root.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
@@ -3835,13 +3879,23 @@ function perfStateLabel(state){
 }
 // One dashboard inside a person's expanded block: name + state + stage + commits,
 // itself expandable to the day-by-day commit log.
+// Filed to-dos for a dashboard (assigned from a member's To-do list).
+function perfDashTodos(id){ return (typeof TASKS!=='undefined'?TASKS:[]).filter(t => t.dashboardId === id); }
+function perfDashTodosHtml(d){
+  const todos = perfDashTodos(d.id);
+  if (!todos.length) return '';
+  const done = todos.filter(t => t.done).length;
+  return \`<div class="pf-todos"><div class="pf-todos-h">✅ Filed to-dos — \${done}/\${todos.length} done</div>\${todos.map(t=>\`<div class="pf-todo \${t.done?'done':''}"><span class="pf-todo-x">\${t.done?'✅':'⬜'}</span><span>\${esc(t.text)}</span></div>\`).join('')}</div>\`;
+}
 function perfDashItem(d){
   const e = perfCE(d.id);
   const stg = SMAP[d.state] || { label:d.state, color:'#888' };
   const cm = perfCommits && perfCommits.enabled
     ? (e && e.last7 ? \`<span class="pf-ck" title="\${e.today} today · \${e.yesterday} yesterday · \${e.last7} in 7 days">\${e.last7} · 7d</span>\` : '<span class="tmut">0 commits</span>')
     : '';
-  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashDaily(e)}</div></div>\`;
+  const todos = perfDashTodos(d.id);
+  const tdChip = todos.length ? \`<span class="pf-todochip" title="\${todos.filter(t=>t.done).length} of \${todos.length} filed to-dos done">✅ \${todos.filter(t=>t.done).length}/\${todos.length}</span>\` : '';
+  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
 }
 
 function renderPerformanceTab(){
@@ -4024,6 +4078,7 @@ function groupByMember(list){ const g={}; list.forEach(t=>{ (g[t.member]=g[t.mem
 async function taskAdd(o){ const r=await api('POST','/api/tasks',{action:'add',...o}); if(r.ok){ const j=await r.json().catch(()=>({})); if(Array.isArray(j.tasks)) TASKS.push(...j.tasks); } return r; }
 async function taskToggle(t, done){ const r=await api('POST','/api/tasks',{action:'toggle',id:t.id,done}); if(r.ok){ t.done=done; t.doneAt=done?new Date().toISOString():null; } return r; }
 async function taskDelete(id){ const r=await api('POST','/api/tasks',{action:'delete',id}); if(r.ok){ TASKS=TASKS.filter(x=>x.id!==id); } return r; }
+async function taskAssign(t, dashboardId, dashboardName){ const r=await api('POST','/api/tasks',{action:'assign',id:t.id,dashboardId,dashboardName}); if(r.ok){ t.dashboardId=dashboardId; t.dashboardName=dashboardName; } return r; }
 // Pull the Munshot-notetaker to-dos into the shared KV task store, then refresh
 // the in-memory TASKS so the profile To-do lists + the Tasks PDF stay in sync.
 async function syncTrackingTasks(){
