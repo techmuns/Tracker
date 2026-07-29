@@ -1392,7 +1392,11 @@ function renderPage(data, opts) {
   .pf-state.done { color:#2f7d54; background:color-mix(in srgb,#4f9d6e 15%, transparent); }
   .pf-state.part { color:var(--warn-txt); background:var(--warn-bg); }
   .pf-state.not { color:var(--muted); background:var(--line2); }
-  .pf-pd-r { display:flex; align-items:center; gap:10px; flex:0 0 auto; }
+  .pf-pd-r { display:flex; align-items:center; gap:12px; flex:0 0 auto; }
+  .pf-pd-pct { display:flex; flex-direction:column; align-items:flex-end; gap:3px; min-width:50px; }
+  .pf-pd-pct b { font-size:12.5px; font-weight:800; }
+  .pf-pd-pct i { display:block; width:50px; height:5px; border-radius:3px; background:var(--line2); position:relative; overflow:hidden; }
+  .pf-pd-pct i::after { content:''; position:absolute; inset:0 auto 0 0; width:var(--w); background:linear-gradient(90deg,#3a4c78,#4f9d6e); }
   .pf-caret { color:var(--muted); transition:transform .15s; }
   .pf-pd-h.open .pf-caret { transform:rotate(180deg); }
   .pf-pd-body { border-top:1px solid var(--line2); padding:6px 14px 12px; }
@@ -3881,6 +3885,15 @@ function perfStateLabel(state){
 // itself expandable to the day-by-day commit log.
 // Filed to-dos for a dashboard (assigned from a member's To-do list).
 function perfDashTodos(id){ return (typeof TASKS!=='undefined'?TASKS:[]).filter(t => t.dashboardId === id); }
+// A single dashboard's "work done %": how far it is along the 7-stage pipeline
+// (Not started 0% → Completed 100%), so it always matches the state label. The
+// filed-to-do ratio is shown separately (the ✅ chip) rather than overriding
+// this — otherwise one stray open to-do would drag a near-finished dashboard
+// down to 0%.
+function perfDashPct(d){
+  const cur = STATES.findIndex(x=>x.id===d.state);
+  return cur>0 ? Math.round(cur/(STATES.length-1)*100) : 0;
+}
 function perfDashTodosHtml(d){
   const todos = perfDashTodos(d.id);
   if (!todos.length) return '';
@@ -3895,7 +3908,9 @@ function perfDashItem(d){
     : '';
   const todos = perfDashTodos(d.id);
   const tdChip = todos.length ? \`<span class="pf-todochip" title="\${todos.filter(t=>t.done).length} of \${todos.length} filed to-dos done">✅ \${todos.filter(t=>t.done).length}/\${todos.length}</span>\` : '';
-  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
+  const pct = perfDashPct(d);
+  const pctHtml = \`<span class="pf-pd-pct" title="Work done — \${pct}% through the build stages"><b>\${pct}%</b><i style="--w:\${pct}%"></i></span>\`;
+  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${pctHtml}\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
 }
 
 function renderPerformanceTab(){
