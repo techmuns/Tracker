@@ -1393,6 +1393,13 @@ function renderPage(data, opts) {
   .pf-dl-d { font-size:12px; font-weight:700; color:var(--txt2); }
   .pf-dl-c { font-size:12px; font-weight:800; color:#2f7d54; text-align:right; }
   .pf-dl-s { font-size:12.5px; color:var(--txt2); line-height:1.5; }
+  /* performance embedded in the Team profile / Client drawer */
+  .pf-embed .pf-overall { box-shadow:none; }
+  .pf-embed .pf-kpis { grid-template-columns:repeat(3,1fr); }
+  @media (max-width:640px){ .pf-embed .pf-kpis { grid-template-columns:repeat(2,1fr); } }
+  .pf-cgroup { margin-top:14px; }
+  .pf-cg-head { display:flex; align-items:center; gap:9px; padding-bottom:2px; font-size:13.5px; }
+  .pf-cg-meta { font-size:11.5px; color:var(--muted); margin-left:auto; }
   /* Team card deadline badge */
   .dl-badge { font-size:10.5px; font-weight:700; border-radius:999px; padding:2px 8px; white-space:nowrap; }
   .dl-badge.over { color:#fff; background:var(--danger); }
@@ -2984,6 +2991,7 @@ function ownerBodyHtml(name, s){
       + (s.clients.length?\`<div class="section-t">Clients</div><div class="chips">\${s.clients.map(c=>clientTag(c).replace('data-customer','data-jump-customer')).join('')}</div>\`:'')
       + ownerDashNotesHtml(name);
   }
+  if (ownerSub === 'performance') return perfPersonSummaryHtml(name);
   if (ownerSub === 'todo' || ownerSub === 'tasks') return ownerTasksHtml(name);
   if (ownerSub === 'profile') return employeeProfileHtml(name);
   return employeeTerminalHtml(name); // attendance
@@ -3048,7 +3056,7 @@ function renderOwner(name){
   const hr = ownerSub==='profile';
   const nav = hr
     ? \`<nav class="subtabs"><button class="subtab back-sub" data-sub="work">‹ Back to work</button><button class="subtab \${ownerSub==='profile'?'on':''}" data-sub="profile">👤 Profile</button></nav>\`
-    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${(ownerSub==='todo'||ownerSub==='tasks')?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
+    : \`<nav class="subtabs"><button class="subtab \${ownerSub==='work'?'on':''}" data-sub="work">📋 Dashboards (\${s.total})</button><button class="subtab \${ownerSub==='performance'?'on':''}" data-sub="performance">📊 Performance</button><button class="subtab \${(ownerSub==='todo'||ownerSub==='tasks')?'on':''}" data-sub="todo">✅ To-do\${pending?' ('+pending+')':''}</button></nav>\`;
   drawer.innerHTML = \`
     <div class="drawer-head">
       <div><button class="back" id="drawerBack">‹ Team</button>
@@ -3073,6 +3081,7 @@ function renderOwner(name){
   if (ownerSub === 'profile') wireEmployeeProfile(name);
   if (ownerSub === 'todo' || ownerSub === 'tasks') wireOwnerTasks(name);
   if (ownerSub === 'work') wireOwnerNotes(name);
+  if (ownerSub === 'performance'){ perfLoadCommits(); wirePerfEmbed(drawer); if (!perfCommits) perfReadyCb = () => { if (overlay.classList.contains('open') && ownerSub==='performance') renderOwner(name); }; }
 }
 // Tap-to-expand dashboard rows + inline working-notes (add / delete) in-place.
 function updateNoteCount(card){
@@ -3212,7 +3221,7 @@ function openClient(name){
       \${statRow(s)}
       <div class="bar">\${stateBar(s.c,s.total)}</div>
       \${s.people.length?\`<div class="section-t">Team on this client</div><div class="chips">\${s.people.map(o=>\`<span class="av-tag owner-link" data-jump-owner="\${esc(o)}">\${avatar(o)}\${esc(o)}</span>\`).join('')}</div>\`:''}
-      \${sectionsHtml(s, d => esc(d.owner)+(d.status&&d.status!=='-'?' — '+esc(d.status):''))}
+      \${perfClientSummaryHtml(name)}
     </div>\`;
   overlay.classList.add('open');
   document.getElementById('drawerX').onclick = closeDrawer;
@@ -3220,6 +3229,8 @@ function openClient(name){
   drawer.querySelectorAll('[data-jump-owner]').forEach(b => b.onclick = () => openOwner(b.dataset.jumpOwner));
   drawer.querySelectorAll('[data-states]').forEach(b => b.onclick = () => applyFilter({ customer:name, states:b.dataset.states.split(' ') }));
   drawer.querySelectorAll('[data-open]').forEach(b => b.onclick = (e) => { if (e.target.closest('a.dlink')) return; closeDrawer(); openDetail(b.dataset.open); });
+  perfLoadCommits(); wirePerfEmbed(drawer);
+  if (!perfCommits) perfReadyCb = () => { if (overlay.classList.contains('open')) openClient(name); };
 }
 
 // ── Team & Clients tabs ────────────────────────────────────────────────────
@@ -3744,7 +3755,7 @@ function perfParseDate(s){
 function perfBar(pct){ return \`<div class="pf-pct"><span>\${pct}%</span><div class="pf-bar"><i style="width:\${Math.min(100,pct)}%"></i></div></div>\`; }
 
 // GitHub commit activity, loaded once from /api/commits and cached for the tab.
-let perfCommits = null, perfCommitsLoading = false;
+let perfCommits = null, perfCommitsLoading = false, perfReadyCb = null;
 function perfOnPerfTab(){ const t=G('ovPerf'); return t && !t.hidden; }
 function perfLoadCommits(force){
   if (force){ perfCommits = null; }
@@ -3752,7 +3763,34 @@ function perfLoadCommits(force){
   perfCommitsLoading = true;
   fetch('/api/commits?days=14').then(r=>r.json()).then(j=>{ perfCommits = j || {enabled:false}; })
     .catch(()=>{ perfCommits = {enabled:false}; })
-    .finally(()=>{ perfCommitsLoading = false; if (perfOnPerfTab()) renderPerformanceTab(); });
+    .finally(()=>{ perfCommitsLoading = false; if (perfOnPerfTab()) renderPerformanceTab(); if (perfReadyCb){ const cb=perfReadyCb; perfReadyCb=null; cb(); } });
+}
+// Reusable performance blocks — used on the Team member profile and the Client
+// drawer so the same summary is one click away from those tabs too.
+function perfKpisFor(list){
+  const O = perfOf(list);
+  let cToday=0,cLast7=0; list.forEach(d=>{ const e=perfCE(d.id); if(e){ cToday+=e.today; cLast7+=e.last7; } });
+  const ck = (perfCommits && perfCommits.enabled) ? \`<div class="pf-kpi"><div class="n">\${cToday}</div><div class="l">Commits today</div></div><div class="pf-kpi"><div class="n">\${cLast7}</div><div class="l">Commits 7d</div></div>\` : '';
+  return \`<div class="pf-kpis"><div class="pf-kpi"><div class="n">\${O.total}</div><div class="l">Dashboards</div></div><div class="pf-kpi"><div class="n">\${O.done}</div><div class="l">Completed</div></div><div class="pf-kpi"><div class="n">\${O.partial}</div><div class="l">In progress</div></div>\${ck}<div class="pf-kpi pct"><div class="n">\${O.pct}%</div><div class="l">Weighted completion</div></div></div>\`;
+}
+function perfSortByCommits(list){ return list.slice().sort((a,b)=> (perfCE(b.id)?perfCE(b.id).last7:0)-(perfCE(a.id)?perfCE(a.id).last7:0)); }
+function perfOffNote(){ return (perfCommits&&perfCommits.enabled)?'':'<div class="pf-note" style="margin:8px 0 0">Commit activity turns on once D1 + a GitHub token are configured (see wrangler.toml).</div>'; }
+function perfPersonSummaryHtml(name){
+  const all = DATA.dashboards;
+  const list = perfSortByCommits(name==='Unassigned' ? all.filter(d=>!d.owner) : all.filter(d=>d.owner===name));
+  const items = list.map(perfDashItem).join('') || '<div class="pf-empty">No dashboards.</div>';
+  return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · performance</h3>\${perfKpisFor(list)}</div>\${perfOffNote()}<div class="pf-pd-list" style="padding:0">\${items}</div></div>\`;
+}
+function perfClientSummaryHtml(name){
+  const all = DATA.dashboards.filter(d=>d.customers.includes(name));
+  const owners = [...new Set(all.map(d=>d.owner).filter(Boolean))].sort();
+  const groups = owners.map(o => ({ owner:o, list: perfSortByCommits(all.filter(d=>d.owner===o)) }));
+  const noOwner = all.filter(d=>!d.owner); if (noOwner.length) groups.push({ owner:'Unassigned', list: perfSortByCommits(noOwner) });
+  const groupsHtml = groups.map(g => \`<div class="pf-cgroup"><div class="pf-cg-head">\${g.owner!=='Unassigned'?avatar(g.owner):''}<b>\${esc(g.owner)}</b><span class="pf-cg-meta">\${g.list.length} dashboard\${g.list.length!==1?'s':''}\${(perfCommits&&perfCommits.enabled)?' · '+g.list.reduce((n,d)=>{const e=perfCE(d.id);return n+(e?e.last7:0);},0)+' commits · 7d':''}</span></div><div class="pf-pd-list" style="padding:8px 0 0">\${g.list.map(perfDashItem).join('')}</div></div>\`).join('') || '<div class="pf-empty">No dashboards for this client.</div>';
+  return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · performance</h3>\${perfKpisFor(all)}</div>\${perfOffNote()}<div class="section-t">By teammate</div>\${groupsHtml}</div>\`;
+}
+function wirePerfEmbed(root){
+  root.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
 }
 function perfCE(id){ if(!perfCommits||!perfCommits.enabled) return null; return (perfCommits.dashboards||[]).find(d=>d.id===id)||null; }
 // A "commits (7d)" table cell for a set of dashboards. '…' loading, '—' off.
@@ -4068,6 +4106,7 @@ document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => swi
 // Overview sub-view toggle (Dashboards ⇄ Team performance).
 document.querySelectorAll('#ovSwitch .ov-seg').forEach(b => b.onclick = () => setOvView(b.dataset.ovview));
 applyOvView();
+perfLoadCommits(); // warm the commit cache so Team/Client summaries show it instantly
 // Restore the last-open tab after an in-app reload (see switchTab).
 try { const _t = sessionStorage.getItem('trk_tab'); if (_t && _t !== 'overview' && G('tab-'+_t)) switchTab(_t); } catch(e){}
 
