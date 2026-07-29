@@ -1995,9 +1995,13 @@ function renderPage(data, opts) {
   .task-date-btn.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
   .task-date-btn.add { flex:0 0 auto; }
   .task-datetag { font-size:11.5px; font-weight:600; color:var(--accent); }
-  .floatcal { position:fixed; z-index:2200; width:248px; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:0 14px 44px rgba(0,0,0,.30); }
+  .floatcal { position:fixed; z-index:2200; width:264px; max-width:calc(100vw - 16px); box-sizing:border-box; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:0 14px 44px rgba(0,0,0,.30); }
   .floatcal .cal { padding:12px 13px 13px; }
-  .floatcal .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+  /* minmax(0,1fr) lets the 7 columns shrink to equal widths inside the popover
+     — plain 1fr keeps a content-based floor and overflows the right edge. */
+  .floatcal .cal-grid { display:grid; grid-template-columns:repeat(7, minmax(0,1fr)); gap:3px; }
+  .floatcal .cal-dow { display:block; }
+  .floatcal .cal-day { font-size:12.5px; }
   .cal-clearbtn { width:100%; margin-top:9px; font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:6px; cursor:pointer; }
   .cal-clearbtn:hover { color:var(--danger); border-color:var(--danger); }
   .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; padding:0; width:20px; height:20px; flex:none; }
