@@ -1316,6 +1316,11 @@ function renderPage(data, opts) {
   .due-chip.soon { color:var(--warn-txt); background:var(--warn-bg); border-color:var(--warn-line); }
   .due-chip.over { color:#fff; background:var(--danger); border-color:var(--danger); }
   .due-chip.none { color:var(--muted); font-weight:500; }
+  /* Overview sub-view toggle (Dashboards ⇄ Team performance) */
+  .ov-switch { display:inline-flex; gap:3px; background:var(--surface2); border:1px solid var(--line); border-radius:11px; padding:3px; margin:2px 28px 4px; }
+  .ov-seg { font:inherit; font-size:13px; font-weight:650; color:var(--muted); background:transparent; border:0; border-radius:8px; padding:7px 15px; cursor:pointer; transition:background .12s,color .12s; }
+  .ov-seg.on { background:var(--surface); color:var(--accent); box-shadow:var(--shadow); }
+  @media (max-width:860px){ .ov-switch { margin-left:14px; margin-right:14px; } }
   /* Performance (founder) tab */
   .pf-wrap { padding:2px 28px 60px; max-width:1040px; }
   .pf-overall { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px 18px; box-shadow:var(--shadow); margin-bottom:18px; }
@@ -2001,7 +2006,6 @@ function renderPage(data, opts) {
     <div class="side-brand"><div class="logo">◆</div><span>Tracker</span></div>
     <nav class="side-nav" id="tabs">
       <button class="side-item on" data-tab="overview"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span>Overview</span></button>
-      <button class="side-item" data-tab="performance"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><line x1="7" y1="16" x2="7" y2="12"/><line x1="12" y1="16" x2="12" y2="8"/><line x1="17" y1="16" x2="17" y2="5"/></svg><span>Performance</span></button>
       <button class="side-item" data-tab="mywork"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg><span>My Work</span></button>
       <button class="side-item" data-tab="team"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Team</span></button>
       <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
@@ -2109,7 +2113,12 @@ ${opts.manualEnabled ? `
 ` : ''}
 
 
-<div class="controls">
+<div class="ov-switch" id="ovSwitch">
+  <button class="ov-seg on" data-ovview="dash">📋 Dashboards</button>
+  <button class="ov-seg" data-ovview="perf">📊 Team performance</button>
+</div>
+
+<div class="controls" id="ovControls">
   <input type="search" id="q" placeholder="Search name, status, requirements…">
   <select id="customer"><option value="">All customers</option>${data.customers.map((c) => `<option>${escapeHtml(c)}</option>`).join('')}</select>
   <select id="owner"><option value="">All owners</option>${data.owners.map((o) => `<option>${escapeHtml(o)}</option>`).join('')}</select>
@@ -2123,13 +2132,13 @@ ${opts.manualEnabled ? `
   <div class="view-seg" id="viewSeg"><button class="vseg" data-dview="table">▤ Table</button><button class="vseg" data-dview="cards">▦ Cards</button></div>
 </div>
 <div class="grid" id="grid"></div>
+<div id="ovPerf" hidden></div>
 </section>
 
 <section class="tabview" id="tab-team" hidden></section>
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
 <section class="tabview" id="tab-unassigned" hidden></section>
-<section class="tabview" id="tab-performance" hidden></section>
 <section class="tabview" id="tab-mywork" hidden></section>
 <section class="tabview" id="tab-standup" hidden></section>
 <section class="tabview" id="tab-tutorial" hidden></section>
@@ -3663,8 +3672,8 @@ function switchTab(tab){
   // for the tab's lifetime but resets to Overview on a fresh browser session.
   try { sessionStorage.setItem('trk_tab', tab); } catch(e){}
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','performance','mywork','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
-  if (tab === 'performance') renderPerformanceTab();
+  ['overview','mywork','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  if (tab === 'overview') applyOvView();
   if (tab === 'mywork') renderMyWorkTab();
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
@@ -3672,6 +3681,21 @@ function switchTab(tab){
   if (tab === 'unassigned') renderUnassignedTab();
   if (tab === 'standup') renderStandupTab();
   if (tab === 'tutorial') renderTutorialTab();
+}
+
+// Overview has two sub-views: the dashboard list and the founder's team-
+// performance summary. Toggled in-place so it lives on the Overview tab.
+let ovView = 'dash';
+try { ovView = sessionStorage.getItem('ov_view') || 'dash'; } catch(e){}
+function setOvView(v){ ovView = v; try { sessionStorage.setItem('ov_view', v); } catch(e){} applyOvView(); }
+function applyOvView(){
+  const perf = ovView === 'perf';
+  // Use inline display (not [hidden]) — .grid/.controls set their own display,
+  // which would override the hidden attribute's UA rule.
+  ['ovControls','grid','legend'].forEach(id => { const n=G(id); if(n) n.style.display = perf ? 'none' : ''; });
+  const ovp = G('ovPerf'); if (ovp){ ovp.hidden = false; ovp.style.display = perf ? '' : 'none'; }
+  document.querySelectorAll('#ovSwitch .ov-seg').forEach(b => b.classList.toggle('on', b.dataset.ovview === ovView));
+  if (perf) renderPerformanceTab();
 }
 // ── Unassigned tab: every dashboard with no owner, as cards ─────────────────
 function renderUnassignedTab(){
@@ -3721,7 +3745,7 @@ function perfBar(pct){ return \`<div class="pf-pct"><span>\${pct}%</span><div cl
 
 // GitHub commit activity, loaded once from /api/commits and cached for the tab.
 let perfCommits = null, perfCommitsLoading = false;
-function perfOnPerfTab(){ const t=G('tab-performance'); return t && !t.hidden; }
+function perfOnPerfTab(){ const t=G('ovPerf'); return t && !t.hidden; }
 function perfLoadCommits(force){
   if (force){ perfCommits = null; }
   if (perfCommits || perfCommitsLoading) return;
@@ -3783,7 +3807,7 @@ function perfDashItem(d){
 }
 
 function renderPerformanceTab(){
-  const el = G('tab-performance'); if(!el) return;
+  const el = G('ovPerf'); if(!el) return;
   perfLoadCommits();
   const all = DATA.dashboards;
   const O = perfOf(all);
@@ -3812,8 +3836,7 @@ function renderPerformanceTab(){
   const rowsClient = clients.map(r=>\`<tr class="clk" data-perfclient="\${esc(r.name)}"><td class="pf-name">\${esc(r.name)}</td><td><div class="pf-team">\${r.team.length?r.team.map(t=>avatar(t)).join(''):'<span class="tmut">—</span>'}</div></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfCommitSumCell(r.list)}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
   const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Commits 7d</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="8" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
 
-  el.innerHTML = \`<div class="tabhead"><h2>📊 Performance</h2><div class="sub">How the team is tracking — completion by person and by client, plus GitHub commit activity</div></div>
-    <div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
+  el.innerHTML = \`<div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
   // Person row → expand/collapse that person's own dashboards below it.
   el.querySelectorAll('.pf-prow').forEach(tr => tr.onclick = () => { const exp = tr.nextElementSibling; if (exp && exp.classList.contains('pf-pexp')) { exp.hidden = !exp.hidden; tr.classList.toggle('open', !exp.hidden); } });
   // Dashboard header → expand/collapse its day-by-day commit log.
@@ -4042,6 +4065,9 @@ function renderStandupTab(){
 }
 
 document.querySelectorAll('#tabs .side-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+// Overview sub-view toggle (Dashboards ⇄ Team performance).
+document.querySelectorAll('#ovSwitch .ov-seg').forEach(b => b.onclick = () => setOvView(b.dataset.ovview));
+applyOvView();
 // Restore the last-open tab after an in-app reload (see switchTab).
 try { const _t = sessionStorage.getItem('trk_tab'); if (_t && _t !== 'overview' && G('tab-'+_t)) switchTab(_t); } catch(e){}
 
