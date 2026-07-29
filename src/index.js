@@ -1406,6 +1406,17 @@ function renderPage(data, opts) {
   .pf-dl-d { font-size:12px; font-weight:700; color:var(--txt2); }
   .pf-dl-c { font-size:12px; font-weight:800; color:#2f7d54; text-align:right; }
   .pf-dl-s { font-size:12.5px; color:var(--txt2); line-height:1.5; }
+  .pf-bd { padding:6px 0 10px; }
+  .pf-bd-h { font-size:11px; font-weight:700; color:var(--muted); letter-spacing:.02em; margin-bottom:6px; }
+  .pf-bd-steps { display:flex; flex-direction:column; }
+  .pf-bd-step { display:flex; align-items:center; gap:10px; padding:6px 0; font-size:12.5px; color:var(--muted); border-bottom:1px solid var(--line2); }
+  .pf-bd-step:last-child { border-bottom:0; }
+  .pf-bd-step.done { color:var(--txt2); }
+  .pf-bd-step.cur { font-weight:800; }
+  .pf-bd-dot { width:9px; height:9px; border-radius:50%; background:var(--line2); flex:none; box-shadow:0 0 0 3px var(--surface); }
+  .pf-bd-lbl { flex:1; }
+  .pf-bd-add { font-size:11px; font-weight:800; color:var(--muted); min-width:44px; text-align:right; }
+  .pf-bd-add.on { color:#2f7d54; }
   .pf-todochip { font-size:10.5px; font-weight:700; color:#2f7d54; background:color-mix(in srgb,#4f9d6e 14%, transparent); border:1px solid color-mix(in srgb,#4f9d6e 28%, transparent); border-radius:999px; padding:1px 8px; }
   .pf-todos { padding:4px 0 8px; }
   .pf-todos-h { font-size:11px; font-weight:700; color:var(--muted); letter-spacing:.02em; margin-bottom:6px; }
@@ -3894,6 +3905,16 @@ function perfDashPct(d){
   const cur = STATES.findIndex(x=>x.id===d.state);
   return cur>0 ? Math.round(cur/(STATES.length-1)*100) : 0;
 }
+// Breakdown of what makes up a dashboard's % — the build stages it has passed,
+// each worth an equal slice, so the founder can see why it is (say) 83%.
+function perfDashBreakdown(d){
+  const n = STATES.length, cur = STATES.findIndex(x=>x.id===d.state), step = Math.round(100/(n-1));
+  const rows = STATES.map((s,i)=>{
+    const done = i<=cur, contrib = i===0 ? 'start' : (done ? '+'+step+'%' : '—');
+    return \`<div class="pf-bd-step \${done?'done':''} \${i===cur?'cur':''}"><span class="pf-bd-dot" style="\${done?'background:'+s.color:''}"></span><span class="pf-bd-lbl">\${esc(s.label)}</span><span class="pf-bd-add \${done&&i>0?'on':''}">\${contrib}</span></div>\`;
+  }).join('');
+  return \`<div class="pf-bd"><div class="pf-bd-h">Why \${perfDashPct(d)}% — reached stage \${cur+1} of \${n}, each stage ≈ \${step}%</div><div class="pf-bd-steps">\${rows}</div></div>\`;
+}
 function perfDashTodosHtml(d){
   const todos = perfDashTodos(d.id);
   if (!todos.length) return '';
@@ -3910,7 +3931,7 @@ function perfDashItem(d){
   const tdChip = todos.length ? \`<span class="pf-todochip" title="\${todos.filter(t=>t.done).length} of \${todos.length} filed to-dos done">✅ \${todos.filter(t=>t.done).length}/\${todos.length}</span>\` : '';
   const pct = perfDashPct(d);
   const pctHtml = \`<span class="pf-pd-pct" title="Work done — \${pct}% through the build stages"><b>\${pct}%</b><i style="--w:\${pct}%"></i></span>\`;
-  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${pctHtml}\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
+  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${pctHtml}\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashBreakdown(d)}\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
 }
 
 function renderPerformanceTab(){
