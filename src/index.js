@@ -9,7 +9,8 @@
 // All dashboards live in the KV namespace bound as MANUAL — there is no
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
-import { buildDataset, manualToDashboard, normalizeSections, dedupeTasks, STATES } from './classify.js';
+import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
+import { parseCommits, overviewFromRows, dbIngest, dbRecentRows, dbMessagesForDay, dbGetSummary, dbPutSummary, dbSummariesSince, summarizeMessages, fetchRepoCommits } from './commits.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -69,6 +70,54 @@ async function getDataset(env) {
   ds.meeting = meeting && typeof meeting === 'object' ? meeting : {};
   ds.tutorials = Array.isArray(tutorials) ? tutorials : [];
   return ds;
+}
+
+// ── Commit tracking orchestration ────────────────────────────────────────
+// Poll every dashboard's GitHub repo for recent commits, store them (idempotent
+// by SHA), then re-summarize any day whose commit count changed. Safe no-op
+// when D1 isn't bound. Backfills a 14-day window so history isn't empty on day 1.
+async function pollCommits(env) {
+  if (!env.DB) return { polled: 0, ingested: 0 };
+  const ds = await getDataset(env);
+  const repos = new Map(); // repo → dashboardId (one dashboard per repo)
+  for (const d of ds.dashboards) if (d.githubRepo && !repos.has(d.githubRepo)) repos.set(d.githubRepo, d.id);
+  const sinceMs = Date.now() - 14 * 86400000;
+  let polled = 0, ingested = 0; const changed = new Map(); // repo → Set(day)
+  for (const [repo, dashId] of repos) {
+    polled++;
+    const r = await fetchRepoCommits(env, repo, dashId, sinceMs);
+    if (!r.ok || !r.rows.length) continue;
+    const n = await dbIngest(env.DB, r.rows);
+    ingested += n;
+    if (n > 0) { const set = changed.get(repo) || new Set(); r.rows.forEach((x) => set.add(x.day)); changed.set(repo, set); }
+  }
+  for (const [repo, days] of changed) await summarizeRepoDays(env, repo, [...days]);
+  return { polled, ingested, repos: repos.size };
+}
+
+// Re-summarize a repo's day only when its stored count is stale (bounds LLM calls).
+async function summarizeRepoDay(env, repo, day) {
+  const msgs = await dbMessagesForDay(env.DB, repo, day);
+  const existing = await dbGetSummary(env.DB, repo, day);
+  if (existing && existing.count === msgs.length) return;
+  const summary = await summarizeMessages(env, repo, day, msgs);
+  await dbPutSummary(env.DB, repo, day, msgs.length, summary, Date.now());
+}
+async function summarizeRepoDays(env, repo, days) {
+  for (const day of days) await summarizeRepoDay(env, repo, day);
+}
+
+// Verify a GitHub webhook's HMAC-SHA256 signature (constant-time compare).
+async function verifyGithubSig(raw, header, secret) {
+  if (!header || !header.startsWith('sha256=')) return false;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(raw));
+  const hex = 'sha256=' + [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (hex.length !== header.length) return false;
+  let diff = 0;
+  for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ header.charCodeAt(i);
+  return diff === 0;
 }
 
 const json = (obj, status = 200) =>
@@ -274,7 +323,7 @@ async function runDailyStatus(env, trigger) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -881,6 +930,63 @@ export default {
       // ── Read endpoints ──────────────────────────────────────────────────
       const data = await getDataset(env);
 
+      // Fire-and-forget background work (no-op when there's no execution ctx).
+      const bg = (p) => { if (ctx && ctx.waitUntil) ctx.waitUntil(Promise.resolve(p).catch(() => {})); else Promise.resolve(p).catch(() => {}); };
+
+      // ── Commit tracking: day-by-day GitHub activity per dashboard ────────
+      // GET  /api/commits?days=14  → founder overview (counts + AI summaries)
+      // POST /api/commits/poll     → pull the latest commits now (authorized)
+      // POST /api/gh-webhook       → GitHub push webhook (real-time ingest)
+      if (pathname === '/api/commits') {
+        if (!env.DB) return json({ enabled: false, reason: 'Commit tracking is off until a D1 database is bound as DB. See schema.sql / wrangler.toml.' });
+        const days = Math.min(60, Math.max(1, parseInt(url.searchParams.get('days') || '14', 10) || 14));
+        const now = Date.now();
+        // Opportunistic refresh: if a token is configured, poll in the background.
+        if (env.GITHUB_TOKEN) bg(pollCommits(env));
+        const rows = await dbRecentRows(env.DB, days, now);
+        const ov = overviewFromRows(rows, data.dashboards, days, now);
+        const sums = await dbSummariesSince(env.DB, ov.days[0]);
+        const sumMap = new Map(sums.map((s) => [s.repo.toLowerCase() + '|' + s.day, s.summary]));
+        for (const d of ov.dashboards) {
+          d.summaries = {};
+          if (!d.repo) continue;
+          for (const day of ov.days) {
+            if (d.byDay[day] > 0) { const s = sumMap.get(d.repo.toLowerCase() + '|' + day); if (s) d.summaries[day] = s; }
+          }
+        }
+        return json(ov);
+      }
+
+      if (pathname === '/api/commits/poll') {
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        if (!env.DB) return json({ ok: false, reason: 'D1 not configured.' }, 503);
+        const r = await pollCommits(env);
+        return json({ ok: true, ...r });
+      }
+
+      if (pathname === '/api/gh-webhook') {
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!env.DB) return json({ ok: false, reason: 'D1 not configured.' }, 503);
+        const raw = await request.text();
+        if (env.GITHUB_WEBHOOK_SECRET) {
+          const ok = await verifyGithubSig(raw, request.headers.get('X-Hub-Signature-256') || '', env.GITHUB_WEBHOOK_SECRET);
+          if (!ok) return json({ error: 'Bad signature.' }, 401);
+        }
+        const evt = request.headers.get('X-GitHub-Event') || '';
+        if (evt === 'ping') return json({ ok: true, pong: true });
+        if (evt !== 'push') return json({ ok: true, ignored: evt });
+        const body = JSON.parse(raw || '{}');
+        const repo = normalizeRepo(body.repository && body.repository.full_name);
+        if (!repo) return json({ ok: false, reason: 'No repo in payload.' }, 400);
+        const dash = data.dashboards.find((d) => d.githubRepo && d.githubRepo.toLowerCase() === repo.toLowerCase());
+        const rows = parseCommits(body.commits || [], repo, dash ? dash.id : '');
+        const ingested = await dbIngest(env.DB, rows);
+        const daysTouched = [...new Set(rows.map((r) => r.day))];
+        if (ingested > 0) bg(summarizeRepoDays(env, repo, daysTouched));
+        return json({ ok: true, repo, ingested, dashboard: dash ? dash.id : null });
+      }
+
       if (pathname === '/api/data') {
         return new Response(JSON.stringify(data, null, 2), {
           headers: {
@@ -902,12 +1008,14 @@ export default {
     }
   },
   // Crons (UTC; see wrangler.toml):
-  //   "30 15 * * *"  → 9:00pm IST daily   → daily status email
+  //   "30 15 * * *"  → 9:00pm IST daily     → daily status email
   //   "30 15 * * 3"  → 9:00pm IST Wednesday → weekly Build-Update PDF digest
+  //   "*/30 * * * *" → every 30 min         → poll GitHub commits (no-op w/o D1)
   async scheduled(event, env, ctx) {
     const cron = event && event.cron;
     if (cron === '30 15 * * 3') ctx.waitUntil(runDigest(env, 'cron').catch(() => {}));
-    else ctx.waitUntil(runDailyStatus(env, 'cron').catch(() => {}));
+    else if (cron === '30 15 * * *') ctx.waitUntil(runDailyStatus(env, 'cron').catch(() => {}));
+    else ctx.waitUntil(pollCommits(env).catch(() => {}));
   },
 };
 
@@ -1238,8 +1346,48 @@ function renderPage(data, opts) {
   .pf-team .avatar { margin-right:-6px; box-shadow:0 0 0 2px var(--surface); }
   .pf-empty { text-align:center; color:var(--muted); padding:22px 14px; }
   .pf-act { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:15px 18px; box-shadow:var(--shadow); }
-  .pf-act-row { font-size:13.5px; color:var(--txt2); }
+  .pf-act.off { border-style:dashed; }
+  .pf-act h3 { margin:0 0 12px; font-size:15px; font-weight:700; }
+  .pf-act-row { font-size:13.5px; color:var(--txt2); line-height:1.6; }
   .pf-act-k { font-weight:800; font-size:16px; color:var(--accent); }
+  .pf-sub2 { font-size:12px; font-weight:500; color:var(--muted); }
+  .pf-ck { display:inline-block; min-width:22px; font-weight:800; font-size:12.5px; color:#2f7d54; background:color-mix(in srgb,#4f9d6e 15%, transparent); border:1px solid color-mix(in srgb,#4f9d6e 30%, transparent); border-radius:999px; padding:1px 8px; }
+  .pf-kpis4 { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }
+  @media (max-width:640px){ .pf-kpis4 { grid-template-columns:repeat(2,1fr); } }
+  .pf-kpi.up .n { color:#2f7d54; } .pf-kpi.down .n { color:var(--danger); }
+  /* day-by-day mini bar chart */
+  .pf-spark { display:flex; align-items:flex-end; gap:4px; height:64px; padding-top:6px; }
+  .pf-spk { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; gap:4px; }
+  .pf-spk i { display:block; width:100%; max-width:26px; border-radius:4px 4px 0 0; background:linear-gradient(180deg,#4f9d6e,#3a4c78); min-height:2px; }
+  .pf-spk.z i { background:var(--line2); }
+  .pf-spk span { font-size:9.5px; color:var(--muted); }
+  /* per-person expansion: a teammate's own dashboards, each expandable */
+  .pf-exp-caret { display:inline-block; color:var(--muted); font-size:10px; margin-left:4px; transition:transform .15s; }
+  .pf-prow.open .pf-exp-caret { transform:rotate(180deg); }
+  .pf-pexp > td { padding:0 !important; background:var(--surface2); }
+  .pf-pd-list { display:flex; flex-direction:column; gap:8px; padding:12px 14px; }
+  .pf-pd { background:var(--surface); border:1px solid var(--line); border-radius:11px; overflow:hidden; }
+  .pf-pd-h { display:flex; align-items:center; gap:12px; padding:11px 14px; cursor:pointer; }
+  .pf-pd-h:hover { background:var(--accent-weak); }
+  .pf-pd-main { flex:1; min-width:0; }
+  .pf-pd-top { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .pf-pd-name { font-weight:680; font-size:13.5px; }
+  .pf-pd-sub { font-size:12px; margin-top:4px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .pf-stagechip { font-size:11px; font-weight:700; border-radius:999px; padding:1px 9px; }
+  .pf-state { font-size:10.5px; font-weight:800; border-radius:999px; padding:2px 9px; letter-spacing:.02em; }
+  .pf-state.done { color:#2f7d54; background:color-mix(in srgb,#4f9d6e 15%, transparent); }
+  .pf-state.part { color:var(--warn-txt); background:var(--warn-bg); }
+  .pf-state.not { color:var(--muted); background:var(--line2); }
+  .pf-pd-r { display:flex; align-items:center; gap:10px; flex:0 0 auto; }
+  .pf-caret { color:var(--muted); transition:transform .15s; }
+  .pf-pd-h.open .pf-caret { transform:rotate(180deg); }
+  .pf-pd-body { border-top:1px solid var(--line2); padding:6px 14px 12px; }
+  .pf-daily { display:flex; flex-direction:column; }
+  .pf-dl { display:grid; grid-template-columns:96px 40px 1fr; gap:12px; align-items:baseline; padding:8px 0; border-bottom:1px solid var(--line2); }
+  .pf-dl:last-child { border-bottom:0; }
+  .pf-dl-d { font-size:12px; font-weight:700; color:var(--txt2); }
+  .pf-dl-c { font-size:12px; font-weight:800; color:#2f7d54; text-align:right; }
+  .pf-dl-s { font-size:12.5px; color:var(--txt2); line-height:1.5; }
   /* Team card deadline badge */
   .dl-badge { font-size:10.5px; font-weight:700; border-radius:999px; padding:2px 8px; white-space:nowrap; }
   .dl-badge.over { color:#fff; background:var(--danger); }
@@ -3570,40 +3718,106 @@ function perfParseDate(s){
   return null;
 }
 function perfBar(pct){ return \`<div class="pf-pct"><span>\${pct}%</span><div class="pf-bar"><i style="width:\${Math.min(100,pct)}%"></i></div></div>\`; }
+
+// GitHub commit activity, loaded once from /api/commits and cached for the tab.
+let perfCommits = null, perfCommitsLoading = false;
+function perfOnPerfTab(){ const t=G('tab-performance'); return t && !t.hidden; }
+function perfLoadCommits(force){
+  if (force){ perfCommits = null; }
+  if (perfCommits || perfCommitsLoading) return;
+  perfCommitsLoading = true;
+  fetch('/api/commits?days=14').then(r=>r.json()).then(j=>{ perfCommits = j || {enabled:false}; })
+    .catch(()=>{ perfCommits = {enabled:false}; })
+    .finally(()=>{ perfCommitsLoading = false; if (perfOnPerfTab()) renderPerformanceTab(); });
+}
+function perfCE(id){ if(!perfCommits||!perfCommits.enabled) return null; return (perfCommits.dashboards||[]).find(d=>d.id===id)||null; }
+// A "commits (7d)" table cell for a set of dashboards. '…' loading, '—' off.
+function perfCommitSumCell(list){
+  if(!perfCommits) return '<span class="tmut">…</span>';
+  if(!perfCommits.enabled) return '<span class="tmut">—</span>';
+  let today=0,last7=0; list.forEach(d=>{ const e=perfCE(d.id); if(e){ today+=e.today; last7+=e.last7; } });
+  return last7 ? \`<span class="pf-ck" title="\${today} today · \${last7} in 7 days">\${last7}</span>\` : '<span class="tmut">0</span>';
+}
+// Day-by-day mini bar chart across a byDay map.
+function perfSpark(byDay, days){
+  const max = Math.max(1, ...days.map(k=>byDay[k]||0));
+  return \`<div class="pf-spark">\${days.map(k=>{ const v=byDay[k]||0; const h=v?Math.max(12,Math.round(v/max*100)):0; return \`<div class="pf-spk\${v?'':' z'}" title="\${k}: \${v} commit\${v!==1?'s':''}"><i style="height:\${h}%"></i><span>\${k.slice(8)}</span></div>\`; }).join('')}</div>\`;
+}
+// The commit-activity panel (overall). Handles loading / off / live states.
+function perfCommitPanel(){
+  if(!perfCommits) return \`<div class="pf-act"><h3>Commit activity</h3><div class="pf-note">Loading GitHub commits…</div></div>\`;
+  if(!perfCommits.enabled) return \`<div class="pf-act off"><h3>📊 Commit activity — not turned on yet</h3><div class="pf-act-row">Once each dashboard has a <b>GitHub repo</b> set and the D1 database + token are configured, this tracks <b>commits per day per dashboard</b> — "yesterday this much, today this much" — and AI-summarises what happened each day.</div><div class="pf-note">Setup steps live in <code>wrangler.toml</code> and <code>schema.sql</code>.</div></div>\`;
+  const c = perfCommits; const arrow = c.today>c.yesterday?'▲':(c.today<c.yesterday?'▼':'→');
+  return \`<div class="pf-act"><h3>Commit activity <span class="pf-sub2">— GitHub, last 14 days</span></h3>
+    <div class="pf-kpis4">
+      <div class="pf-kpi"><div class="n">\${c.today}</div><div class="l">Commits today</div></div>
+      <div class="pf-kpi"><div class="n">\${c.yesterday}</div><div class="l">Yesterday</div></div>
+      <div class="pf-kpi"><div class="n">\${c.last7}</div><div class="l">Last 7 days</div></div>
+      <div class="pf-kpi \${c.today>=c.yesterday?'up':'down'}"><div class="n">\${arrow} \${Math.abs(c.today-c.yesterday)}</div><div class="l">vs yesterday</div></div>
+    </div>\${perfSpark(c.totalByDay, c.days)}</div>\`;
+}
+// Per-dashboard day-by-day list (date · count · AI summary) for the person view.
+function perfDashDaily(e){
+  if(!perfCommits||!perfCommits.enabled) return \`<div class="pf-note">Commit tracking is off.</div>\`;
+  if(!e){ return \`<div class="pf-note">No GitHub repo linked, or no commits yet.</div>\`; }
+  const days = perfCommits.days.slice().reverse().filter(k=>e.byDay[k]>0);
+  if(!days.length) return \`<div class="pf-note">No commits in the last 14 days.</div>\`;
+  return \`<div class="pf-daily">\${days.map(k=>\`<div class="pf-dl"><div class="pf-dl-d">\${esc(k)}</div><div class="pf-dl-c">\${e.byDay[k]}</div><div class="pf-dl-s">\${e.summaries&&e.summaries[k]?esc(e.summaries[k]):'<span class="tmut">—</span>'}</div></div>\`).join('')}</div>\`;
+}
+
+// A per-dashboard state label the founder reads at a glance.
+function perfStateLabel(state){
+  if (state==='completed') return '<span class="pf-state done">Completed</span>';
+  if (state==='not_started') return '<span class="pf-state not">Not started</span>';
+  return '<span class="pf-state part">Partially complete</span>';
+}
+// One dashboard inside a person's expanded block: name + state + stage + commits,
+// itself expandable to the day-by-day commit log.
+function perfDashItem(d){
+  const e = perfCE(d.id);
+  const stg = SMAP[d.state] || { label:d.state, color:'#888' };
+  const cm = perfCommits && perfCommits.enabled
+    ? (e && e.last7 ? \`<span class="pf-ck" title="\${e.today} today · \${e.yesterday} yesterday · \${e.last7} in 7 days">\${e.last7} · 7d</span>\` : '<span class="tmut">0 commits</span>')
+    : '';
+  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashDaily(e)}</div></div>\`;
+}
+
 function renderPerformanceTab(){
   const el = G('tab-performance'); if(!el) return;
+  perfLoadCommits();
   const all = DATA.dashboards;
   const O = perfOf(all);
   // By person (roster + any owner on a dashboard) + an Unassigned bucket.
   const owners = [...new Set([...(DATA.owners||[]), ...all.map(d=>d.owner).filter(Boolean)])];
   const noOwner = all.filter(d=>!d.owner);
-  let people = owners.map(name => ({ name, kind:'owner', ...perfOf(all.filter(d=>d.owner===name)) })).filter(r=>r.total);
-  if (noOwner.length) people.push({ name:'Unassigned', kind:'none', ...perfOf(noOwner) });
+  let people = owners.map(name => ({ name, kind:'owner', list: all.filter(d=>d.owner===name), ...perfOf(all.filter(d=>d.owner===name)) })).filter(r=>r.total);
+  if (noOwner.length) people.push({ name:'Unassigned', kind:'none', list:noOwner, ...perfOf(noOwner) });
   people.sort((a,b)=> b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
   // By client
-  let clients = (DATA.customers||[]).map(c => { const list = all.filter(d=>d.customers.includes(c)); const team=[...new Set(list.map(d=>d.owner).filter(Boolean))]; return { name:c, team, ...perfOf(list) }; }).filter(r=>r.total);
+  let clients = (DATA.customers||[]).map(c => { const list = all.filter(d=>d.customers.includes(c)); const team=[...new Set(list.map(d=>d.owner).filter(Boolean))]; return { name:c, team, list, ...perfOf(list) }; }).filter(r=>r.total);
   clients.sort((a,b)=> b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
-  // Recent work activity (interim signal until GitHub commits land)
-  const today = new Date(); today.setHours(0,0,0,0);
-  let actToday=0, act7=0;
-  all.forEach(d => (d.updates||[]).forEach(u => { const dt=perfParseDate(u.date); if(!dt) return; const days=Math.round((today-dt)/86400000); if(days===0) actToday++; if(days>=0&&days<7) act7++; }));
 
   const kpi = (n,l,cls)=>\`<div class="pf-kpi \${cls||''}"><div class="n">\${n}</div><div class="l">\${l}</div></div>\`;
   const overall = \`<div class="pf-overall"><h3>Overall progress</h3><div class="pf-kpis">
     \${kpi(O.total,'Total dashboards')}\${kpi(O.done,'Completed')}\${kpi(O.partial,'Partially complete')}\${kpi(O.not,'Not started')}\${kpi(O.pct+'%','Weighted completion','pct')}
-  </div><div class="pf-note">Completed counts as 1, partially complete as 0.5.</div></div>\`;
+  </div><div class="pf-note">Completed counts as 1, partially complete as 0.5. Tap a teammate to open their dashboards below.</div></div>\`;
 
-  const rowsPerson = people.map(r=>\`<tr class="clk" data-perfowner="\${esc(r.name)}"><td class="pf-name">\${r.kind==='owner'?avatar(r.name):''} \${esc(r.name)}</td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
-  const personTable = \`<table class="pf-table"><thead><tr><th>By person</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsPerson||'<tr><td colspan="6" class="pf-empty">No dashboards yet.</td></tr>'}<tr class="total"><td>TOTAL</td><td class="num">\${O.total}</td><td class="num">\${O.done}</td><td class="num">\${O.partial}</td><td class="num">\${O.not}</td><td class="num">\${perfBar(O.pct)}</td></tr></tbody></table>\`;
+  // Each person = a total row + a hidden row listing their own dashboards.
+  const rowsPerson = people.map(r=>{
+    const items = r.list.slice().sort((a,b)=> (perfCE(b.id)?perfCE(b.id).last7:0)-(perfCE(a.id)?perfCE(a.id).last7:0)).map(perfDashItem).join('');
+    return \`<tr class="clk pf-prow" data-perfowner="\${esc(r.name)}"><td class="pf-name">\${r.kind==='owner'?avatar(r.name):''} \${esc(r.name)} <span class="pf-exp-caret">▾</span></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfCommitSumCell(r.list)}</td><td class="num">\${perfBar(r.pct)}</td></tr><tr class="pf-pexp" hidden><td colspan="7"><div class="pf-pd-list">\${items||'<div class="pf-note">No dashboards.</div>'}</div></td></tr>\`;
+  }).join('');
+  const personTable = \`<table class="pf-table"><thead><tr><th>By person</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Commits 7d</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsPerson||'<tr><td colspan="7" class="pf-empty">No dashboards yet.</td></tr>'}<tr class="total"><td>TOTAL</td><td class="num">\${O.total}</td><td class="num">\${O.done}</td><td class="num">\${O.partial}</td><td class="num">\${O.not}</td><td class="num">\${perfCommitSumCell(all)}</td><td class="num">\${perfBar(O.pct)}</td></tr></tbody></table>\`;
 
-  const rowsClient = clients.map(r=>\`<tr class="clk" data-perfclient="\${esc(r.name)}"><td class="pf-name">\${esc(r.name)}</td><td><div class="pf-team">\${r.team.length?r.team.map(t=>avatar(t)).join(''):'<span class="tmut">—</span>'}</div></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
-  const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="7" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
+  const rowsClient = clients.map(r=>\`<tr class="clk" data-perfclient="\${esc(r.name)}"><td class="pf-name">\${esc(r.name)}</td><td><div class="pf-team">\${r.team.length?r.team.map(t=>avatar(t)).join(''):'<span class="tmut">—</span>'}</div></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfCommitSumCell(r.list)}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
+  const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Commits 7d</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="8" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
 
-  const activity = \`<div class="pf-act"><div class="pf-act-row"><span class="pf-act-k">\${actToday}</span> work update\${actToday!==1?'s':''} logged <b>today</b> · <span class="pf-act-k">\${act7}</span> in the <b>last 7 days</b>.</div><div class="pf-note">📊 Day-by-day work volume ("yesterday vs today") will track your GitHub commits per dashboard once the commit pipeline is wired.</div></div>\`;
-
-  el.innerHTML = \`<div class="tabhead"><h2>📊 Performance</h2><div class="sub">How the team is tracking — completed vs partial vs not started, by person and by client</div></div>
-    <div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${activity}</div>\`;
-  el.querySelectorAll('[data-perfowner]').forEach(tr => tr.onclick = () => { const n=tr.dataset.perfowner; if(n && n!=='Unassigned') openOwner(n); else switchTab('unassigned'); });
+  el.innerHTML = \`<div class="tabhead"><h2>📊 Performance</h2><div class="sub">How the team is tracking — completion by person and by client, plus GitHub commit activity</div></div>
+    <div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
+  // Person row → expand/collapse that person's own dashboards below it.
+  el.querySelectorAll('.pf-prow').forEach(tr => tr.onclick = () => { const exp = tr.nextElementSibling; if (exp && exp.classList.contains('pf-pexp')) { exp.hidden = !exp.hidden; tr.classList.toggle('open', !exp.hidden); } });
+  // Dashboard header → expand/collapse its day-by-day commit log.
+  el.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
   el.querySelectorAll('[data-perfclient]').forEach(tr => tr.onclick = () => openClient(tr.dataset.perfclient));
 }
 
