@@ -1990,10 +1990,16 @@ function renderPage(data, opts) {
   .task-dash { font:inherit; font-size:12px; color:var(--muted); background:var(--surface2); border:1px dashed var(--line); border-radius:8px; padding:3px 8px; cursor:pointer; max-width:100%; }
   .task-dash.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
   .task-dashtag { font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 9px; }
-  .task-date-add { flex:0 0 auto; width:150px; font:inherit; font-size:13px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--txt); }
-  .task-date { font:inherit; font-size:12px; color:var(--muted); background:var(--surface2); border:1px dashed var(--line); border-radius:8px; padding:2px 7px; cursor:pointer; }
-  .task-date.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
+  .task-date-btn { font:inherit; font-size:12px; color:var(--muted); background:var(--surface2); border:1px dashed var(--line); border-radius:8px; padding:3px 10px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+  .task-date-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .task-date-btn.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
+  .task-date-btn.add { flex:0 0 auto; }
   .task-datetag { font-size:11.5px; font-weight:600; color:var(--accent); }
+  .floatcal { position:fixed; z-index:2200; width:248px; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:0 14px 44px rgba(0,0,0,.30); }
+  .floatcal .cal { padding:12px 13px 13px; }
+  .floatcal .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+  .cal-clearbtn { width:100%; margin-top:9px; font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:6px; cursor:pointer; }
+  .cal-clearbtn:hover { color:var(--danger); border-color:var(--danger); }
   .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; padding:0; width:20px; height:20px; flex:none; }
   .task-del:hover { color:var(--danger); }
   .empty-tasks { padding:16px; text-align:center; color:var(--muted); font-size:13px; }
@@ -2639,6 +2645,47 @@ function renderCal(){
 function openCal(){ const dd=G('dueDD'); if(!dd) return; const iso=G('f_due').value; const base=iso?parseISO(iso):new Date(); calView={y:base.getFullYear(), m:base.getMonth()}; renderCal(); dd.classList.add('open'); }
 function closeCal(){ const dd=G('dueDD'); if(dd) dd.classList.remove('open'); }
 
+// ── Reusable floating calendar popover (to-do dates, etc.) ──────────────────
+// A single popover reused by every date trigger; opens near the clicked button
+// and calls onPick(iso) — '' means the user cleared the date.
+let fcalView = null, fcalPick = null, fcalSel = '';
+function fcalEl(){
+  let el = G('floatCal');
+  if (!el){
+    el = document.createElement('div'); el.id='floatCal'; el.className='floatcal'; el.hidden=true;
+    document.body.appendChild(el);
+    document.addEventListener('click', (e)=>{ if(!el.hidden && !el.contains(e.target) && !e.target.closest('.task-date-btn')) closeFloatCal(); });
+    window.addEventListener('resize', closeFloatCal);
+  }
+  return el;
+}
+function renderFloatCal(){
+  const el=fcalEl(); if(!fcalView) return;
+  const {y,m}=fcalView;
+  const start=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
+  const t=new Date(), todayIso=isoOf(t.getFullYear(),t.getMonth(),t.getDate());
+  const DOW=['Su','Mo','Tu','We','Th','Fr','Sa'];
+  let g='<div class="cal-grid">'+DOW.map(d=>'<span class="cal-dow">'+d+'</span>').join('');
+  for(let i=0;i<start;i++) g+='<span class="cal-day other"></span>';
+  for(let d=1;d<=days;d++){ const iso=isoOf(y,m,d); const c=['cal-day']; if(iso===todayIso)c.push('today'); if(iso===fcalSel)c.push('sel'); g+='<button type="button" class="'+c.join(' ')+'" data-iso="'+iso+'">'+d+'</button>'; }
+  g+='</div>';
+  el.innerHTML='<div class="cal"><div class="cal-head"><span class="cal-title">'+CAL_MN[m]+' '+y+'</span><span class="cal-nav"><button type="button" data-fcal="prev" aria-label="Previous month">‹</button><button type="button" data-fcal="next" aria-label="Next month">›</button></span></div>'+g+(fcalSel?'<button type="button" class="cal-clearbtn" data-fcal="clear">Clear date</button>':'')+'</div>';
+  el.querySelector('[data-fcal=prev]').onclick=(e)=>{e.stopPropagation(); if(--fcalView.m<0){fcalView.m=11;fcalView.y--;} renderFloatCal();};
+  el.querySelector('[data-fcal=next]').onclick=(e)=>{e.stopPropagation(); if(++fcalView.m>11){fcalView.m=0;fcalView.y++;} renderFloatCal();};
+  const clr=el.querySelector('[data-fcal=clear]'); if(clr) clr.onclick=(e)=>{e.stopPropagation(); const f=fcalPick; closeFloatCal(); if(f) f('');};
+  el.querySelectorAll('[data-iso]').forEach(b=>b.onclick=(e)=>{e.stopPropagation(); const f=fcalPick, iso=b.dataset.iso; closeFloatCal(); if(f) f(iso);});
+}
+function openFloatCal(trigger, curIso, onPick){
+  const el=fcalEl(); fcalPick=onPick; fcalSel=curIso||'';
+  const base=curIso?parseISO(curIso):new Date(); fcalView={y:base.getFullYear(),m:base.getMonth()};
+  el.hidden=false; renderFloatCal();
+  const r=trigger.getBoundingClientRect(); const w=248, h=el.offsetHeight||300;
+  let left=Math.max(8, Math.min(r.left, window.innerWidth-w-8));
+  let top=r.bottom+6; if(top+h>window.innerHeight-8) top=Math.max(8, r.top-h-6);
+  el.style.left=left+'px'; el.style.top=top+'px';
+}
+function closeFloatCal(){ const el=G('floatCal'); if(el) el.hidden=true; fcalPick=null; }
+
 const DEFAULT_LINK_LABELS = ['First client meeting','First feedback meeting','Second feedback meeting','Third feedback meeting'];
 function linkRowHtml(label, url){
   return \`<div class="link-row"><input class="f_llabel" placeholder="label, e.g. First client meeting" value="\${esc(label||'')}"><input class="f_lurl" placeholder="https://… (YouTube etc.)" value="\${esc(url||'')}"><button type="button" class="rm-client" title="Remove">×</button></div>\`;
@@ -2998,7 +3045,7 @@ function ownerTasksHtml(name){
           ? \`<span class="ta-ico">📌</span><select class="task-dash \${t.dashboardId?'set':''}" data-task-id="\${esc(t.id)}" title="File this to-do under one of \${esc(name)}'s dashboards">\${dashOpts(t.dashboardId)}</select>\`
           : ((t.dashboardName||t.dashboardId) ? \`<span class="task-dashtag">📌 \${esc(t.dashboardName||dashName(t.dashboardId))}</span>\` : '')}
         \${ed
-          ? \`<span class="ta-ico">📅</span><input type="date" class="task-date \${dueVal(t)?'set':''}" data-task-id="\${esc(t.id)}" value="\${dueVal(t)}" title="Date for this to-do">\`
+          ? \`<button type="button" class="task-date-btn \${dueVal(t)?'set':''}" data-task-id="\${esc(t.id)}" data-iso="\${dueVal(t)}" title="Pick a date">📅 \${dueVal(t)?esc(fmtDue(t.dueDate)):'Date'}</button>\`
           : (dueVal(t) ? \`<span class="task-datetag">📅 \${esc(fmtDue(t.dueDate))}</span>\` : '')}
       </div>
     </div>
@@ -3012,7 +3059,7 @@ function ownerTasksHtml(name){
     <div class="section-t">📝 To-Do · \${todo.length}</div>
     \${ed?\`<div class="task-add-row">
       <input type="text" id="taskInput" placeholder="Add a new task..." />
-      <input type="date" id="taskDate" class="task-date-add" title="Optional date for this to-do" />
+      <button type="button" class="task-date-btn add" id="taskDateBtn" data-iso="" title="Pick a date">📅 <span id="taskDateLbl">Date</span></button>
       <button class="btn sm" id="taskAddBtn">+ Add</button>
     </div>\`:''}
     <div class="task-list">\${todoList}</div>
@@ -3070,15 +3117,21 @@ function wireOwnerTasks(name){
   const taskInput = document.getElementById('taskInput');
 
   if (addBtn && taskInput) {
-    const dateInput = document.getElementById('taskDate');
+    const dateBtn = document.getElementById('taskDateBtn');
+    const dateLbl = document.getElementById('taskDateLbl');
+    if (dateBtn) dateBtn.onclick = () => openFloatCal(dateBtn, dateBtn.dataset.iso || '', (iso)=>{
+      dateBtn.dataset.iso = iso || '';
+      if (dateLbl) dateLbl.textContent = iso ? fmtDue(iso) : 'Date';
+      dateBtn.classList.toggle('set', !!iso);
+    });
     const addTask = async () => {
       const text = taskInput.value.trim();
       if (!text) return;
 
-      const res = await taskAdd({ member: name, text, dueDate: dateInput ? dateInput.value : '' });
+      const res = await taskAdd({ member: name, text, dueDate: dateBtn ? (dateBtn.dataset.iso || '') : '' });
       if (res.ok) {
         taskInput.value = '';
-        if (dateInput) dateInput.value = '';
+        if (dateBtn){ dateBtn.dataset.iso=''; dateBtn.classList.remove('set'); if(dateLbl) dateLbl.textContent='Date'; }
         renderOwner(name);
       } else {
         uiToast('Failed to add task');
@@ -3089,15 +3142,15 @@ function wireOwnerTasks(name){
     taskInput.onkeypress = (e) => { if (e.key === 'Enter') addTask(); };
   }
 
-  // Set / change a to-do's date.
-  drawer.querySelectorAll('.task-date').forEach(inp => {
-    inp.onchange = async () => {
-      const task = TASKS.find(t => t.id === inp.dataset.taskId);
+  // Set / change a to-do's date via the calendar popover.
+  drawer.querySelectorAll('.task-date-btn[data-task-id]').forEach(btn => {
+    btn.onclick = () => openFloatCal(btn, btn.dataset.iso || '', async (iso)=>{
+      const task = TASKS.find(t => t.id === btn.dataset.taskId);
       if (!task) return;
-      const res = await taskSetDue(task, inp.value);
-      if (res.ok){ inp.classList.toggle('set', !!inp.value); }
-      else { uiToast('Could not save the date.'); inp.value = task.dueDate || ''; }
-    };
+      const res = await taskSetDue(task, iso);
+      if (res.ok){ btn.dataset.iso = iso || ''; btn.innerHTML = '📅 ' + (iso ? esc(fmtDue(iso)) : 'Date'); btn.classList.toggle('set', !!iso); }
+      else uiToast('Could not save the date.');
+    });
   });
 
   drawer.querySelectorAll('.task-check').forEach(check => {
