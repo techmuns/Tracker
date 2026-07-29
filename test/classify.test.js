@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, rowToDashboard, buildDataset, manualToDashboard, rowsToEntries, splitCustomers, isLiveValue, dedupeTasks } from '../src/classify.js';
+import { classify, rowToDashboard, buildDataset, manualToDashboard, rowsToEntries, splitCustomers, isLiveValue, dedupeTasks, normalizeRepo } from '../src/classify.js';
 import { parseCsv } from '../src/csv.js';
 
 test('isLiveValue reads the Live column', () => {
@@ -297,4 +297,21 @@ test('dedupeTasks keeps same text for different members and dashboards', () => {
   ]);
   assert.equal(out.length, 3);
   assert.deepEqual(out.map((t) => t.id), ['1', '2', '3']);
+});
+
+test('normalizeRepo canonicalizes owner/repo from bare, URL, and .git forms', () => {
+  assert.equal(normalizeRepo('munshot/paragon-dashboard'), 'munshot/paragon-dashboard');
+  assert.equal(normalizeRepo('https://github.com/munshot/paragon-dashboard'), 'munshot/paragon-dashboard');
+  assert.equal(normalizeRepo('https://github.com/munshot/paragon-dashboard.git'), 'munshot/paragon-dashboard');
+  assert.equal(normalizeRepo('github.com/munshot/paragon-dashboard/'), 'munshot/paragon-dashboard');
+  assert.equal(normalizeRepo('  https://github.com/Acme_Co/repo.name  '), 'Acme_Co/repo.name');
+  assert.equal(normalizeRepo('https://github.com/munshot/repo/tree/main/src'), 'munshot/repo'); // strips deep path
+  assert.equal(normalizeRepo(''), '');
+  assert.equal(normalizeRepo('not-a-repo'), '');       // no slash → not recognizable
+  assert.equal(normalizeRepo(null), '');
+});
+
+test('manualToDashboard carries a normalized githubRepo', () => {
+  assert.equal(manualToDashboard({ id: 'x', name: 'X', githubRepo: 'https://github.com/muns/dash.git' }).githubRepo, 'muns/dash');
+  assert.equal(manualToDashboard({ id: 'y', name: 'Y' }).githubRepo, ''); // absent → empty
 });

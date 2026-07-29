@@ -312,6 +312,7 @@ export default {
             brief: body.brief || '',
             briefFiles: Array.isArray(body.briefFiles) ? body.briefFiles : [],
             briefLinks: Array.isArray(body.briefLinks) ? body.briefLinks : [],
+            githubRepo: body.githubRepo || '',
           };
           const list = await readManual(env);
           list.push(entry);
@@ -328,7 +329,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks', 'githubRepo'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -1913,6 +1914,7 @@ ${opts.manualEnabled ? `
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
       <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
+      <label class="wide">GitHub repo <span style="color:var(--muted);font-weight:400;font-size:11px">(for commit tracking — owner/repo or the repo URL)</span><input id="f_repo" placeholder="munshot/paragon-dashboard" autocomplete="off"></label>
       <div class="field wide">Brief for the assignee <span style="color:var(--muted);font-weight:400;font-size:11px">(what needs to be done — the teammate sees this)</span>
         <textarea id="f_brief" rows="4" placeholder="Explain the task: the goal, the data to use, what to build, and any gotchas…"></textarea>
         <div class="filebox" id="briefFiles"></div>
@@ -2578,6 +2580,7 @@ function setForm(d){
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
   G('f_url').value = d ? (d.dashboardUrl || '') : '';
+  if (G('f_repo')) G('f_repo').value = d ? (d.githubRepo || '') : '';
   setDue(d ? (d.dueDate || '') : '');
   fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
   renderFbRows();
@@ -2668,6 +2671,7 @@ if (CFG.manualEnabled){
       links,
       meetingUrl: links[0] ? links[0].url : '',
       dashboardUrl: G('f_url').value.trim(),
+      githubRepo: (G('f_repo') ? G('f_repo').value : '').trim(),
       dueDate: G('f_due').value,
       feedbacks: getFeedbacks(),
       sections: getSections(),
@@ -3246,7 +3250,7 @@ function openDetail(id){
         <div class="dh-title">\${d.priorityLevel?\`<span class="pbadge">★ P\${d.priorityLevel}</span>\`:''}\${esc(d.name)}</div>
         <div class="dh-sub">\${ownerTag(d.owner)} \${d.customers.map(c=>clientTag(c)).join('')} \${d.isLive?'<span class="tag live">● Live on Munshot</span>':''}</div>
       </div>
-      <div class="dh-actions">\${d.dashboardUrl?\`<a class="btn ghost sm" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" title="Open the live dashboard">↗ Visit</a>\`:''}\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}\${editable?'<button class="btn ghost sm" id="dDel" style="color:var(--danger)" title="Delete this dashboard">🗑 Delete</button>':''}<button class="x" id="dX">×</button></div>
+      <div class="dh-actions">\${d.dashboardUrl?\`<a class="btn ghost sm" href="\${esc(d.dashboardUrl)}" target="_blank" rel="noopener" title="Open the live dashboard">↗ Visit</a>\`:''}\${d.githubRepo?\`<a class="btn ghost sm" href="https://github.com/\${esc(d.githubRepo)}" target="_blank" rel="noopener" title="Open the GitHub repo">⎇ \${esc(d.githubRepo)}</a>\`:''}\${fbs.length?'<button class="btn ghost sm" id="dPdf" title="Generate the client-ready Build Update PDF from the feedbacks below">📑 Build update PDF</button>':''}\${(fbs.length&&CFG.manualEnabled)?'<button class="btn ghost sm" id="dMail" title="Email the Build Update summary via the Muns API">📧 Email update</button>':''}\${(editable && d.owner)?publishBtnHtml(d):''}\${editable?'<button class="btn sm" id="dEdit">✎ Edit</button>':''}\${CFG.manualEnabled?'<button class="btn ghost sm" id="dUpd">＋ Work update</button>':''}\${editable?'<button class="btn ghost sm" id="dDel" style="color:var(--danger)" title="Delete this dashboard">🗑 Delete</button>':''}<button class="x" id="dX">×</button></div>
     </div>
     <div class="modal-body dbody">
       <div class="dprog"><div class="prog-top"><span class="prog-stage" style="color:\${s.color}">Stage \${cur+1}/\${STATES.length} · \${s.label}</span><span class="prog-pct">\${pct}%</span></div><div class="prog-track">\${STATES.map((x,i)=>\`<i class="seg \${i<=cur?'on':''} \${editable?'set':''}" \${editable?\`data-setstage="\${esc(d.id)}" data-stage="\${x.id}"\`:''} style="\${i<=cur?'background:'+s.color:''}" title="\${i+1}. \${x.label}\${editable?' — tap to set':''}"></i>\`).join('')}</div>\${editable?'<div class="prog-hint">Tap a step to move the stage</div>':''}</div>

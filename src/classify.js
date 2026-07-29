@@ -149,6 +149,18 @@ export function normalizeLinks(links, legacyUrl, legacyLabel = 'First client mee
   return out;
 }
 
+// A dashboard's GitHub repo, normalized to canonical "owner/repo". Accepts a
+// bare "owner/repo", a full URL (https://github.com/owner/repo[.git]), or with
+// a leading "github.com/". Returns '' when it isn't a recognizable owner/repo.
+export function normalizeRepo(raw) {
+  let s = String(raw ?? '').trim();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\//i, '').replace(/^(www\.)?github\.com\//i, '');
+  s = s.replace(/\.git$/i, '').replace(/\/+$/, '').replace(/^\/+/, '');
+  const m = s.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)/);
+  return m ? `${m[1]}/${m[2]}` : '';
+}
+
 // Progress 0..1 along the 7-stage pipeline (stage 1 = 0%, stage 7 = 100%).
 export function progressOf(stateId) {
   const i = STATES.findIndex((s) => s.id === stateId);
@@ -295,6 +307,8 @@ export function manualToDashboard(m) {
     brief: clean(m.brief),
     briefFiles: Array.isArray(m.briefFiles) ? m.briefFiles : [],
     briefLinks: normalizeLinks(m.briefLinks),
+    // GitHub repo backing this dashboard (owner/repo) — source for commit tracking.
+    githubRepo: normalizeRepo(m.githubRepo),
     publishedAt: m.publishedAt || '',
     publishRef: m.publishRef || '',
   };
