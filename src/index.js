@@ -1207,6 +1207,38 @@ function renderPage(data, opts) {
   .due-chip.soon { color:var(--warn-txt); background:var(--warn-bg); border-color:var(--warn-line); }
   .due-chip.over { color:#fff; background:var(--danger); border-color:var(--danger); }
   .due-chip.none { color:var(--muted); font-weight:500; }
+  /* Performance (founder) tab */
+  .pf-wrap { padding:2px 28px 60px; max-width:1040px; }
+  .pf-overall { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px 18px; box-shadow:var(--shadow); margin-bottom:18px; }
+  .pf-overall h3 { margin:0 0 12px; font-size:15px; font-weight:700; }
+  .pf-kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+  @media (max-width:820px){ .pf-kpis { grid-template-columns:repeat(2,1fr); } }
+  .pf-kpi { background:var(--surface2); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .pf-kpi .n { font-size:26px; font-weight:800; line-height:1; }
+  .pf-kpi .l { font-size:11px; color:var(--muted); margin-top:5px; font-weight:600; }
+  .pf-kpi.pct { background:linear-gradient(135deg,#26324f,#3a4c78); border-color:#26324f; }
+  .pf-kpi.pct .n { color:#fff; }
+  .pf-kpi.pct .l { color:#c7d2ec; }
+  .pf-note { font-size:11.5px; color:var(--muted); margin-top:10px; }
+  .pf-table { width:100%; border-collapse:separate; border-spacing:0; background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow); margin-bottom:18px; }
+  .pf-table thead th { background:#26324f; color:#fff; font-size:11.5px; font-weight:650; text-align:left; padding:11px 14px; letter-spacing:.02em; white-space:nowrap; }
+  .pf-table th.num, .pf-table td.num { text-align:right; }
+  .pf-table tbody td { padding:11px 14px; border-top:1px solid var(--line2); font-size:13px; vertical-align:middle; }
+  .pf-table tbody tr.clk { cursor:pointer; }
+  .pf-table tbody tr.clk:hover td { background:var(--accent-weak); }
+  .pf-table tbody tr.total td { border-top:2px solid var(--line); font-weight:800; background:var(--surface2); }
+  .pf-table tbody tr.total td:first-child { font-size:12px; letter-spacing:.04em; color:var(--muted); }
+  .pf-name { display:flex; align-items:center; gap:9px; font-weight:650; }
+  .pf-pct { display:inline-flex; align-items:center; gap:9px; justify-content:flex-end; min-width:132px; }
+  .pf-pct > span { font-weight:800; font-size:12.5px; min-width:42px; text-align:right; }
+  .pf-bar { width:78px; height:7px; border-radius:4px; background:var(--line2); overflow:hidden; }
+  .pf-bar i { display:block; height:100%; background:linear-gradient(90deg,#3a4c78,#4f9d6e); }
+  .pf-team { display:flex; align-items:center; gap:-4px; }
+  .pf-team .avatar { margin-right:-6px; box-shadow:0 0 0 2px var(--surface); }
+  .pf-empty { text-align:center; color:var(--muted); padding:22px 14px; }
+  .pf-act { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:15px 18px; box-shadow:var(--shadow); }
+  .pf-act-row { font-size:13.5px; color:var(--txt2); }
+  .pf-act-k { font-weight:800; font-size:16px; color:var(--accent); }
   /* Team card deadline badge */
   .dl-badge { font-size:10.5px; font-weight:700; border-radius:999px; padding:2px 8px; white-space:nowrap; }
   .dl-badge.over { color:#fff; background:var(--danger); }
@@ -1820,6 +1852,7 @@ function renderPage(data, opts) {
     <div class="side-brand"><div class="logo">◆</div><span>Tracker</span></div>
     <nav class="side-nav" id="tabs">
       <button class="side-item on" data-tab="overview"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span>Overview</span></button>
+      <button class="side-item" data-tab="performance"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><line x1="7" y1="16" x2="7" y2="12"/><line x1="12" y1="16" x2="12" y2="8"/><line x1="17" y1="16" x2="17" y2="5"/></svg><span>Performance</span></button>
       <button class="side-item" data-tab="mywork"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg><span>My Work</span></button>
       <button class="side-item" data-tab="team"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Team</span></button>
       <button class="side-item" data-tab="clients"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M9 6h.01M15 6h.01M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg><span>Clients</span></button>
@@ -1946,6 +1979,7 @@ ${opts.manualEnabled ? `
 <section class="tabview" id="tab-clients" hidden></section>
 <section class="tabview" id="tab-assign" hidden></section>
 <section class="tabview" id="tab-unassigned" hidden></section>
+<section class="tabview" id="tab-performance" hidden></section>
 <section class="tabview" id="tab-mywork" hidden></section>
 <section class="tabview" id="tab-standup" hidden></section>
 <section class="tabview" id="tab-tutorial" hidden></section>
@@ -3477,7 +3511,8 @@ function switchTab(tab){
   // for the tab's lifetime but resets to Overview on a fresh browser session.
   try { sessionStorage.setItem('trk_tab', tab); } catch(e){}
   document.querySelectorAll('#tabs .side-item').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-  ['overview','mywork','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  ['overview','performance','mywork','team','clients','assign','unassigned','standup','tutorial'].forEach(t => { G('tab-'+t).hidden = (t !== tab); });
+  if (tab === 'performance') renderPerformanceTab();
   if (tab === 'mywork') renderMyWorkTab();
   if (tab === 'team') renderTeamTab();
   if (tab === 'clients') renderClientsTab();
@@ -3512,6 +3547,60 @@ function renderUnassignedTab(){
   bindCards();
   const ug = G('unGrid'); if (ug) ug.addEventListener('click', onCardGridClick);
   el.querySelectorAll('#unSeg .vseg').forEach(b => b.onclick = () => { unView = b.dataset.dview; localStorage.setItem('unView', unView); renderUnassignedTab(); });
+}
+
+// ── Performance: founder's how-is-the-team-doing summary ─────────────────────
+// Weighted completion = (completed·1 + partially·0.5) / total. A dashboard is
+// "completed" at the final stage, "not started" at the first, else "partial".
+function perfOf(list){
+  let done=0, partial=0, not=0;
+  list.forEach(d => { if (d.state==='completed') done++; else if (d.state==='not_started') not++; else partial++; });
+  const total = list.length;
+  const pct = total ? Math.round((done + 0.5*partial) / total * 1000) / 10 : 0;
+  return { total, done, partial, not, pct };
+}
+function perfParseDate(s){
+  s = String(s||'').trim();
+  let m = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})/); if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/); if (m) return new Date(+m[3], +m[2]-1, +m[1]); // dd/mm/yyyy
+  return null;
+}
+function perfBar(pct){ return \`<div class="pf-pct"><span>\${pct}%</span><div class="pf-bar"><i style="width:\${Math.min(100,pct)}%"></i></div></div>\`; }
+function renderPerformanceTab(){
+  const el = G('tab-performance'); if(!el) return;
+  const all = DATA.dashboards;
+  const O = perfOf(all);
+  // By person (roster + any owner on a dashboard) + an Unassigned bucket.
+  const owners = [...new Set([...(DATA.owners||[]), ...all.map(d=>d.owner).filter(Boolean)])];
+  const noOwner = all.filter(d=>!d.owner);
+  let people = owners.map(name => ({ name, kind:'owner', ...perfOf(all.filter(d=>d.owner===name)) })).filter(r=>r.total);
+  if (noOwner.length) people.push({ name:'Unassigned', kind:'none', ...perfOf(noOwner) });
+  people.sort((a,b)=> b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
+  // By client
+  let clients = (DATA.customers||[]).map(c => { const list = all.filter(d=>d.customers.includes(c)); const team=[...new Set(list.map(d=>d.owner).filter(Boolean))]; return { name:c, team, ...perfOf(list) }; }).filter(r=>r.total);
+  clients.sort((a,b)=> b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
+  // Recent work activity (interim signal until GitHub commits land)
+  const today = new Date(); today.setHours(0,0,0,0);
+  let actToday=0, act7=0;
+  all.forEach(d => (d.updates||[]).forEach(u => { const dt=perfParseDate(u.date); if(!dt) return; const days=Math.round((today-dt)/86400000); if(days===0) actToday++; if(days>=0&&days<7) act7++; }));
+
+  const kpi = (n,l,cls)=>\`<div class="pf-kpi \${cls||''}"><div class="n">\${n}</div><div class="l">\${l}</div></div>\`;
+  const overall = \`<div class="pf-overall"><h3>Overall progress</h3><div class="pf-kpis">
+    \${kpi(O.total,'Total dashboards')}\${kpi(O.done,'Completed')}\${kpi(O.partial,'Partially complete')}\${kpi(O.not,'Not started')}\${kpi(O.pct+'%','Weighted completion','pct')}
+  </div><div class="pf-note">Completed counts as 1, partially complete as 0.5.</div></div>\`;
+
+  const rowsPerson = people.map(r=>\`<tr class="clk" data-perfowner="\${esc(r.name)}"><td class="pf-name">\${r.kind==='owner'?avatar(r.name):''} \${esc(r.name)}</td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
+  const personTable = \`<table class="pf-table"><thead><tr><th>By person</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsPerson||'<tr><td colspan="6" class="pf-empty">No dashboards yet.</td></tr>'}<tr class="total"><td>TOTAL</td><td class="num">\${O.total}</td><td class="num">\${O.done}</td><td class="num">\${O.partial}</td><td class="num">\${O.not}</td><td class="num">\${perfBar(O.pct)}</td></tr></tbody></table>\`;
+
+  const rowsClient = clients.map(r=>\`<tr class="clk" data-perfclient="\${esc(r.name)}"><td class="pf-name">\${esc(r.name)}</td><td><div class="pf-team">\${r.team.length?r.team.map(t=>avatar(t)).join(''):'<span class="tmut">—</span>'}</div></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
+  const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="7" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
+
+  const activity = \`<div class="pf-act"><div class="pf-act-row"><span class="pf-act-k">\${actToday}</span> work update\${actToday!==1?'s':''} logged <b>today</b> · <span class="pf-act-k">\${act7}</span> in the <b>last 7 days</b>.</div><div class="pf-note">📊 Day-by-day work volume ("yesterday vs today") will track your GitHub commits per dashboard once the commit pipeline is wired.</div></div>\`;
+
+  el.innerHTML = \`<div class="tabhead"><h2>📊 Performance</h2><div class="sub">How the team is tracking — completed vs partial vs not started, by person and by client</div></div>
+    <div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${activity}</div>\`;
+  el.querySelectorAll('[data-perfowner]').forEach(tr => tr.onclick = () => { const n=tr.dataset.perfowner; if(n && n!=='Unassigned') openOwner(n); else switchTab('unassigned'); });
+  el.querySelectorAll('[data-perfclient]').forEach(tr => tr.onclick = () => openClient(tr.dataset.perfclient));
 }
 
 // ── My Work: a teammate's deadline-first, customer-grouped personal view ─────
