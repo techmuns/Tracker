@@ -570,6 +570,7 @@ export default {
           text: String(o.text || '').trim(),
           dashboardId: String(o.dashboardId || ''),
           dashboardName: String(o.dashboardName || ''),
+          dueDate: isDate(o.dueDate) ? o.dueDate : '',
           done: !!o.done,
           doneAt: o.done ? new Date().toISOString() : null,
           source: String(o.source || body.source || 'manual'),
@@ -604,6 +605,14 @@ export default {
           if (!t) return json({ error: 'Task not found.' }, 404);
           t.dashboardId = String(body.dashboardId || '');
           t.dashboardName = String(body.dashboardName || '');
+          await writeTasks(env, list);
+          return json({ ok: true, task: t });
+        }
+        // Set (or clear) a to-do's due date.
+        if (action === 'setdue') {
+          const t = list.find((x) => x.id === String(body.id));
+          if (!t) return json({ error: 'Task not found.' }, 404);
+          t.dueDate = isDate(body.dueDate) ? body.dueDate : '';
           await writeTasks(env, list);
           return json({ ok: true, task: t });
         }
@@ -1981,6 +1990,10 @@ function renderPage(data, opts) {
   .task-dash { font:inherit; font-size:12px; color:var(--muted); background:var(--surface2); border:1px dashed var(--line); border-radius:8px; padding:3px 8px; cursor:pointer; max-width:100%; }
   .task-dash.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
   .task-dashtag { font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:999px; padding:2px 9px; }
+  .task-date-add { flex:0 0 auto; width:150px; font:inherit; font-size:13px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--txt); }
+  .task-date { font:inherit; font-size:12px; color:var(--muted); background:var(--surface2); border:1px dashed var(--line); border-radius:8px; padding:2px 7px; cursor:pointer; }
+  .task-date.set { color:var(--accent); border-style:solid; border-color:var(--accent-line); background:var(--accent-weak); font-weight:600; }
+  .task-datetag { font-size:11.5px; font-weight:600; color:var(--accent); }
   .task-del { border:0; background:none; color:var(--muted); cursor:pointer; font-size:16px; padding:0; width:20px; height:20px; flex:none; }
   .task-del:hover { color:var(--danger); }
   .empty-tasks { padding:16px; text-align:center; color:var(--muted); font-size:13px; }
@@ -2975,13 +2988,19 @@ function ownerTasksHtml(name){
   const dashOpts = (sel) => '<option value="">— File under a dashboard…</option>' +
     myDashes.map(d => \`<option value="\${esc(d.id)}" \${d.id===sel?'selected':''}>\${esc(d.name)}</option>\`).join('');
 
+  const dueVal = (t) => /^\\d{4}-\\d{2}-\\d{2}$/.test(t.dueDate||'') ? t.dueDate : '';
   const taskRow = (t) => \`<div class="task-row">
     <button class="task-check \${t.done?'done':''}" data-task-id="\${t.id}">\${t.done?'✓':'○'}</button>
     <div class="task-main">
       <div class="task-text \${t.done?'done':''}">\${esc(t.text)}</div>
-      \${ed && myDashes.length
-        ? \`<div class="task-assign"><span class="ta-ico">📌</span><select class="task-dash \${t.dashboardId?'set':''}" data-task-id="\${esc(t.id)}" title="File this to-do under one of \${esc(name)}'s dashboards">\${dashOpts(t.dashboardId)}</select></div>\`
-        : ((t.dashboardName||t.dashboardId) ? \`<div class="task-assign"><span class="task-dashtag">📌 \${esc(t.dashboardName||dashName(t.dashboardId))}</span></div>\` : '')}
+      <div class="task-assign">
+        \${ed && myDashes.length
+          ? \`<span class="ta-ico">📌</span><select class="task-dash \${t.dashboardId?'set':''}" data-task-id="\${esc(t.id)}" title="File this to-do under one of \${esc(name)}'s dashboards">\${dashOpts(t.dashboardId)}</select>\`
+          : ((t.dashboardName||t.dashboardId) ? \`<span class="task-dashtag">📌 \${esc(t.dashboardName||dashName(t.dashboardId))}</span>\` : '')}
+        \${ed
+          ? \`<span class="ta-ico">📅</span><input type="date" class="task-date \${dueVal(t)?'set':''}" data-task-id="\${esc(t.id)}" value="\${dueVal(t)}" title="Date for this to-do">\`
+          : (dueVal(t) ? \`<span class="task-datetag">📅 \${esc(fmtDue(t.dueDate))}</span>\` : '')}
+      </div>
     </div>
     \${ed?\`<button class="task-del" data-task-id="\${t.id}">×</button>\`:''}
   </div>\`;
@@ -2993,6 +3012,7 @@ function ownerTasksHtml(name){
     <div class="section-t">📝 To-Do · \${todo.length}</div>
     \${ed?\`<div class="task-add-row">
       <input type="text" id="taskInput" placeholder="Add a new task..." />
+      <input type="date" id="taskDate" class="task-date-add" title="Optional date for this to-do" />
       <button class="btn sm" id="taskAddBtn">+ Add</button>
     </div>\`:''}
     <div class="task-list">\${todoList}</div>
@@ -3050,13 +3070,15 @@ function wireOwnerTasks(name){
   const taskInput = document.getElementById('taskInput');
 
   if (addBtn && taskInput) {
+    const dateInput = document.getElementById('taskDate');
     const addTask = async () => {
       const text = taskInput.value.trim();
       if (!text) return;
 
-      const res = await taskAdd({ member: name, text });
+      const res = await taskAdd({ member: name, text, dueDate: dateInput ? dateInput.value : '' });
       if (res.ok) {
         taskInput.value = '';
+        if (dateInput) dateInput.value = '';
         renderOwner(name);
       } else {
         uiToast('Failed to add task');
@@ -3066,6 +3088,17 @@ function wireOwnerTasks(name){
     addBtn.onclick = addTask;
     taskInput.onkeypress = (e) => { if (e.key === 'Enter') addTask(); };
   }
+
+  // Set / change a to-do's date.
+  drawer.querySelectorAll('.task-date').forEach(inp => {
+    inp.onchange = async () => {
+      const task = TASKS.find(t => t.id === inp.dataset.taskId);
+      if (!task) return;
+      const res = await taskSetDue(task, inp.value);
+      if (res.ok){ inp.classList.toggle('set', !!inp.value); }
+      else { uiToast('Could not save the date.'); inp.value = task.dueDate || ''; }
+    };
+  });
 
   drawer.querySelectorAll('.task-check').forEach(check => {
     check.onclick = async () => {
@@ -4115,6 +4148,7 @@ async function taskAdd(o){ const r=await api('POST','/api/tasks',{action:'add',.
 async function taskToggle(t, done){ const r=await api('POST','/api/tasks',{action:'toggle',id:t.id,done}); if(r.ok){ t.done=done; t.doneAt=done?new Date().toISOString():null; } return r; }
 async function taskDelete(id){ const r=await api('POST','/api/tasks',{action:'delete',id}); if(r.ok){ TASKS=TASKS.filter(x=>x.id!==id); } return r; }
 async function taskAssign(t, dashboardId, dashboardName){ const r=await api('POST','/api/tasks',{action:'assign',id:t.id,dashboardId,dashboardName}); if(r.ok){ t.dashboardId=dashboardId; t.dashboardName=dashboardName; } return r; }
+async function taskSetDue(t, dueDate){ const r=await api('POST','/api/tasks',{action:'setdue',id:t.id,dueDate}); if(r.ok){ t.dueDate=dueDate; } return r; }
 // Pull the Munshot-notetaker to-dos into the shared KV task store, then refresh
 // the in-memory TASKS so the profile To-do lists + the Tasks PDF stay in sync.
 async function syncTrackingTasks(){
