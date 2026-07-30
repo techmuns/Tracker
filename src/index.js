@@ -2254,7 +2254,12 @@ ${opts.manualEnabled ? `
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
       <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
       <label class="wide">GitHub repo <span style="color:var(--muted);font-weight:400;font-size:11px">(for commit tracking — owner/repo or the repo URL)</span><input id="f_repo" list="repoOptsForm" placeholder="munshot/paragon-dashboard" autocomplete="off"><datalist id="repoOptsForm"></datalist></label>
-      <label class="wide">More repos <span style="color:var(--muted);font-weight:400;font-size:11px">(optional — one per line, if this dashboard spans multiple repos)</span><textarea id="f_repos" rows="2" placeholder="owner/another-repo" autocomplete="off"></textarea></label>
+      <label class="wide">More repos <span style="color:var(--muted);font-weight:400;font-size:11px">(optional — one per line, if this dashboard spans multiple repos)</span>
+        <div class="dd" id="repoDD">
+          <textarea id="f_repos" rows="2" placeholder="owner/another-repo" autocomplete="off"></textarea>
+          <div class="dd-menu" id="repoMenu"></div>
+        </div>
+      </label>
       <div class="field wide">Brief for the assignee <span style="color:var(--muted);font-weight:400;font-size:11px">(what needs to be done — the teammate sees this)</span>
         <textarea id="f_brief" rows="4" placeholder="Explain the task: the goal, the data to use, what to build, and any gotchas…"></textarea>
         <div class="filebox" id="briefFiles"></div>
@@ -2983,17 +2988,53 @@ function setForm(d){
 // Lazily fetch the repo list once per session (from the same source Auto-link
 // uses) and offer it as typeahead options on the GitHub repo field, so filing
 // a new dashboard's repo is pick-not-type instead of a blank box.
-let repoOptsCache = null;
+let repoListRaw = null;
+function fillRepoDatalist(){
+  const dl = G('repoOptsForm'); if (dl) dl.innerHTML = (repoListRaw||[]).map(r => '<option value="'+esc(r)+'"></option>').join('');
+}
 function ensureRepoOpts(){
-  const dl = G('repoOptsForm'); if (!dl) return;
-  if (repoOptsCache){ dl.innerHTML = repoOptsCache; return; }
+  if (repoListRaw){ fillRepoDatalist(); return; }
   api('POST', '/api/link-repos', {}).then(r => r.json()).then(j => {
-    if (j && j.ok && Array.isArray(j.repos)){
-      repoOptsCache = j.repos.map(r => '<option value="'+esc(r)+'"></option>').join('');
-      const dl2 = G('repoOptsForm'); if (dl2) dl2.innerHTML = repoOptsCache;
-    }
+    if (j && j.ok && Array.isArray(j.repos)){ repoListRaw = j.repos; fillRepoDatalist(); }
   }).catch(()=>{});
 }
+// "More repos" is a textarea (one repo per line) — <datalist> only works on
+// <input>, so it gets its own small dropdown that suggests repos for whichever
+// line the caret is currently on, rather than the whole box.
+function repoLineBounds(ta){
+  const v = ta.value, pos = ta.selectionStart;
+  const start = v.lastIndexOf('\\n', pos - 1) + 1;
+  let end = v.indexOf('\\n', pos); if (end < 0) end = v.length;
+  return { start, end, text: v.slice(start, end) };
+}
+function repoMenuMatches(q){
+  q = q.trim().toLowerCase(); if (!q) return [];
+  const starts = [], has = [];
+  for (const r of (repoListRaw||[])){
+    const rl = r.toLowerCase(), short = rl.split('/').pop();
+    if (rl === q) continue;
+    if (rl.startsWith(q) || short.startsWith(q)) starts.push(r); else if (rl.includes(q)) has.push(r);
+  }
+  return starts.concat(has).slice(0, 8);
+}
+function renderRepoMenu(){
+  const dd = G('repoDD'), menu = G('repoMenu'), ta = G('f_repos');
+  if (!dd || !menu || !ta) return;
+  const rows = repoMenuMatches(repoLineBounds(ta).text);
+  if (!rows.length){ closeRepoMenu(); return; }
+  menu.innerHTML = rows.map(r => \`<div class="dd-opt" data-repo="\${esc(r)}">\${esc(r)}</div>\`).join('');
+  menu.querySelectorAll('[data-repo]').forEach(o => o.onmousedown = (e) => { e.preventDefault(); pickRepoLine(o.dataset.repo); });
+  dd.classList.add('open');
+}
+function pickRepoLine(repo){
+  const ta = G('f_repos'); if (!ta) return;
+  const { start, end } = repoLineBounds(ta), v = ta.value;
+  ta.value = v.slice(0, start) + repo + v.slice(end);
+  const pos = start + repo.length;
+  ta.focus(); ta.setSelectionRange(pos, pos);
+  closeRepoMenu();
+}
+function closeRepoMenu(){ const dd = G('repoDD'); if (dd) dd.classList.remove('open'); }
 function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); ensureRepoOpts(); }
 function closeForm(){ const b = G('formModalBg'); if (b) b.classList.remove('open'); }
 function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; G('fbLabel').hidden = true; openForm(); G('f_name').focus(); }
@@ -3030,10 +3071,19 @@ if (CFG.manualEnabled){
   const ow = G('f_owner');
   if (ow){ ow.onfocus = openOwnerDD; ow.oninput = () => { openOwnerDD(); }; ow.onkeydown = (e) => { if (e.key === 'Escape') closeOwnerDD(); }; }
   { const uc = G('f_unassigned'); if (uc) uc.onchange = () => { if (uc.checked) G('f_owner').value = ''; applyUnassigned(); }; }
+  const rta = G('f_repos');
+  if (rta){
+    rta.addEventListener('focus', () => { ensureRepoOpts(); renderRepoMenu(); });
+    rta.addEventListener('input', renderRepoMenu);
+    rta.addEventListener('click', renderRepoMenu);
+    rta.addEventListener('keyup', (e) => { if (e.key.indexOf('Arrow') === 0 || e.key === 'Home' || e.key === 'End') renderRepoMenu(); });
+    rta.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRepoMenu(); });
+  }
   document.addEventListener('mousedown', (e) => {
     if (cdd && !cdd.contains(e.target)) closeClientDD();
     const odd = G('ownerDD'); if (odd && !odd.contains(e.target)) closeOwnerDD();
     const ddd = G('dueDD'); if (ddd && !ddd.contains(e.target)) closeCal();
+    const rdd = G('repoDD'); if (rdd && !rdd.contains(e.target)) closeRepoMenu();
   });
   G('addLinkRow').onclick = () => {
     const cur = getLinks();
