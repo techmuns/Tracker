@@ -10,7 +10,7 @@
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
 import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
-import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap } from './commits.js';
+import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap, recentDays } from './commits.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -97,12 +97,27 @@ async function ingestCommitWindow(env, sinceMs) {
     for (const rp of Object.keys(d)) { dirty[rp] = dirty[rp] || new Set(); d[rp].forEach((x) => dirty[rp].add(x)); ingested += d[rp].size ? 1 : 0; }
     if (ingested === before) { /* nothing new for this repo */ }
   }
-  // Re-summarize every changed (repo, day) from the stored messages.
+  // Also catch up the last 3 days if they're still on the no-key fallback
+  // text (e.g. OPENAI_API_KEY was only just added) — capped to 3 days so
+  // backfilling old history never costs extra calls once it's caught up.
+  if (env.OPENAI_API_KEY) {
+    const recent = new Set(recentDays(3, Date.now()));
+    for (const repo of repos.keys()) {
+      const a = activity[repo]; if (!a) continue;
+      for (const day of Object.keys(a.days)) {
+        if (!recent.has(day) || !a.days[day].count || a.days[day].ai) continue;
+        (dirty[repo] = dirty[repo] || new Set()).add(day);
+      }
+    }
+  }
+  // Re-summarize every changed (repo, day) from the stored messages — one
+  // OpenAI call per day, only ever for the last 3 days (see above).
   for (const repo of Object.keys(dirty)) {
     for (const day of dirty[repo]) {
       const bucket = activity[repo] && activity[repo].days[day];
       if (!bucket) continue;
       bucket.summary = await summarizeMessages(env, repo, day, bucket.msgs || []);
+      bucket.ai = !!env.OPENAI_API_KEY;
     }
   }
   pruneActivity(activity, 21, Date.now());
@@ -4121,8 +4136,8 @@ function perfCommitPanel(){
 function perfDashDaily(e){
   if(!perfCommits||!perfCommits.enabled) return \`<div class="pf-note">Commit tracking is off.</div>\`;
   if(!e){ return \`<div class="pf-note">No GitHub repo linked, or no commits yet.</div>\`; }
-  const days = perfCommits.days.slice().reverse().filter(k=>e.byDay[k]>0);
-  if(!days.length) return \`<div class="pf-note">No commits in the last 14 days.</div>\`;
+  const days = perfCommits.days.slice(-3).reverse().filter(k=>e.byDay[k]>0);
+  if(!days.length) return \`<div class="pf-note">No commits in the last 3 days.</div>\`;
   return \`<div class="pf-daily">\${days.map(k=>\`<div class="pf-dl"><div class="pf-dl-d">\${esc(k)}</div><div class="pf-dl-c">\${e.byDay[k]}</div><div class="pf-dl-s">\${e.summaries&&e.summaries[k]?esc(e.summaries[k]):'<span class="tmut">—</span>'}</div></div>\`).join('')}</div>\`;
 }
 

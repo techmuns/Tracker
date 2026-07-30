@@ -94,6 +94,7 @@ test('mergeCommitsIntoActivity folds rows in, deduped by SHA', () => {
   ]);
   assert.equal(act['r/x'].days['2026-07-30'].count, 2);
   assert.equal(act['r/x'].days['2026-07-29'].count, 1);
+  assert.equal(act['r/x'].days['2026-07-30'].ai, false); // not AI-summarized yet
   assert.deepEqual([...d1['r/x']].sort(), ['2026-07-29', '2026-07-30']);
   // re-merging the same SHAs changes nothing (idempotent)
   const d2 = mergeCommitsIntoActivity(act, [{ sha: 'a', repo: 'r/x', day: '2026-07-30', message: 'Add login' }]);

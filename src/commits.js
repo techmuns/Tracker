@@ -208,7 +208,7 @@ export function mergeCommitsIntoActivity(activity, rows) {
     let a = activity[r.repo]; if (!a) a = activity[r.repo] = { days: {}, shas: {} };
     if (a.shas[r.sha]) continue;            // already counted
     a.shas[r.sha] = r.day;
-    let d = a.days[r.day]; if (!d) d = a.days[r.day] = { count: 0, msgs: [], summary: '' };
+    let d = a.days[r.day]; if (!d) d = a.days[r.day] = { count: 0, msgs: [], summary: '', ai: false };
     d.count++;
     if (d.msgs.length < 80) d.msgs.push(r.message);
     (dirty[r.repo] = dirty[r.repo] || new Set()).add(r.day);
