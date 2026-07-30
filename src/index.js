@@ -123,20 +123,29 @@ async function listReposForToken(token) {
   }
   return out;
 }
-// Cloudflare account id for the API (explicit secret, else the first account).
-async function cfAccountId(env) {
-  if (env.CF_ACCOUNT_ID) return env.CF_ACCOUNT_ID;
-  const res = await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=1', { headers: { Authorization: 'Bearer ' + env.CF_API_TOKEN } });
+// ceekay and techmuns are two SEPARATE Cloudflare accounts, so each gets its
+// own optional API token (and optional account id override), mirroring the
+// CEEKAY_AT / TECHMUNS_AT GitHub-token pattern.
+function cfAccountsFrom(env) {
+  return [
+    { token: env.CF_API_TOKEN_CEEKAY, acct: env.CF_ACCOUNT_ID_CEEKAY },
+    { token: env.CF_API_TOKEN_TECHMUNS, acct: env.CF_ACCOUNT_ID_TECHMUNS },
+  ].filter((c) => c.token);
+}
+function hasCfToken(env) { return cfAccountsFrom(env).length > 0; }
+// Cloudflare account id for a given token (explicit override, else the first account it can see).
+async function cfAccountId(token, explicitAcct) {
+  if (explicitAcct) return explicitAcct;
+  const res = await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=1', { headers: { Authorization: 'Bearer ' + token } });
   if (!res.ok) return '';
   const j = await res.json().catch(() => ({}));
   return (j && j.result && j.result[0] && j.result[0].id) || '';
 }
-// List Cloudflare Pages projects (each carries its connected GitHub repo).
-async function listCloudflarePages(env) {
-  if (!env.CF_API_TOKEN) return [];
-  const acct = await cfAccountId(env);
+// Pages projects for one account/token (each carries its connected GitHub repo).
+async function listCloudflarePagesFor(token, explicitAcct) {
+  const acct = await cfAccountId(token, explicitAcct);
   if (!acct) return [];
-  const headers = { Authorization: 'Bearer ' + env.CF_API_TOKEN };
+  const headers = { Authorization: 'Bearer ' + token };
   const out = [];
   for (let page = 1; page <= 10; page++) {
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acct}/pages/projects?per_page=100&page=${page}`, { headers });
@@ -147,6 +156,12 @@ async function listCloudflarePages(env) {
     out.push(...arr);
     if (arr.length < 100) break;
   }
+  return out;
+}
+// Pages projects across BOTH Cloudflare accounts, merged.
+async function listCloudflarePages(env) {
+  const out = [];
+  for (const c of cfAccountsFrom(env)) out.push(...(await listCloudflarePagesFor(c.token, c.acct)));
   return out;
 }
 // All repos across both account tokens, de-duplicated by full_name.
@@ -1051,11 +1066,11 @@ export default {
           await writeManual(env, list);
           return json({ ok: true, applied });
         }
-        if (!hasGhToken(env) && !env.CF_API_TOKEN) return json({ ok: false, reason: 'Add the CEEKAY_AT / TECHMUNS_AT tokens (or a CF_API_TOKEN) first.' }, 503);
+        if (!hasGhToken(env) && !hasCfToken(env)) return json({ ok: false, reason: 'Add the CEEKAY_AT / TECHMUNS_AT tokens (or a CF_API_TOKEN_CEEKAY / CF_API_TOKEN_TECHMUNS) first.' }, 503);
         const repos = await listAllRepos(env);
-        // Exact matches from Cloudflare Pages (deploy URL → its connected repo).
+        // Exact matches from Cloudflare Pages, across BOTH accounts (deploy URL → its connected repo).
         let exactMap = null, exactCount = 0;
-        if (env.CF_API_TOKEN) { try { exactMap = pagesRepoMap(await listCloudflarePages(env)); exactCount = Object.keys(exactMap).length; } catch (e) {} }
+        if (hasCfToken(env)) { try { exactMap = pagesRepoMap(await listCloudflarePages(env)); exactCount = Object.keys(exactMap).length; } catch (e) {} }
         const suggestions = matchRepos(data.dashboards, repos, 0.34, exactMap);
         return json({ ok: true, repoCount: repos.length, cfProjects: exactCount, repos: repos.map((r) => r.full_name), suggestions });
       }

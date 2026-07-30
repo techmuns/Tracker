@@ -52,11 +52,19 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 #   2) Deploy:  npm run deploy
 #   3) In the app, set each dashboard's GitHub repo (Edit → GitHub repo).
 #
-#   (Optional, exact auto-link) add a Cloudflare API token with Pages:Read so
-#   the "Auto-link" button reads each dashboard's EXACT repo from its Pages
-#   project instead of fuzzy-matching by name:
-#        npx wrangler secret put CF_API_TOKEN
-#        npx wrangler secret put CF_ACCOUNT_ID   # optional; else the first account
+#   (Optional, exact auto-link) ceekay and techmuns are two SEPARATE Cloudflare
+#   accounts, so add one Pages:Read token per account (either or both — the
+#   Auto-link button merges Pages projects from whichever are set) so it can
+#   read each dashboard's EXACT repo from its Pages project instead of
+#   fuzzy-matching by name. Note: this only works for dashboards deployed as
+#   Cloudflare Pages — Cloudflare's API has no way to read a Worker's
+#   connected git repo yet, so Worker-hosted dashboards still rely on the
+#   (pretty good) fuzzy name/URL matching, with a manual override in the
+#   Auto-link review screen:
+#        npx wrangler secret put CF_API_TOKEN_CEEKAY
+#        npx wrangler secret put CF_ACCOUNT_ID_CEEKAY     # optional; else the token's first account
+#        npx wrangler secret put CF_API_TOKEN_TECHMUNS
+#        npx wrangler secret put CF_ACCOUNT_ID_TECHMUNS   # optional; else the token's first account
 #
 #   (Optional real-time) also add a push webhook on each repo (or org-wide):
 #        Payload URL:  https://tracker.tech-441.workers.dev/api/gh-webhook
