@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor } from '../src/commits.js';
+import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor, mergeCommitsIntoActivity, overviewFromActivity } from '../src/commits.js';
 
 test('dayKey buckets by IST (UTC+5:30)', () => {
   assert.equal(dayKey(Date.parse('2026-07-28T18:29:00Z')), '2026-07-28'); // 23:59 IST
@@ -83,4 +83,36 @@ test('ghTokensFor matches the repo owner to the right account token', () => {
   assert.deepEqual(ghTokensFor({ CEEKAY_AT: 'cee' }, 'techmuns/x'), ['cee']);
   // none present
   assert.deepEqual(ghTokensFor({}, 'ceekay/x'), []);
+});
+
+test('mergeCommitsIntoActivity folds rows in, deduped by SHA', () => {
+  const act = {};
+  const d1 = mergeCommitsIntoActivity(act, [
+    { sha: 'a', repo: 'r/x', day: '2026-07-30', message: 'Add login' },
+    { sha: 'b', repo: 'r/x', day: '2026-07-30', message: 'Fix crash' },
+    { sha: 'c', repo: 'r/x', day: '2026-07-29', message: 'Scaffold' },
+  ]);
+  assert.equal(act['r/x'].days['2026-07-30'].count, 2);
+  assert.equal(act['r/x'].days['2026-07-29'].count, 1);
+  assert.deepEqual([...d1['r/x']].sort(), ['2026-07-29', '2026-07-30']);
+  // re-merging the same SHAs changes nothing (idempotent)
+  const d2 = mergeCommitsIntoActivity(act, [{ sha: 'a', repo: 'r/x', day: '2026-07-30', message: 'Add login' }]);
+  assert.equal(act['r/x'].days['2026-07-30'].count, 2);
+  assert.equal(Object.keys(d2).length, 0);
+});
+
+test('overviewFromActivity computes today/yesterday/7d from KV activity', () => {
+  const now = Date.parse('2026-07-30T12:00:00Z'); // IST day 2026-07-30
+  const activity = { 'muns/alpha': { days: {
+    '2026-07-30': { count: 3, msgs: [], summary: '• did stuff' },
+    '2026-07-29': { count: 1, msgs: [], summary: '' },
+  }, shas: {} } };
+  const dashboards = [{ id: 'd1', name: 'Alpha', githubRepo: 'muns/alpha', owner: 'Vipul', customers: [] }];
+  const ov = overviewFromActivity(activity, dashboards, 14, now);
+  assert.equal(ov.enabled, true);
+  assert.equal(ov.today, 3);
+  assert.equal(ov.yesterday, 1);
+  assert.equal(ov.total, 4);
+  assert.equal(ov.dashboards[0].id, 'd1');
+  assert.equal(ov.dashboards[0].summaries['2026-07-30'], '• did stuff');
 });

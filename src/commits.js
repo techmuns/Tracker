@@ -125,7 +125,76 @@ export function overviewFromRows(rows, dashboards, days, nowMs, offsetMin = TZ_O
   };
 }
 
-// ── D1 helpers (take the DB binding) ─────────────────────────────────────
+// ── KV-backed commit activity ────────────────────────────────────────────
+// Commit data is small, so it lives in the existing KV (no database to set up).
+// Shape: { [repo]: { days: { [day]: { count, msgs:[…], summary } }, shas: { [sha]: day } } }
+
+// Fold parsed commit rows into the activity object (idempotent by SHA). Returns
+// a { [repo]: Set(day) } map of days that changed and need re-summarizing.
+export function mergeCommitsIntoActivity(activity, rows) {
+  const dirty = {};
+  for (const r of rows || []) {
+    let a = activity[r.repo]; if (!a) a = activity[r.repo] = { days: {}, shas: {} };
+    if (a.shas[r.sha]) continue;            // already counted
+    a.shas[r.sha] = r.day;
+    let d = a.days[r.day]; if (!d) d = a.days[r.day] = { count: 0, msgs: [], summary: '' };
+    d.count++;
+    if (d.msgs.length < 80) d.msgs.push(r.message);
+    (dirty[r.repo] = dirty[r.repo] || new Set()).add(r.day);
+  }
+  return dirty;
+}
+
+// Drop days (and their SHAs) older than the retained window so KV stays small.
+export function pruneActivity(activity, keepDays, nowMs, offsetMin = TZ_OFFSET_MIN) {
+  const span = new Set(recentDays(keepDays, nowMs, offsetMin));
+  for (const repo of Object.keys(activity || {})) {
+    const a = activity[repo];
+    for (const day of Object.keys(a.days || {})) if (!span.has(day)) delete a.days[day];
+    for (const sha of Object.keys(a.shas || {})) if (!span.has(a.shas[sha])) delete a.shas[sha];
+    if (!Object.keys(a.days || {}).length) delete activity[repo];
+  }
+  return activity;
+}
+
+// Build the founder overview (same shape as overviewFromRows) from KV activity.
+export function overviewFromActivity(activity, dashboards, days, nowMs, offsetMin = TZ_OFFSET_MIN) {
+  const span = recentDays(days, nowMs, offsetMin);
+  const today = span[span.length - 1];
+  const yesterday = span[span.length - 2];
+  const last7 = new Set(span.slice(-7));
+  const inSpan = new Set(span);
+  const byRepo = new Map();
+  for (const d of dashboards || []) if (d.githubRepo) byRepo.set(d.githubRepo.toLowerCase(), d);
+  const totalByDay = Object.fromEntries(span.map((k) => [k, 0]));
+  const perDash = new Map();
+  let tToday = 0, tYest = 0, tLast7 = 0, tAll = 0;
+  for (const repo of Object.keys(activity || {})) {
+    const a = activity[repo] || {};
+    const dash = byRepo.get(String(repo).toLowerCase());
+    const id = dash ? dash.id : ('repo:' + repo);
+    let e = perDash.get(id);
+    if (!e) {
+      e = { id, name: dash ? dash.name : repo, repo, owner: dash ? dash.owner : '',
+            byDay: Object.fromEntries(span.map((k) => [k, 0])), summaries: {}, total: 0, today: 0, yesterday: 0, last7: 0 };
+      perDash.set(id, e);
+    }
+    for (const day of Object.keys(a.days || {})) {
+      if (!inSpan.has(day)) continue;
+      const c = a.days[day].count || 0; if (!c) continue;
+      e.byDay[day] += c; e.total += c; totalByDay[day] += c; tAll += c;
+      if (a.days[day].summary) e.summaries[day] = a.days[day].summary;
+      if (day === today) { e.today += c; tToday += c; }
+      if (day === yesterday) { e.yesterday += c; tYest += c; }
+      if (last7.has(day)) { e.last7 += c; tLast7 += c; }
+    }
+  }
+  const dashboardsOut = [...perDash.values()].filter((e) => e.total > 0)
+    .sort((a, b) => b.last7 - a.last7 || b.total - a.total);
+  return { enabled: true, days: span, totalByDay, today: tToday, yesterday: tYest, last7: tLast7, total: tAll, dashboards: dashboardsOut };
+}
+
+// ── D1 helpers (legacy; the app now uses KV activity above) ───────────────
 
 // Idempotent upsert by sha. Chunks to stay under D1's bound-statement limits.
 export async function dbIngest(db, rows) {

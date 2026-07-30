@@ -10,7 +10,7 @@
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
 import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
-import { parseCommits, overviewFromRows, dbIngest, dbRecentRows, dbMessagesForDay, dbGetSummary, dbPutSummary, dbSummariesSince, summarizeMessages, fetchRepoCommits, hasGhToken } from './commits.js';
+import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken } from './commits.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -73,24 +73,40 @@ async function getDataset(env) {
 }
 
 // ── Commit tracking orchestration ────────────────────────────────────────
+// Commit activity lives in the existing KV (no database to set up).
+const readActivity = (env) => kvGet(env, 'commit_activity', {});
+const writeActivity = (env, a) => env.MANUAL.put('commit_activity', JSON.stringify(a));
+
 // For every dashboard's GitHub repo, pull commits since `sinceMs` (matching the
-// right account token per repo), store them (idempotent by SHA), then re-write
-// the bullet summary of any day whose commit count changed. No-op without D1.
+// right account token per repo), fold them into KV activity (idempotent by
+// SHA), then re-write the bullet summary of any day whose commits changed.
 async function ingestCommitWindow(env, sinceMs) {
-  if (!env.DB) return { polled: 0, ingested: 0, repos: 0 };
+  if (!env.MANUAL || !hasGhToken(env)) return { polled: 0, ingested: 0, repos: 0 };
   const ds = await getDataset(env);
   const repos = new Map(); // repo → dashboardId (one dashboard per repo)
   for (const d of ds.dashboards) if (d.githubRepo && !repos.has(d.githubRepo)) repos.set(d.githubRepo, d.id);
-  let polled = 0, ingested = 0; const changed = new Map(); // repo → Set(day)
+  if (!repos.size) return { polled: 0, ingested: 0, repos: 0 };
+  const activity = await readActivity(env);
+  let polled = 0, ingested = 0; const dirty = {}; // repo → Set(day)
   for (const [repo, dashId] of repos) {
     polled++;
     const r = await fetchRepoCommits(env, repo, dashId, sinceMs);
     if (!r.ok || !r.rows.length) continue;
-    const n = await dbIngest(env.DB, r.rows);
-    ingested += n;
-    if (n > 0) { const set = changed.get(repo) || new Set(); r.rows.forEach((x) => set.add(x.day)); changed.set(repo, set); }
+    const before = ingested;
+    const d = mergeCommitsIntoActivity(activity, r.rows);
+    for (const rp of Object.keys(d)) { dirty[rp] = dirty[rp] || new Set(); d[rp].forEach((x) => dirty[rp].add(x)); ingested += d[rp].size ? 1 : 0; }
+    if (ingested === before) { /* nothing new for this repo */ }
   }
-  for (const [repo, days] of changed) await summarizeRepoDays(env, repo, [...days]);
+  // Re-summarize every changed (repo, day) from the stored messages.
+  for (const repo of Object.keys(dirty)) {
+    for (const day of dirty[repo]) {
+      const bucket = activity[repo] && activity[repo].days[day];
+      if (!bucket) continue;
+      bucket.summary = await summarizeMessages(env, repo, day, bucket.msgs || []);
+    }
+  }
+  pruneActivity(activity, 21, Date.now());
+  if (Object.keys(dirty).length) await writeActivity(env, activity);
   return { polled, ingested, repos: repos.size };
 }
 // On-demand refresh (opened the Work-done view): backfill a 14-day window so
@@ -99,18 +115,6 @@ async function pollCommits(env) { return ingestCommitWindow(env, Date.now() - 14
 // The daily 8pm digest: pull the last 24h for every repo and (re)summarize it
 // into a few plain-English bullets. Days with no commits get no summary.
 async function runCommitDigest(env) { return ingestCommitWindow(env, Date.now() - 24 * 3600 * 1000); }
-
-// Re-summarize a repo's day only when its stored count is stale (bounds LLM calls).
-async function summarizeRepoDay(env, repo, day) {
-  const msgs = await dbMessagesForDay(env.DB, repo, day);
-  const existing = await dbGetSummary(env.DB, repo, day);
-  if (existing && existing.count === msgs.length) return;
-  const summary = await summarizeMessages(env, repo, day, msgs);
-  await dbPutSummary(env.DB, repo, day, msgs.length, summary, Date.now());
-}
-async function summarizeRepoDays(env, repo, days) {
-  for (const day of days) await summarizeRepoDay(env, repo, day);
-}
 
 // Verify a GitHub webhook's HMAC-SHA256 signature (constant-time compare).
 async function verifyGithubSig(raw, header, secret) {
@@ -961,36 +965,27 @@ export default {
       // POST /api/commits/poll     → pull the latest commits now (authorized)
       // POST /api/gh-webhook       → GitHub push webhook (real-time ingest)
       if (pathname === '/api/commits') {
-        if (!env.DB) return json({ enabled: false, reason: 'Commit tracking is off until a D1 database is bound as DB. See schema.sql / wrangler.toml.' });
+        const on = !!env.MANUAL && (hasGhToken(env) || !!env.GITHUB_WEBHOOK_SECRET);
+        if (!on) return json({ enabled: false, reason: 'Add the CEEKAY_AT / TECHMUNS_AT read tokens (and OPENAI_API_KEY) as Worker secrets to switch on commit tracking. No database needed.' });
         const days = Math.min(60, Math.max(1, parseInt(url.searchParams.get('days') || '14', 10) || 14));
         const now = Date.now();
-        // Opportunistic refresh: if a token is configured, poll in the background.
+        // Opportunistic refresh in the background so a page refresh shows fresh data.
         if (hasGhToken(env)) bg(pollCommits(env));
-        const rows = await dbRecentRows(env.DB, days, now);
-        const ov = overviewFromRows(rows, data.dashboards, days, now);
-        const sums = await dbSummariesSince(env.DB, ov.days[0]);
-        const sumMap = new Map(sums.map((s) => [s.repo.toLowerCase() + '|' + s.day, s.summary]));
-        for (const d of ov.dashboards) {
-          d.summaries = {};
-          if (!d.repo) continue;
-          for (const day of ov.days) {
-            if (d.byDay[day] > 0) { const s = sumMap.get(d.repo.toLowerCase() + '|' + day); if (s) d.summaries[day] = s; }
-          }
-        }
-        return json(ov);
+        const activity = await readActivity(env);
+        return json(overviewFromActivity(activity, data.dashboards, days, now));
       }
 
       if (pathname === '/api/commits/poll') {
         if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
         if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
-        if (!env.DB) return json({ ok: false, reason: 'D1 not configured.' }, 503);
+        if (!hasGhToken(env)) return json({ ok: false, reason: 'No GitHub token (CEEKAY_AT / TECHMUNS_AT) configured.' }, 503);
         const r = await pollCommits(env);
         return json({ ok: true, ...r });
       }
 
       if (pathname === '/api/gh-webhook') {
         if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
-        if (!env.DB) return json({ ok: false, reason: 'D1 not configured.' }, 503);
+        if (!env.MANUAL) return json({ ok: false, reason: 'Storage not enabled.' }, 503);
         const raw = await request.text();
         if (env.GITHUB_WEBHOOK_SECRET) {
           const ok = await verifyGithubSig(raw, request.headers.get('X-Hub-Signature-256') || '', env.GITHUB_WEBHOOK_SECRET);
@@ -1004,10 +999,17 @@ export default {
         if (!repo) return json({ ok: false, reason: 'No repo in payload.' }, 400);
         const dash = data.dashboards.find((d) => d.githubRepo && d.githubRepo.toLowerCase() === repo.toLowerCase());
         const rows = parseCommits(body.commits || [], repo, dash ? dash.id : '');
-        const ingested = await dbIngest(env.DB, rows);
-        const daysTouched = [...new Set(rows.map((r) => r.day))];
-        if (ingested > 0) bg(summarizeRepoDays(env, repo, daysTouched));
-        return json({ ok: true, repo, ingested, dashboard: dash ? dash.id : null });
+        const activity = await readActivity(env);
+        const dirty = mergeCommitsIntoActivity(activity, rows);
+        for (const rp of Object.keys(dirty)) {
+          for (const day of dirty[rp]) {
+            const bucket = activity[rp] && activity[rp].days[day];
+            if (bucket) bucket.summary = await summarizeMessages(env, rp, day, bucket.msgs || []);
+          }
+        }
+        pruneActivity(activity, 21, Date.now());
+        if (Object.keys(dirty).length) await writeActivity(env, activity);
+        return json({ ok: true, repo, ingested: rows.length, dashboard: dash ? dash.id : null });
       }
 
       if (pathname === '/api/data') {
@@ -3952,7 +3954,7 @@ function perfKpisFor(list){
   return \`<div class="pf-kpis"><div class="pf-kpi"><div class="n">\${O.total}</div><div class="l">Dashboards</div></div><div class="pf-kpi"><div class="n">\${O.done}</div><div class="l">Completed</div></div><div class="pf-kpi"><div class="n">\${O.partial}</div><div class="l">In progress</div></div>\${ck}<div class="pf-kpi pct"><div class="n">\${O.pct}%</div><div class="l">Weighted completion</div></div></div>\`;
 }
 function perfSortByCommits(list){ return list.slice().sort((a,b)=> (perfCE(b.id)?perfCE(b.id).last7:0)-(perfCE(a.id)?perfCE(a.id).last7:0)); }
-function perfOffNote(){ return (perfCommits&&perfCommits.enabled)?'':'<div class="pf-note" style="margin:8px 0 0">Commit activity turns on once D1 + a GitHub token are configured (see wrangler.toml).</div>'; }
+function perfOffNote(){ return (perfCommits&&perfCommits.enabled)?'':'<div class="pf-note" style="margin:8px 0 0">Commit activity turns on once the GitHub read tokens are set as Worker secrets.</div>'; }
 function perfPersonSummaryHtml(name){
   const all = DATA.dashboards;
   const list = perfSortByCommits(name==='Unassigned' ? all.filter(d=>!d.owner) : all.filter(d=>d.owner===name));
@@ -3986,7 +3988,7 @@ function perfSpark(byDay, days){
 // The commit-activity panel (overall). Handles loading / off / live states.
 function perfCommitPanel(){
   if(!perfCommits) return \`<div class="pf-act"><h3>Commit activity</h3><div class="pf-note">Loading GitHub commits…</div></div>\`;
-  if(!perfCommits.enabled) return \`<div class="pf-act off"><h3>📊 Commit activity — not turned on yet</h3><div class="pf-act-row">Once each dashboard has a <b>GitHub repo</b> set and the D1 database + token are configured, this tracks <b>commits per day per dashboard</b> — "yesterday this much, today this much" — and AI-summarises what happened each day.</div><div class="pf-note">Setup steps live in <code>wrangler.toml</code> and <code>schema.sql</code>.</div></div>\`;
+  if(!perfCommits.enabled) return \`<div class="pf-act off"><h3>📊 Commit activity — not turned on yet</h3><div class="pf-act-row">Once each dashboard has a <b>GitHub repo</b> set and the two account read-tokens (<code>CEEKAY_AT</code> / <code>TECHMUNS_AT</code>) plus <code>OPENAI_API_KEY</code> are added as Worker secrets, this tracks <b>commits per day per dashboard</b> — "yesterday this much, today this much" — and AI-summarises what happened each day. No database needed.</div></div>\`;
   const c = perfCommits; const arrow = c.today>c.yesterday?'▲':(c.today<c.yesterday?'▼':'→');
   return \`<div class="pf-act"><h3>Commit activity <span class="pf-sub2">— GitHub, last 14 days</span></h3>
     <div class="pf-kpis4">
