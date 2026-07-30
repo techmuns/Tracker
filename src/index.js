@@ -2249,7 +2249,7 @@ ${opts.manualEnabled ? `
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
       <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
-      <label class="wide">GitHub repo <span style="color:var(--muted);font-weight:400;font-size:11px">(for commit tracking — owner/repo or the repo URL)</span><input id="f_repo" placeholder="munshot/paragon-dashboard" autocomplete="off"></label>
+      <label class="wide">GitHub repo <span style="color:var(--muted);font-weight:400;font-size:11px">(for commit tracking — owner/repo or the repo URL)</span><input id="f_repo" list="repoOptsForm" placeholder="munshot/paragon-dashboard" autocomplete="off"><datalist id="repoOptsForm"></datalist></label>
       <label class="wide">More repos <span style="color:var(--muted);font-weight:400;font-size:11px">(optional — one per line, if this dashboard spans multiple repos)</span><textarea id="f_repos" rows="2" placeholder="owner/another-repo" autocomplete="off"></textarea></label>
       <div class="field wide">Brief for the assignee <span style="color:var(--muted);font-weight:400;font-size:11px">(what needs to be done — the teammate sees this)</span>
         <textarea id="f_brief" rows="4" placeholder="Explain the task: the goal, the data to use, what to build, and any gotchas…"></textarea>
@@ -2977,7 +2977,21 @@ function setForm(d){
   G('formMsg').textContent = '';
   updateDueFieldVisibility();
 }
-function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); }
+// Lazily fetch the repo list once per session (from the same source Auto-link
+// uses) and offer it as typeahead options on the GitHub repo field, so filing
+// a new dashboard's repo is pick-not-type instead of a blank box.
+let repoOptsCache = null;
+function ensureRepoOpts(){
+  const dl = G('repoOptsForm'); if (!dl) return;
+  if (repoOptsCache){ dl.innerHTML = repoOptsCache; return; }
+  api('POST', '/api/link-repos', {}).then(r => r.json()).then(j => {
+    if (j && j.ok && Array.isArray(j.repos)){
+      repoOptsCache = j.repos.map(r => '<option value="'+esc(r)+'"></option>').join('');
+      const dl2 = G('repoOptsForm'); if (dl2) dl2.innerHTML = repoOptsCache;
+    }
+  }).catch(()=>{});
+}
+function openForm(){ const b = G('formModalBg'); if (b) b.classList.add('open'); ensureRepoOpts(); }
 function closeForm(){ const b = G('formModalBg'); if (b) b.classList.remove('open'); }
 function openAdd(){ setForm(null); G('panelTitle').textContent = 'Add dashboard'; G('saveBtn').textContent = 'Save dashboard'; G('fbLabel').hidden = true; openForm(); G('f_name').focus(); }
 function openEdit(id){
