@@ -307,8 +307,12 @@ export function manualToDashboard(m) {
     brief: clean(m.brief),
     briefFiles: Array.isArray(m.briefFiles) ? m.briefFiles : [],
     briefLinks: normalizeLinks(m.briefLinks),
-    // GitHub repo backing this dashboard (owner/repo) — source for commit tracking.
+    // GitHub repo(s) backing this dashboard — source for commit tracking.
+    // githubRepo = primary (auto-linked); githubRepos = extra repos added by
+    // hand; allRepos = the full de-duplicated list the pipeline aggregates over.
     githubRepo: normalizeRepo(m.githubRepo),
+    githubRepos: (Array.isArray(m.githubRepos) ? m.githubRepos : []).map(normalizeRepo).filter(Boolean),
+    allRepos: [...new Set([normalizeRepo(m.githubRepo), ...(Array.isArray(m.githubRepos) ? m.githubRepos : []).map(normalizeRepo)].filter(Boolean))],
     publishedAt: m.publishedAt || '',
     publishRef: m.publishRef || '',
   };

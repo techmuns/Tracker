@@ -83,8 +83,8 @@ const writeActivity = (env, a) => env.MANUAL.put('commit_activity', JSON.stringi
 async function ingestCommitWindow(env, sinceMs) {
   if (!env.MANUAL || !hasGhToken(env)) return { polled: 0, ingested: 0, repos: 0 };
   const ds = await getDataset(env);
-  const repos = new Map(); // repo → dashboardId (one dashboard per repo)
-  for (const d of ds.dashboards) if (d.githubRepo && !repos.has(d.githubRepo)) repos.set(d.githubRepo, d.id);
+  const repos = new Map(); // repo → dashboardId (a dashboard may have several)
+  for (const d of ds.dashboards) for (const rp of (d.allRepos || [])) if (!repos.has(rp)) repos.set(rp, d.id);
   if (!repos.size) return { polled: 0, ingested: 0, repos: 0 };
   const activity = await readActivity(env);
   let polled = 0, ingested = 0; const dirty = {}; // repo → Set(day)
@@ -396,6 +396,7 @@ export default {
             briefFiles: Array.isArray(body.briefFiles) ? body.briefFiles : [],
             briefLinks: Array.isArray(body.briefLinks) ? body.briefLinks : [],
             githubRepo: body.githubRepo || '',
+            githubRepos: Array.isArray(body.githubRepos) ? body.githubRepos : [],
           };
           const list = await readManual(env);
           list.push(entry);
@@ -412,7 +413,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks', 'githubRepo'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks', 'githubRepo', 'githubRepos'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -1044,7 +1045,7 @@ export default {
         const body = JSON.parse(raw || '{}');
         const repo = normalizeRepo(body.repository && body.repository.full_name);
         if (!repo) return json({ ok: false, reason: 'No repo in payload.' }, 400);
-        const dash = data.dashboards.find((d) => d.githubRepo && d.githubRepo.toLowerCase() === repo.toLowerCase());
+        const dash = data.dashboards.find((d) => (d.allRepos || []).some((r) => r.toLowerCase() === repo.toLowerCase()));
         const rows = parseCommits(body.commits || [], repo, dash ? dash.id : '');
         const activity = await readActivity(env);
         const dirty = mergeCommitsIntoActivity(activity, rows);
@@ -2205,6 +2206,7 @@ ${opts.manualEnabled ? `
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
       <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
       <label class="wide">GitHub repo <span style="color:var(--muted);font-weight:400;font-size:11px">(for commit tracking — owner/repo or the repo URL)</span><input id="f_repo" placeholder="munshot/paragon-dashboard" autocomplete="off"></label>
+      <label class="wide">More repos <span style="color:var(--muted);font-weight:400;font-size:11px">(optional — one per line, if this dashboard spans multiple repos)</span><textarea id="f_repos" rows="2" placeholder="owner/another-repo" autocomplete="off"></textarea></label>
       <div class="field wide">Brief for the assignee <span style="color:var(--muted);font-weight:400;font-size:11px">(what needs to be done — the teammate sees this)</span>
         <textarea id="f_brief" rows="4" placeholder="Explain the task: the goal, the data to use, what to build, and any gotchas…"></textarea>
         <div class="filebox" id="briefFiles"></div>
@@ -2918,6 +2920,7 @@ function setForm(d){
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
   G('f_url').value = d ? (d.dashboardUrl || '') : '';
   if (G('f_repo')) G('f_repo').value = d ? (d.githubRepo || '') : '';
+  if (G('f_repos')) G('f_repos').value = d ? ((d.githubRepos || []).join('\\n')) : '';
   setDue(d ? (d.dueDate || '') : '');
   fbState = d && Array.isArray(d.feedbacks) ? JSON.parse(JSON.stringify(d.feedbacks)) : [];
   renderFbRows();
@@ -3009,6 +3012,7 @@ if (CFG.manualEnabled){
       meetingUrl: links[0] ? links[0].url : '',
       dashboardUrl: G('f_url').value.trim(),
       githubRepo: (G('f_repo') ? G('f_repo').value : '').trim(),
+      githubRepos: (G('f_repos') ? G('f_repos').value : '').split('\\n').map(s => s.trim()).filter(Boolean),
       dueDate: G('f_due').value,
       feedbacks: getFeedbacks(),
       sections: getSections(),
@@ -3631,8 +3635,9 @@ function fbView(did, f, editable){
 // "🔨 Recent commits" block for a dashboard's detail card — the last 48h of
 // commits on its repo, summarized into bullets (like the terminal digest).
 function dashRecentCommitsHtml(d){
-  if (!d.githubRepo) return '';
-  const repoTag = \`<a href="https://github.com/\${esc(d.githubRepo)}" target="_blank" rel="noopener" class="lnk">⎇ \${esc(d.githubRepo)}</a>\`;
+  const repos = d.allRepos || (d.githubRepo ? [d.githubRepo] : []);
+  if (!repos.length) return '';
+  const repoTag = repos.map(r=>\`<a href="https://github.com/\${esc(r)}" target="_blank" rel="noopener" class="lnk">⎇ \${esc(r)}</a>\`).join(' ');
   if (!perfCommits) return \`<div class="dsec commit-sec"><h4>🔨 Recent commits</h4><div class="dnote muted">Loading…</div></div>\`;
   if (!perfCommits.enabled) return \`<div class="dsec commit-sec"><h4>🔨 Recent commits</h4><div class="dnote muted">\${repoTag} · commit tracking isn't switched on yet.</div></div>\`;
   const e = perfCE(d.id);

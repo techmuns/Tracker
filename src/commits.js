@@ -221,7 +221,7 @@ export function overviewFromActivity(activity, dashboards, days, nowMs, offsetMi
   const last7 = new Set(span.slice(-7));
   const inSpan = new Set(span);
   const byRepo = new Map();
-  for (const d of dashboards || []) if (d.githubRepo) byRepo.set(d.githubRepo.toLowerCase(), d);
+  for (const d of dashboards || []) for (const rp of (d.allRepos || (d.githubRepo ? [d.githubRepo] : []))) byRepo.set(String(rp).toLowerCase(), d);
   const totalByDay = Object.fromEntries(span.map((k) => [k, 0]));
   const perDash = new Map();
   let tToday = 0, tYest = 0, tLast7 = 0, tAll = 0;
