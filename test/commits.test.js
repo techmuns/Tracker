@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor, mergeCommitsIntoActivity, overviewFromActivity } from '../src/commits.js';
+import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor, mergeCommitsIntoActivity, overviewFromActivity, matchRepos } from '../src/commits.js';
 
 test('dayKey buckets by IST (UTC+5:30)', () => {
   assert.equal(dayKey(Date.parse('2026-07-28T18:29:00Z')), '2026-07-28'); // 23:59 IST
@@ -115,4 +115,48 @@ test('overviewFromActivity computes today/yesterday/7d from KV activity', () => 
   assert.equal(ov.total, 4);
   assert.equal(ov.dashboards[0].id, 'd1');
   assert.equal(ov.dashboards[0].summaries['2026-07-30'], '• did stuff');
+});
+
+test('matchRepos fuzzy-matches dashboards to the right repo', () => {
+  const repos = [
+    { full_name: 'ceekay/google-dashboard', name: 'google-dashboard' },
+    { full_name: 'ceekay/cpu-prices-tracker', name: 'cpu-prices-tracker' },
+    { full_name: 'techmuns/health-insurer', name: 'health-insurer' },
+    { full_name: 'techmuns/aer-fleet-pricing', name: 'aer-fleet-pricing' },
+    { full_name: 'ceekay/unrelated-thing', name: 'unrelated-thing' },
+  ];
+  const dashboards = [
+    { id: '1', name: 'Google Dashboard', githubRepo: '' },
+    { id: '2', name: 'CPU Prices Tracker Dashboard', githubRepo: '' },
+    { id: '3', name: 'HealthInsurer Dashborad', githubRepo: '' },   // typo on purpose
+    { id: '4', name: 'AER Fleet Pricing Dashboard', githubRepo: '' },
+  ];
+  const out = matchRepos(dashboards, repos);
+  assert.equal(out.find(o => o.id === '1').suggestion, 'ceekay/google-dashboard');
+  assert.equal(out.find(o => o.id === '2').suggestion, 'ceekay/cpu-prices-tracker');
+  assert.equal(out.find(o => o.id === '3').suggestion, 'techmuns/health-insurer');
+  assert.equal(out.find(o => o.id === '4').suggestion, 'techmuns/aer-fleet-pricing');
+  assert.ok(out.find(o => o.id === '1').score >= 50);
+});
+
+test('matchRepos leaves a blank suggestion when nothing is close', () => {
+  const out = matchRepos([{ id: 'x', name: 'Completely Different Thing', githubRepo: '' }],
+    [{ full_name: 'a/zzz', name: 'zzz' }]);
+  assert.equal(out[0].suggestion, '');
+});
+
+test('matchRepos uses the deploy-URL slug (strongest signal)', () => {
+  const repos = [
+    { full_name: 'techmuns/oem-trends-tracker', name: 'oem-trends-tracker' },
+    { full_name: 'ceekay/solardash', name: 'solardash' },
+    { full_name: 'ceekay/misc', name: 'misc' },
+  ];
+  const dashboards = [
+    // vague display name, but the deploy URL nails the repo
+    { id: '1', name: 'OEM Trends', githubRepo: '', dashboardUrl: 'https://oem-trends-tracker.pages.dev/' },
+    { id: '2', name: 'Solar Board', githubRepo: '', dashboardUrl: 'https://solardash-2of.pages.dev/x' },
+  ];
+  const out = matchRepos(dashboards, repos);
+  assert.equal(out.find(o => o.id === '1').suggestion, 'techmuns/oem-trends-tracker');
+  assert.equal(out.find(o => o.id === '2').suggestion, 'ceekay/solardash');
 });

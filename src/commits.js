@@ -125,6 +125,62 @@ export function overviewFromRows(rows, dashboards, days, nowMs, offsetMin = TZ_O
   };
 }
 
+// ── Fuzzy repo matching (auto-link dashboards → their GitHub repos) ───────
+const MATCH_STOP = new Set(['dashboard','dashboards','tracker','trackers','dash','the','a','of','and','for','to','on','v2','new']);
+function normTokens(s, strip) {
+  // Split camelCase ("HealthInsurer" → "Health Insurer") before tokenizing.
+  const str = String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  let t = str.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (strip) { const f = t.filter((x) => !MATCH_STOP.has(x)); if (f.length) t = f; }
+  return t;
+}
+function charBigrams(s) {
+  s = String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const b = []; for (let i = 0; i < s.length - 1; i++) b.push(s.slice(i, i + 2));
+  return b;
+}
+// Sørensen–Dice similarity of two token sets (0..1).
+function dice(a, b) {
+  const A = new Set(a), B = new Set(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0; for (const x of A) if (B.has(x)) inter++;
+  return (2 * inter) / (A.size + B.size);
+}
+// Similarity of a dashboard name to a repo name (word overlap + character bigrams).
+export function repoMatchScore(dashName, repoName) {
+  const ts = dice(normTokens(dashName, true), normTokens(repoName, true));
+  const bg = dice(charBigrams(dashName), charBigrams(repoName));
+  return 0.6 * ts + 0.4 * bg;
+}
+// The project slug from a deploy URL — the first subdomain label, which for
+// Cloudflare Pages/Workers is basically the repo name.
+//   https://oem-trends-tracker.pages.dev/…            → 'oem-trends-tracker'
+//   https://luggagedashboard.acc-123.workers.dev/…    → 'luggagedashboard'
+export function urlSlug(url) {
+  const m = String(url || '').match(/^https?:\/\/([a-z0-9-]+)\./i);
+  return m ? m[1] : '';
+}
+// For each dashboard, pick the best-matching repo. Matches on the deploy-URL
+// slug (strongest signal — it's derived from the repo) AND the display name.
+// `repos`: [{ full_name, name }]. Returns a suggestion + 0–100 score per dash.
+export function matchRepos(dashboards, repos, threshold = 0.34) {
+  return (dashboards || []).map((d) => {
+    const slug = urlSlug(d.dashboardUrl);
+    let best = '', bestScore = 0, second = 0;
+    for (const r of repos || []) {
+      const rn = r.name || String(r.full_name || '').split('/').pop();
+      const s = Math.max(repoMatchScore(d.name, rn), slug ? repoMatchScore(slug, rn) : 0);
+      if (s > bestScore) { second = bestScore; bestScore = s; best = r.full_name; }
+      else if (s > second) { second = s; }
+    }
+    return {
+      id: d.id, name: d.name, current: d.githubRepo || '',
+      suggestion: bestScore >= threshold ? best : '',
+      score: Math.min(100, Math.round(bestScore * 100)), margin: Math.round((bestScore - second) * 100),
+    };
+  });
+}
+
 // ── KV-backed commit activity ────────────────────────────────────────────
 // Commit data is small, so it lives in the existing KV (no database to set up).
 // Shape: { [repo]: { days: { [day]: { count, msgs:[…], summary } }, shas: { [sha]: day } } }

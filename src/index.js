@@ -10,7 +10,7 @@
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
 import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
-import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken } from './commits.js';
+import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos } from './commits.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -108,6 +108,31 @@ async function ingestCommitWindow(env, sinceMs) {
   pruneActivity(activity, 21, Date.now());
   if (Object.keys(dirty).length) await writeActivity(env, activity);
   return { polled, ingested, repos: repos.size };
+}
+// List every repo a token can see (owner / collaborator / org member), paged.
+async function listReposForToken(token) {
+  const headers = { 'User-Agent': 'muns-tracker', Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: 'Bearer ' + token };
+  const out = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await fetch(`https://api.github.com/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`, { headers });
+    if (!res.ok) break;
+    const arr = await res.json().catch(() => []);
+    if (!Array.isArray(arr) || !arr.length) break;
+    for (const r of arr) if (r && r.full_name) out.push({ full_name: r.full_name, name: r.name });
+    if (arr.length < 100) break;
+  }
+  return out;
+}
+// All repos across both account tokens, de-duplicated by full_name.
+async function listAllRepos(env) {
+  const seen = new Set(), out = [];
+  for (const t of [env.CEEKAY_AT, env.TECHMUNS_AT, env.GITHUB_TOKEN].filter(Boolean)) {
+    for (const r of await listReposForToken(t)) {
+      const k = r.full_name.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(r); }
+    }
+  }
+  return out;
 }
 // On-demand refresh (opened the Work-done view): backfill a 14-day window so
 // the day-by-day history isn't empty.
@@ -983,6 +1008,28 @@ export default {
         return json({ ok: true, ...r });
       }
 
+      // Auto-link: fuzzy-match dashboards to repos from the two accounts.
+      //   POST {}                       → dry-run: { repos:[...], suggestions:[...] }
+      //   POST { apply:{ id:'o/r',… } } → save the chosen repo per dashboard id
+      if (pathname === '/api/link-repos') {
+        if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const body = await request.json().catch(() => ({}));
+        if (body.apply && typeof body.apply === 'object') {
+          const list = await readManual(env); let applied = 0;
+          for (const [id, repo] of Object.entries(body.apply)) {
+            const i = list.findIndex((e) => e.id === id);
+            if (i >= 0) { list[i].githubRepo = String(repo || '').trim(); list[i].updatedAt = new Date().toISOString(); applied++; }
+          }
+          await writeManual(env, list);
+          return json({ ok: true, applied });
+        }
+        if (!hasGhToken(env)) return json({ ok: false, reason: 'Add the CEEKAY_AT / TECHMUNS_AT tokens first.' }, 503);
+        const repos = await listAllRepos(env);
+        const suggestions = matchRepos(data.dashboards, repos);
+        return json({ ok: true, repoCount: repos.length, repos: repos.map((r) => r.full_name), suggestions });
+      }
+
       if (pathname === '/api/gh-webhook') {
         if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
         if (!env.MANUAL) return json({ ok: false, reason: 'Storage not enabled.' }, 503);
@@ -1238,6 +1285,18 @@ function renderPage(data, opts) {
   .modal-head { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
   .modal-head h3 { margin:0; font-size:16px; }
   .modal-head .sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .modal-foot { padding:12px 20px; border-top:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  /* Auto-link repos modal */
+  .pf-actions { display:flex; justify-content:flex-end; margin:-6px 0 14px; }
+  .lk-list { display:flex; flex-direction:column; gap:7px; }
+  .lk-row { display:flex; align-items:center; gap:10px; }
+  .lk-dn { flex:0 0 42%; min-width:0; font-size:13px; font-weight:600; }
+  .lk-cur { display:block; font-size:11px; font-weight:500; color:var(--muted); }
+  .lk-in { flex:1; font:inherit; font-size:12.5px; padding:6px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); font-variant-numeric:tabular-nums; }
+  .lk-score { flex:0 0 auto; min-width:38px; text-align:center; font-size:11px; font-weight:800; border-radius:999px; padding:2px 7px; }
+  .lk-score.hi { color:#2f7d54; background:color-mix(in srgb,#4f9d6e 16%, transparent); }
+  .lk-score.mid { color:var(--warn-txt); background:var(--warn-bg); }
+  .lk-score.lo { color:var(--muted); background:var(--line2); }
   .modal-body { padding:16px 20px 20px; }
   .modal-body label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
   .modal-body select, .modal-body textarea, .modal-body input { width:100%; margin-bottom:13px; }
@@ -2227,6 +2286,7 @@ ${opts.manualEnabled ? `
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
 <div class="modal-bg" id="tutModalBg"><div class="modal" id="tutModal"></div></div>
 <div class="modal-bg" id="detailBg"><div class="modal modal-detail" id="detailModal"></div></div>
+<div class="modal-bg" id="linkBg"><div class="modal modal-detail" id="linkModal"></div></div>
 <input type="file" id="filePick" hidden>
 
 <script>
@@ -4085,12 +4145,57 @@ function renderPerformanceTab(){
   const rowsClient = clients.map(r=>\`<tr class="clk" data-perfclient="\${esc(r.name)}"><td class="pf-name">\${esc(r.name)}</td><td><div class="pf-team">\${r.team.length?r.team.map(t=>avatar(t)).join(''):'<span class="tmut">—</span>'}</div></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfCommitSumCell(r.list)}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
   const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Commits 7d</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="8" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
 
-  el.innerHTML = \`<div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
+  const linkBtn = CFG.manualEnabled ? \`<div class="pf-actions"><button class="btn ghost sm" id="pfLinkRepos" title="Match each dashboard to its GitHub repo automatically">🔗 Auto-link GitHub repos</button></div>\` : '';
+  el.innerHTML = \`<div class="pf-wrap">\${overall}\${linkBtn}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
+  { const lb = G('pfLinkRepos'); if (lb) lb.onclick = openLinkRepos; }
   // Person row → expand/collapse that person's own dashboards below it.
   el.querySelectorAll('.pf-prow').forEach(tr => tr.onclick = () => { const exp = tr.nextElementSibling; if (exp && exp.classList.contains('pf-pexp')) { exp.hidden = !exp.hidden; tr.classList.toggle('open', !exp.hidden); } });
   // Dashboard header → expand/collapse its day-by-day commit log.
   el.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
   el.querySelectorAll('[data-perfclient]').forEach(tr => tr.onclick = () => openClient(tr.dataset.perfclient));
+}
+
+// ── Auto-link dashboards → GitHub repos (fuzzy match, review, apply) ─────────
+function closeLinkRepos(){ const bg=G('linkBg'); if(bg) bg.classList.remove('open'); }
+async function openLinkRepos(){
+  const bg = G('linkBg'), modal = G('linkModal');
+  modal.innerHTML = \`<div class="modal-head"><h3>🔗 Link GitHub repos</h3><button class="x" id="linkX">×</button></div><div class="modal-body"><div class="dnote muted" style="padding:22px">Fetching your repos from ceekay + techmuns and matching by name…</div></div>\`;
+  bg.classList.add('open');
+  G('linkX').onclick = closeLinkRepos;
+  const res = await api('POST', '/api/link-repos', {});
+  const j = await res.json().catch(()=>({}));
+  if (!res.ok || !j.ok){
+    modal.querySelector('.modal-body').innerHTML = \`<div class="dnote muted" style="padding:22px">Couldn't fetch repos — \${esc(j.reason||('error '+res.status))}<br><br>Make sure the <b>CEEKAY_AT</b> / <b>TECHMUNS_AT</b> tokens are set as Worker secrets and the app is redeployed.</div>\`;
+    return;
+  }
+  renderLinkRepos(j);
+}
+function renderLinkRepos(j){
+  const modal = G('linkModal');
+  const sugg = j.suggestions || [];
+  const withSug = sugg.filter(s=>s.suggestion).length;
+  const dl = \`<datalist id="repoOpts">\${(j.repos||[]).map(r=>\`<option value="\${esc(r)}"></option>\`).join('')}</datalist>\`;
+  const rows = sugg.map(s=>{
+    const val = s.current || s.suggestion || '';
+    const cls = s.score>=55?'hi':(s.score>=34?'mid':'lo');
+    const badge = s.suggestion ? \`<span class="lk-score \${cls}" title="name-match confidence">\${s.score}%</span>\` : '<span class="lk-score lo" title="no confident match — type it in">?</span>';
+    return \`<div class="lk-row"><div class="lk-dn">\${esc(s.name)}\${s.current?\`<span class="lk-cur">now: \${esc(s.current)}</span>\`:''}</div><input class="lk-in" data-id="\${esc(s.id)}" list="repoOpts" value="\${esc(val)}" placeholder="owner/repo" autocomplete="off">\${badge}</div>\`;
+  }).join('');
+  modal.innerHTML = \`<div class="modal-head"><div><h3>🔗 Link GitHub repos</h3><div class="sub">Matched \${withSug} of \${sugg.length} by name (from \${j.repoCount} repos). Review, fix any, then Apply.</div></div><button class="x" id="linkX">×</button></div>
+    <div class="modal-body">\${dl}<div class="lk-list">\${rows||'<div class="dnote muted">No dashboards.</div>'}</div></div>
+    <div class="modal-foot"><button class="btn" id="lkApply">Apply links</button><button class="btn ghost" id="lkCancel">Cancel</button><span class="msg" id="lkMsg"></span></div>\`;
+  G('linkX').onclick = closeLinkRepos;
+  G('lkCancel').onclick = closeLinkRepos;
+  G('lkApply').onclick = applyLinkRepos;
+}
+async function applyLinkRepos(){
+  const apply = {};
+  document.querySelectorAll('#linkModal .lk-in').forEach(inp => { apply[inp.dataset.id] = inp.value.trim(); });
+  const msg = G('lkMsg'); if (msg) msg.textContent = 'Saving…';
+  const res = await api('POST', '/api/link-repos', { apply });
+  const j = await res.json().catch(()=>({}));
+  if (res.ok && j.ok){ closeLinkRepos(); uiToast('Linked ' + j.applied + ' dashboard' + (j.applied!==1?'s':'') + '.'); perfLoadCommits(true); location.reload(); }
+  else if (msg){ msg.textContent = 'Error: ' + (j.reason || res.status); }
 }
 
 // ── My Work: a teammate's deadline-first, customer-grouped personal view ─────
