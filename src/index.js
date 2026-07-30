@@ -1956,6 +1956,12 @@ function renderPage(data, opts) {
   /* The assignee brief is the headline instruction — give it an accent heading. */
   .dsec.brief-sec h4 { color:var(--accent); }
   .dsec.brief-sec .dlinks { margin-top:8px; }
+  .dsec.commit-sec h4 { display:flex; align-items:center; gap:9px; flex-wrap:wrap; color:#2f7d54; }
+  .cmt-meta { font-size:10.5px; font-weight:600; color:var(--muted); text-transform:none; letter-spacing:0; }
+  .cmt-day { padding:8px 0; border-bottom:1px solid var(--line2); }
+  .cmt-day:last-child { border-bottom:0; }
+  .cmt-day-h { font-size:11.5px; font-weight:800; color:var(--txt2); margin-bottom:4px; }
+  .cmt-sum { font-size:13px; color:var(--txt2); line-height:1.55; white-space:pre-line; }
   .dnote { font-size:13.5px; color:var(--txt2); white-space:pre-wrap; }
   .dnote.big { font-size:14.5px; color:var(--txt); background:var(--accent-weak); border:1px solid var(--accent-line); border-radius:10px; padding:11px 13px; }
   .dnote.muted { color:var(--muted); }
@@ -3560,6 +3566,20 @@ function fbView(did, f, editable){
     \${(u||(f.files&&f.files.length))?\`<div class="dlinks">\${u?\`<a href="\${esc(u)}" target="_blank" rel="noopener" class="lnk">▶ recording / message</a>\`:''}\${fileGrid(f.files)}</div>\`:''}
   </div>\`;
 }
+// "🔨 Recent commits" block for a dashboard's detail card — the last 48h of
+// commits on its repo, summarized into bullets (like the terminal digest).
+function dashRecentCommitsHtml(d){
+  if (!d.githubRepo) return '';
+  const repoTag = \`<a href="https://github.com/\${esc(d.githubRepo)}" target="_blank" rel="noopener" class="lnk">⎇ \${esc(d.githubRepo)}</a>\`;
+  if (!perfCommits) return \`<div class="dsec commit-sec"><h4>🔨 Recent commits</h4><div class="dnote muted">Loading…</div></div>\`;
+  if (!perfCommits.enabled) return \`<div class="dsec commit-sec"><h4>🔨 Recent commits</h4><div class="dnote muted">\${repoTag} · commit tracking isn't switched on yet.</div></div>\`;
+  const e = perfCE(d.id);
+  const days = perfCommits.days.slice(-2).reverse(); // today, then yesterday
+  const total = e ? days.reduce((n,k)=>n+(e.byDay[k]||0),0) : 0;
+  if (!e || !total) return \`<div class="dsec commit-sec"><h4>🔨 Recent commits</h4><div class="dnote muted">\${repoTag} · no commits in the last 48h.</div></div>\`;
+  const rows = days.filter(k=>e.byDay[k]>0).map(k=>\`<div class="cmt-day"><div class="cmt-day-h">\${esc(k)} · \${e.byDay[k]} commit\${e.byDay[k]!==1?'s':''}</div><div class="cmt-sum">\${e.summaries&&e.summaries[k]?esc(e.summaries[k]):'<span class="tmut">—</span>'}</div></div>\`).join('');
+  return \`<div class="dsec commit-sec"><h4>🔨 Recent commits <span class="cmt-meta">\${repoTag} · last 48h (\${total})</span></h4>\${rows}</div>\`;
+}
 function openDetail(id){
   const d = DATA.dashboards.find(x => x.id === id); if (!d) return;
   const s = SMAP[d.state], cur = STATES.findIndex(x => x.id === d.state);
@@ -3585,6 +3605,7 @@ function openDetail(id){
         \${factCell('Last updated', d.lastUpdated?esc(d.lastUpdated):'—')}
       </div>
       \${(d.brief||(d.briefFiles&&d.briefFiles.length)||(d.briefLinks&&d.briefLinks.length))?\`<div class="dsec brief-sec"><h4>📋 Brief — what to do</h4>\${d.brief?\`<div class="dnote big">\${esc(d.brief)}</div>\`:''}\${d.briefFiles&&d.briefFiles.length?\`<div class="thumbs">\${fileGrid(d.briefFiles)}</div>\`:''}\${d.briefLinks&&d.briefLinks.length?\`<div class="dlinks">\${d.briefLinks.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">🔗 \${esc(l.label||'link')}</a>\`).join('')}</div>\`:''}</div>\`:''}
+      \${dashRecentCommitsHtml(d)}
       <div class="dsec dnotes-sec"><div class="dnotes-head"><h4>📝 Working notes</h4>\${editable?'<span class="dnotes-hint">jot what to do here · delete when done</span>':''}</div>\${editable?\`<div class="dnote-add"><input id="dnoteInput" placeholder="Add a note — e.g. redo the P&amp;L chart colours…" autocomplete="off"><button class="btn sm" id="dnoteAdd">Add</button></div>\`:''}<div class="dnotes">\${(d.notes&&d.notes.length)?d.notes.slice().reverse().map(nt=>\`<div class="dnote-item"><span class="dnote-tx">\${esc(nt.text)}</span>\${editable?\`<button class="dnote-del" data-notedel="\${nt.ts}" title="Delete note">×</button>\`:''}</div>\`).join(''):'<div class="dnote muted">No notes yet — add what you want to do on this dashboard.</div>'}</div></div>
       <div class="dsec"><h4>Feedbacks (\${fbs.length})</h4>\${fbs.length?fbs.map(f=>fbView(d.id,f,editable)).join(''):'<div class="dnote muted">No feedback logged yet.</div>'}</div>
       \${links.length?\`<div class="dsec"><h4>YouTube Links</h4><div class="dlinks">\${links.map(l=>\`<a href="\${esc(l.url)}" target="_blank" rel="noopener" class="lnk">▶ \${esc(l.label)}</a>\`).join('')}</div></div>\`:''}
@@ -3597,6 +3618,9 @@ function openDetail(id){
       \${d.note?\`<div class="dsec"><h4>Notes</h4><div class="dnote">\${esc(d.note)}</div></div>\`:''}
     </div>\`;
   detailBg.classList.add('open');
+  // Load commit activity (if not cached) and re-render this card when it lands.
+  perfLoadCommits();
+  if (!perfCommits) perfReadyCb = () => { if (detailBg.classList.contains('open')) openDetail(id); };
   G('dX').onclick = closeDetail;
   if (editable) G('dEdit').onclick = () => { closeDetail(); openEdit(id); };
   { const dd = document.getElementById('dDel'); if (dd) dd.onclick = async () => {
