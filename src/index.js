@@ -1331,17 +1331,6 @@ function renderPage(data, opts) {
   .modal-head h3 { margin:0; font-size:16px; }
   .modal-head .sub { font-size:12px; color:var(--muted); margin-top:2px; }
   .modal-foot { padding:12px 20px; border-top:1px solid var(--line); display:flex; align-items:center; gap:10px; }
-  /* Auto-link repos modal */
-  .pf-actions { display:flex; justify-content:flex-end; margin:-6px 0 14px; }
-  .lk-list { display:flex; flex-direction:column; gap:7px; }
-  .lk-row { display:flex; align-items:center; gap:10px; }
-  .lk-dn { flex:0 0 42%; min-width:0; font-size:13px; font-weight:600; }
-  .lk-cur { display:block; font-size:11px; font-weight:500; color:var(--muted); }
-  .lk-in { flex:1; font:inherit; font-size:12.5px; padding:6px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--txt); font-variant-numeric:tabular-nums; }
-  .lk-score { flex:0 0 auto; min-width:38px; text-align:center; font-size:11px; font-weight:800; border-radius:999px; padding:2px 7px; }
-  .lk-score.hi { color:#2f7d54; background:color-mix(in srgb,#4f9d6e 16%, transparent); }
-  .lk-score.mid { color:var(--warn-txt); background:var(--warn-bg); }
-  .lk-score.lo { color:var(--muted); background:var(--line2); }
   .modal-body { padding:16px 20px 20px; }
   .modal-body label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
   .modal-body select, .modal-body textarea, .modal-body input { width:100%; margin-bottom:13px; }
@@ -2332,7 +2321,6 @@ ${opts.manualEnabled ? `
 <div class="modal-bg" id="updModalBg"><div class="modal" id="updModal"></div></div>
 <div class="modal-bg" id="tutModalBg"><div class="modal" id="tutModal"></div></div>
 <div class="modal-bg" id="detailBg"><div class="modal modal-detail" id="detailModal"></div></div>
-<div class="modal-bg" id="linkBg"><div class="modal modal-detail" id="linkModal"></div></div>
 <input type="file" id="filePick" hidden>
 
 <script>
@@ -4076,7 +4064,15 @@ function perfKpisFor(list){
   const ck = (perfCommits && perfCommits.enabled) ? \`<div class="pf-kpi"><div class="n">\${cToday}</div><div class="l">Commits today</div></div><div class="pf-kpi"><div class="n">\${cLast7}</div><div class="l">Commits 7d</div></div>\` : '';
   return \`<div class="pf-kpis"><div class="pf-kpi"><div class="n">\${O.total}</div><div class="l">Dashboards</div></div><div class="pf-kpi"><div class="n">\${O.done}</div><div class="l">Completed</div></div><div class="pf-kpi"><div class="n">\${O.partial}</div><div class="l">In progress</div></div>\${ck}<div class="pf-kpi pct"><div class="n">\${O.pct}%</div><div class="l">Weighted completion</div></div></div>\`;
 }
-function perfSortByCommits(list){ return list.slice().sort((a,b)=> (perfCE(b.id)?perfCE(b.id).last7:0)-(perfCE(a.id)?perfCE(a.id).last7:0)); }
+function perfSortByCommits(list){
+  return list.slice().sort((a,b)=>{
+    const ea=perfCE(a.id), eb=perfCE(b.id);
+    const ta=ea?ea.today:0, tb=eb?eb.today:0;
+    if (tb!==ta) return tb-ta;
+    return (eb?eb.last7:0)-(ea?ea.last7:0);
+  });
+}
+function perfTodaySum(list){ return list.reduce((n,d)=>{ const e=perfCE(d.id); return n+(e?e.today:0); },0); }
 function perfOffNote(){ return (perfCommits&&perfCommits.enabled)?'':'<div class="pf-note" style="margin:8px 0 0">Commit activity turns on once the GitHub read tokens are set as Worker secrets.</div>'; }
 function perfPersonSummaryHtml(name){
   const all = DATA.dashboards;
@@ -4101,7 +4097,7 @@ function perfCommitSumCell(list){
   if(!perfCommits) return '<span class="tmut">…</span>';
   if(!perfCommits.enabled) return '<span class="tmut">—</span>';
   let today=0,last7=0; list.forEach(d=>{ const e=perfCE(d.id); if(e){ today+=e.today; last7+=e.last7; } });
-  return last7 ? \`<span class="pf-ck" title="\${today} today · \${last7} in 7 days">\${last7}</span>\` : '<span class="tmut">0</span>';
+  return (today||last7) ? \`<span class="pf-ck" title="\${today} today · \${last7} in 7 days">\${today}</span>\` : '<span class="tmut">0</span>';
 }
 // Day-by-day mini bar chart across a byDay map.
 function perfSpark(byDay, days){
@@ -4169,7 +4165,7 @@ function perfDashItem(d){
   const e = perfCE(d.id);
   const stg = SMAP[d.state] || { label:d.state, color:'#888' };
   const cm = perfCommits && perfCommits.enabled
-    ? (e && e.last7 ? \`<span class="pf-ck" title="\${e.today} today · \${e.yesterday} yesterday · \${e.last7} in 7 days">\${e.last7} · 7d</span>\` : '<span class="tmut">0 commits</span>')
+    ? (e && (e.today || e.last7) ? \`<span class="pf-ck" title="\${e.today} today · \${e.yesterday} yesterday · \${e.last7} in 7 days">\${e.today} today</span>\` : '<span class="tmut">0 commits</span>')
     : '';
   const todos = perfDashTodos(d.id);
   const tdChip = todos.length ? \`<span class="pf-todochip" title="\${todos.filter(t=>t.done).length} of \${todos.length} filed to-dos done">✅ \${todos.filter(t=>t.done).length}/\${todos.length}</span>\` : '';
@@ -4188,10 +4184,12 @@ function renderPerformanceTab(){
   const noOwner = all.filter(d=>!d.owner);
   let people = owners.map(name => ({ name, kind:'owner', list: all.filter(d=>d.owner===name), ...perfOf(all.filter(d=>d.owner===name)) })).filter(r=>r.total);
   if (noOwner.length) people.push({ name:'Unassigned', kind:'none', list:noOwner, ...perfOf(noOwner) });
-  people.sort((a,b)=> b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
+  people.forEach(r => { r.cToday = perfTodaySum(r.list); });
+  people.sort((a,b)=> b.cToday-a.cToday || b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
   // By client
   let clients = (DATA.customers||[]).map(c => { const list = all.filter(d=>d.customers.includes(c)); const team=[...new Set(list.map(d=>d.owner).filter(Boolean))]; return { name:c, team, list, ...perfOf(list) }; }).filter(r=>r.total);
-  clients.sort((a,b)=> b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
+  clients.forEach(r => { r.cToday = perfTodaySum(r.list); });
+  clients.sort((a,b)=> b.cToday-a.cToday || b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
 
   const kpi = (n,l,cls)=>\`<div class="pf-kpi \${cls||''}"><div class="n">\${n}</div><div class="l">\${l}</div></div>\`;
   const overall = \`<div class="pf-overall"><h3>Overall progress</h3><div class="pf-kpis">
@@ -4200,67 +4198,20 @@ function renderPerformanceTab(){
 
   // Each person = a total row + a hidden row listing their own dashboards.
   const rowsPerson = people.map(r=>{
-    const items = r.list.slice().sort((a,b)=> (perfCE(b.id)?perfCE(b.id).last7:0)-(perfCE(a.id)?perfCE(a.id).last7:0)).map(perfDashItem).join('');
+    const items = perfSortByCommits(r.list).map(perfDashItem).join('');
     return \`<tr class="clk pf-prow" data-perfowner="\${esc(r.name)}"><td class="pf-name">\${r.kind==='owner'?avatar(r.name):''} \${esc(r.name)} <span class="pf-exp-caret">▾</span></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfCommitSumCell(r.list)}</td><td class="num">\${perfBar(r.pct)}</td></tr><tr class="pf-pexp" hidden><td colspan="7"><div class="pf-pd-list">\${items||'<div class="pf-note">No dashboards.</div>'}</div></td></tr>\`;
   }).join('');
-  const personTable = \`<table class="pf-table"><thead><tr><th>By person</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Commits 7d</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsPerson||'<tr><td colspan="7" class="pf-empty">No dashboards yet.</td></tr>'}<tr class="total"><td>TOTAL</td><td class="num">\${O.total}</td><td class="num">\${O.done}</td><td class="num">\${O.partial}</td><td class="num">\${O.not}</td><td class="num">\${perfCommitSumCell(all)}</td><td class="num">\${perfBar(O.pct)}</td></tr></tbody></table>\`;
+  const personTable = \`<table class="pf-table"><thead><tr><th>By person</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Today</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsPerson||'<tr><td colspan="7" class="pf-empty">No dashboards yet.</td></tr>'}<tr class="total"><td>TOTAL</td><td class="num">\${O.total}</td><td class="num">\${O.done}</td><td class="num">\${O.partial}</td><td class="num">\${O.not}</td><td class="num">\${perfCommitSumCell(all)}</td><td class="num">\${perfBar(O.pct)}</td></tr></tbody></table>\`;
 
   const rowsClient = clients.map(r=>\`<tr class="clk" data-perfclient="\${esc(r.name)}"><td class="pf-name">\${esc(r.name)}</td><td><div class="pf-team">\${r.team.length?r.team.map(t=>avatar(t)).join(''):'<span class="tmut">—</span>'}</div></td><td class="num">\${r.total}</td><td class="num">\${r.done}</td><td class="num">\${r.partial}</td><td class="num">\${r.not}</td><td class="num">\${perfCommitSumCell(r.list)}</td><td class="num">\${perfBar(r.pct)}</td></tr>\`).join('');
-  const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Commits 7d</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="8" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
+  const clientTable = \`<table class="pf-table"><thead><tr><th>By client</th><th>Team</th><th class="num">Total</th><th class="num">Completed</th><th class="num">Partial</th><th class="num">Not started</th><th class="num">Today</th><th class="num">Complete %</th></tr></thead><tbody>\${rowsClient||'<tr><td colspan="8" class="pf-empty">No clients yet.</td></tr>'}</tbody></table>\`;
 
-  const linkBtn = CFG.manualEnabled ? \`<div class="pf-actions"><button class="btn ghost sm" id="pfLinkRepos" title="Match each dashboard to its GitHub repo automatically">🔗 Auto-link GitHub repos</button></div>\` : '';
-  el.innerHTML = \`<div class="pf-wrap">\${overall}\${linkBtn}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
-  { const lb = G('pfLinkRepos'); if (lb) lb.onclick = openLinkRepos; }
+  el.innerHTML = \`<div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
   // Person row → expand/collapse that person's own dashboards below it.
   el.querySelectorAll('.pf-prow').forEach(tr => tr.onclick = () => { const exp = tr.nextElementSibling; if (exp && exp.classList.contains('pf-pexp')) { exp.hidden = !exp.hidden; tr.classList.toggle('open', !exp.hidden); } });
   // Dashboard header → expand/collapse its day-by-day commit log.
   el.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
   el.querySelectorAll('[data-perfclient]').forEach(tr => tr.onclick = () => openClient(tr.dataset.perfclient));
-}
-
-// ── Auto-link dashboards → GitHub repos (fuzzy match, review, apply) ─────────
-function closeLinkRepos(){ const bg=G('linkBg'); if(bg) bg.classList.remove('open'); }
-async function openLinkRepos(){
-  const bg = G('linkBg'), modal = G('linkModal');
-  modal.innerHTML = \`<div class="modal-head"><h3>🔗 Link GitHub repos</h3><button class="x" id="linkX">×</button></div><div class="modal-body"><div class="dnote muted" style="padding:22px">Fetching your repos from ceekay + techmuns and matching by name…</div></div>\`;
-  bg.classList.add('open');
-  G('linkX').onclick = closeLinkRepos;
-  const res = await api('POST', '/api/link-repos', {});
-  const j = await res.json().catch(()=>({}));
-  if (!res.ok || !j.ok){
-    modal.querySelector('.modal-body').innerHTML = \`<div class="dnote muted" style="padding:22px">Couldn't fetch repos — \${esc(j.reason||('error '+res.status))}<br><br>Make sure the <b>CEEKAY_AT</b> / <b>TECHMUNS_AT</b> tokens are set as Worker secrets and the app is redeployed.</div>\`;
-    return;
-  }
-  renderLinkRepos(j);
-}
-function renderLinkRepos(j){
-  const modal = G('linkModal');
-  const sugg = j.suggestions || [];
-  const withSug = sugg.filter(s=>s.suggestion).length;
-  const dl = \`<datalist id="repoOpts">\${(j.repos||[]).map(r=>\`<option value="\${esc(r)}"></option>\`).join('')}</datalist>\`;
-  const rows = sugg.map(s=>{
-    const val = s.current || s.suggestion || '';
-    const cls = s.score>=55?'hi':(s.score>=34?'mid':'lo');
-    const badge = s.exact ? '<span class="lk-score hi" title="exact match from Cloudflare Pages">✓ exact</span>'
-      : (s.suggestion ? \`<span class="lk-score \${cls}" title="name-match confidence">\${s.score}%</span>\` : '<span class="lk-score lo" title="no confident match — type it in">?</span>');
-    return \`<div class="lk-row"><div class="lk-dn">\${esc(s.name)}\${s.current?\`<span class="lk-cur">now: \${esc(s.current)}</span>\`:''}</div><input class="lk-in" data-id="\${esc(s.id)}" list="repoOpts" value="\${esc(val)}" placeholder="owner/repo" autocomplete="off">\${badge}</div>\`;
-  }).join('');
-  const src = j.cfProjects ? \`\${j.cfProjects} Cloudflare Pages + \${j.repoCount} repos\` : \`\${j.repoCount} repos\`;
-  modal.innerHTML = \`<div class="modal-head"><div><h3>🔗 Link GitHub repos</h3><div class="sub">Matched \${withSug} of \${sugg.length} (from \${src}). Review, fix any, then Apply.</div></div><button class="x" id="linkX">×</button></div>
-    <div class="modal-body">\${dl}<div class="lk-list">\${rows||'<div class="dnote muted">No dashboards.</div>'}</div></div>
-    <div class="modal-foot"><button class="btn" id="lkApply">Apply links</button><button class="btn ghost" id="lkCancel">Cancel</button><span class="msg" id="lkMsg"></span></div>\`;
-  G('linkX').onclick = closeLinkRepos;
-  G('lkCancel').onclick = closeLinkRepos;
-  G('lkApply').onclick = applyLinkRepos;
-}
-async function applyLinkRepos(){
-  const apply = {};
-  document.querySelectorAll('#linkModal .lk-in').forEach(inp => { apply[inp.dataset.id] = inp.value.trim(); });
-  const msg = G('lkMsg'); if (msg) msg.textContent = 'Saving…';
-  const res = await api('POST', '/api/link-repos', { apply });
-  const j = await res.json().catch(()=>({}));
-  if (res.ok && j.ok){ closeLinkRepos(); uiToast('Linked ' + j.applied + ' dashboard' + (j.applied!==1?'s':'') + '.'); perfLoadCommits(true); location.reload(); }
-  else if (msg){ msg.textContent = 'Error: ' + (j.reason || res.status); }
 }
 
 // ── My Work: a teammate's deadline-first, customer-grouped personal view ─────
