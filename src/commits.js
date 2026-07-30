@@ -190,12 +190,13 @@ export async function dbPutSummary(db, repo, day, count, summary, nowMs) {
 }
 
 // ── LLM summary (OpenAI) ─────────────────────────────────────────────────
-// Turns a day's raw commit messages into one plain-English line a founder can
-// read. Falls back to a trimmed join when no key is set or the call fails.
+// Turn a day's raw commit messages into a few short, plain-English bullet
+// points a non-technical founder can read. Falls back to the first messages as
+// bullets when no key is set or the call fails. Returns '' for no commits.
 export async function summarizeMessages(env, repo, day, messages) {
   const lines = (messages || []).map((m) => (typeof m === 'string' ? m : m.message)).filter(Boolean);
   if (!lines.length) return '';
-  const fallback = lines.slice(0, 6).join('; ').slice(0, 300);
+  const fallback = lines.slice(0, 3).map((l) => '• ' + l).join('\n').slice(0, 500);
   const key = env && env.OPENAI_API_KEY;
   if (!key) return fallback;
   try {
@@ -205,35 +206,71 @@ export async function summarizeMessages(env, repo, day, messages) {
       body: JSON.stringify({
         model: (env.OPENAI_MODEL || 'gpt-4o-mini'),
         temperature: 0.2,
-        max_tokens: 120,
+        max_tokens: 180,
         messages: [
-          { role: 'system', content: 'You summarize a day of code commits for a non-technical founder. Reply with ONE short sentence (max ~25 words) describing what changed. No preamble, no bullet points.' },
+          { role: 'system', content: 'You summarize a day of code commits for a NON-technical founder. Reply with 1 to 3 very short bullet points, each on its own line starting with "• ". Use plain language, no jargon, no file names or code terms. Fewer points is better. If little happened, use one bullet.' },
           { role: 'user', content: `Repo ${repo}, ${day}. Commit messages:\n` + lines.slice(0, 40).map((l) => '- ' + l).join('\n') },
         ],
       }),
     });
     if (!res.ok) return fallback;
     const j = await res.json();
-    const txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-    return (txt || fallback).trim().slice(0, 300);
+    let txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    txt = (txt || '').trim();
+    if (!txt) return fallback;
+    // Normalize each line to a "• " bullet.
+    txt = txt.split('\n').map((l) => l.trim()).filter(Boolean)
+      .map((l) => l.replace(/^([•\-*]\s*)?/, '• ')).join('\n');
+    return txt.slice(0, 600);
   } catch {
     return fallback;
   }
 }
 
-// ── GitHub REST poll ─────────────────────────────────────────────────────
-// Pull recent commits for one repo. Returns parsed rows (idempotent to ingest).
+// ── GitHub access tokens ─────────────────────────────────────────────────
+// Each dashboard repo belongs to one of two accounts (ceekay / techmuns) whose
+// read tokens live in the Worker env as CEEKAY_AT / TECHMUNS_AT. Match by the
+// repo owner, then fall back to trying the other token (repos under a shared
+// org still resolve). A generic GITHUB_TOKEN, if set, is tried last.
+export function ghTokensFor(env, repo) {
+  if (!env) return [];
+  const owner = String(repo || '').split('/')[0].toLowerCase();
+  const cee = env.CEEKAY_AT, tech = env.TECHMUNS_AT, gen = env.GITHUB_TOKEN;
+  const out = [];
+  if (owner === 'ceekay' && cee) out.push(cee);
+  else if (owner === 'techmuns' && tech) out.push(tech);
+  for (const t of [cee, tech, gen]) if (t && !out.includes(t)) out.push(t);
+  return out;
+}
+export function hasGhToken(env) {
+  return !!(env && (env.CEEKAY_AT || env.TECHMUNS_AT || env.GITHUB_TOKEN));
+}
+
+// ── GitHub REST fetch ────────────────────────────────────────────────────
+// Pull commits for one repo since `sinceMs`. Tries the owner-matched token
+// first, then the other on an auth/visibility error. Returns parsed rows.
 export async function fetchRepoCommits(env, repo, dashboardId, sinceMs) {
-  const headers = {
+  const baseHeaders = {
     'User-Agent': 'muns-tracker',
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (env && env.GITHUB_TOKEN) headers.Authorization = 'Bearer ' + env.GITHUB_TOKEN;
   const since = new Date(sinceMs).toISOString();
-  const urlOf = (r) => `https://api.github.com/repos/${r}/commits?per_page=100&since=${encodeURIComponent(since)}`;
-  const res = await fetch(urlOf(repo), { headers });
-  if (!res.ok) return { ok: false, status: res.status, rows: [] };
-  const list = await res.json().catch(() => []);
-  return { ok: true, status: 200, rows: parseCommits(list, repo, dashboardId) };
+  const url = `https://api.github.com/repos/${repo}/commits?per_page=100&since=${encodeURIComponent(since)}`;
+  const tokens = ghTokensFor(env, repo);
+  const tries = tokens.length ? tokens : [null];
+  let lastStatus = 0;
+  for (const tok of tries) {
+    const headers = { ...baseHeaders };
+    if (tok) headers.Authorization = 'Bearer ' + tok;
+    const res = await fetch(url, { headers });
+    if (res.ok) {
+      const list = await res.json().catch(() => []);
+      return { ok: true, status: 200, rows: parseCommits(list, repo, dashboardId) };
+    }
+    lastStatus = res.status;
+    // Only a wrong/insufficient token is worth retrying with another token.
+    if (res.status !== 401 && res.status !== 403 && res.status !== 404) break;
+  }
+  return { ok: false, status: lastStatus, rows: [] };
 }

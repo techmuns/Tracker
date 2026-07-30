@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows } from '../src/commits.js';
+import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor } from '../src/commits.js';
 
 test('dayKey buckets by IST (UTC+5:30)', () => {
   assert.equal(dayKey(Date.parse('2026-07-28T18:29:00Z')), '2026-07-28'); // 23:59 IST
@@ -70,4 +70,17 @@ test('overviewFromRows buckets commits from an unmapped repo under a repo: id', 
   assert.equal(ov.today, 1);
   assert.equal(ov.dashboards[0].id, 'repo:stranger/repo');
   assert.equal(ov.dashboards[0].name, 'stranger/repo');
+});
+
+test('ghTokensFor matches the repo owner to the right account token', () => {
+  const env = { CEEKAY_AT: 'cee', TECHMUNS_AT: 'tech' };
+  // owner-matched token first, then the other as fallback
+  assert.deepEqual(ghTokensFor(env, 'ceekay/alpha'), ['cee', 'tech']);
+  assert.deepEqual(ghTokensFor(env, 'techmuns/beta'), ['tech', 'cee']);
+  // unknown owner (e.g. an org) → try both
+  assert.deepEqual(ghTokensFor(env, 'someorg/gamma'), ['cee', 'tech']);
+  // only one token present
+  assert.deepEqual(ghTokensFor({ CEEKAY_AT: 'cee' }, 'techmuns/x'), ['cee']);
+  // none present
+  assert.deepEqual(ghTokensFor({}, 'ceekay/x'), []);
 });

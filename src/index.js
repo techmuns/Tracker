@@ -10,7 +10,7 @@
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
 import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
-import { parseCommits, overviewFromRows, dbIngest, dbRecentRows, dbMessagesForDay, dbGetSummary, dbPutSummary, dbSummariesSince, summarizeMessages, fetchRepoCommits } from './commits.js';
+import { parseCommits, overviewFromRows, dbIngest, dbRecentRows, dbMessagesForDay, dbGetSummary, dbPutSummary, dbSummariesSince, summarizeMessages, fetchRepoCommits, hasGhToken } from './commits.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -73,15 +73,14 @@ async function getDataset(env) {
 }
 
 // ── Commit tracking orchestration ────────────────────────────────────────
-// Poll every dashboard's GitHub repo for recent commits, store them (idempotent
-// by SHA), then re-summarize any day whose commit count changed. Safe no-op
-// when D1 isn't bound. Backfills a 14-day window so history isn't empty on day 1.
-async function pollCommits(env) {
-  if (!env.DB) return { polled: 0, ingested: 0 };
+// For every dashboard's GitHub repo, pull commits since `sinceMs` (matching the
+// right account token per repo), store them (idempotent by SHA), then re-write
+// the bullet summary of any day whose commit count changed. No-op without D1.
+async function ingestCommitWindow(env, sinceMs) {
+  if (!env.DB) return { polled: 0, ingested: 0, repos: 0 };
   const ds = await getDataset(env);
   const repos = new Map(); // repo → dashboardId (one dashboard per repo)
   for (const d of ds.dashboards) if (d.githubRepo && !repos.has(d.githubRepo)) repos.set(d.githubRepo, d.id);
-  const sinceMs = Date.now() - 14 * 86400000;
   let polled = 0, ingested = 0; const changed = new Map(); // repo → Set(day)
   for (const [repo, dashId] of repos) {
     polled++;
@@ -94,6 +93,12 @@ async function pollCommits(env) {
   for (const [repo, days] of changed) await summarizeRepoDays(env, repo, [...days]);
   return { polled, ingested, repos: repos.size };
 }
+// On-demand refresh (opened the Work-done view): backfill a 14-day window so
+// the day-by-day history isn't empty.
+async function pollCommits(env) { return ingestCommitWindow(env, Date.now() - 14 * 86400000); }
+// The daily 8pm digest: pull the last 24h for every repo and (re)summarize it
+// into a few plain-English bullets. Days with no commits get no summary.
+async function runCommitDigest(env) { return ingestCommitWindow(env, Date.now() - 24 * 3600 * 1000); }
 
 // Re-summarize a repo's day only when its stored count is stale (bounds LLM calls).
 async function summarizeRepoDay(env, repo, day) {
@@ -960,7 +965,7 @@ export default {
         const days = Math.min(60, Math.max(1, parseInt(url.searchParams.get('days') || '14', 10) || 14));
         const now = Date.now();
         // Opportunistic refresh: if a token is configured, poll in the background.
-        if (env.GITHUB_TOKEN) bg(pollCommits(env));
+        if (hasGhToken(env)) bg(pollCommits(env));
         const rows = await dbRecentRows(env.DB, days, now);
         const ov = overviewFromRows(rows, data.dashboards, days, now);
         const sums = await dbSummariesSince(env.DB, ov.days[0]);
@@ -1028,12 +1033,12 @@ export default {
   // Crons (UTC; see wrangler.toml):
   //   "30 15 * * *"  → 9:00pm IST daily     → daily status email
   //   "30 15 * * 3"  → 9:00pm IST Wednesday → weekly Build-Update PDF digest
-  //   "*/30 * * * *" → every 30 min         → poll GitHub commits (no-op w/o D1)
+  //   "30 14 * * *"  → 8:00pm IST daily     → GitHub commit digest (no-op w/o D1)
   async scheduled(event, env, ctx) {
     const cron = event && event.cron;
     if (cron === '30 15 * * 3') ctx.waitUntil(runDigest(env, 'cron').catch(() => {}));
-    else if (cron === '30 15 * * *') ctx.waitUntil(runDailyStatus(env, 'cron').catch(() => {}));
-    else ctx.waitUntil(pollCommits(env).catch(() => {}));
+    else if (cron === '30 14 * * *') ctx.waitUntil(runCommitDigest(env).catch(() => {}));
+    else ctx.waitUntil(runDailyStatus(env, 'cron').catch(() => {}));
   },
 };
 
@@ -1414,7 +1419,7 @@ function renderPage(data, opts) {
   .pf-dl:last-child { border-bottom:0; }
   .pf-dl-d { font-size:12px; font-weight:700; color:var(--txt2); }
   .pf-dl-c { font-size:12px; font-weight:800; color:#2f7d54; text-align:right; }
-  .pf-dl-s { font-size:12.5px; color:var(--txt2); line-height:1.5; }
+  .pf-dl-s { font-size:12.5px; color:var(--txt2); line-height:1.5; white-space:pre-line; }
   .pf-bd { padding:6px 0 10px; }
   .pf-bd-h { font-size:11px; font-weight:700; color:var(--muted); letter-spacing:.02em; margin-bottom:6px; }
   .pf-bd-steps { display:flex; flex-direction:column; }

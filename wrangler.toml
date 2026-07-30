@@ -34,23 +34,27 @@ id = "fe377c45c1fa42cb803f04235c726823"
 #   "30 15 * * *"  → daily 9pm IST   → daily status email (per-member/dashboard progress)
 #   "30 15 * * 3"  → Wednesday 9pm IST → weekly Build-Update PDF digest (all PDFs, one email)
 # Both go to DIGEST_TO (the founder). The handler branches on event.cron.
-# The third cron polls GitHub commits every 30 min (safe no-op until DB is set).
+# The third cron runs the GitHub commit digest at 8:00pm IST (14:30 UTC) daily
+# (safe no-op until the D1 database + tokens below are set).
 [triggers]
-crons = ["30 15 * * *", "30 15 * * 3", "*/30 * * * *"]
+crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 
 # ── Commit tracking (D1) — OPTIONAL, OFF until you finish these steps ──────
-# The Performance view shows GitHub commits per dashboard ("yesterday this much,
-# today this much") and an AI summary of each day. It stays dormant until the
-# D1 database below is bound; the rest of the app is unaffected.
+# The Work-done view shows each dashboard's GitHub commits, and every day at
+# 8pm IST a job pulls the last 24h of commits per repo and summarizes them into
+# a few plain-English bullet points. It stays dormant until the D1 database
+# below is bound; the rest of the app is unaffected.
 #
 #   1) Create the database:
 #        npx wrangler d1 create tracker_commits
 #   2) Paste the printed database_id below and UNCOMMENT this block.
 #   3) Create the tables (schema.sql is in the repo root):
 #        npx wrangler d1 execute tracker_commits --remote --file schema.sql
-#   4) Give the poller a GitHub token (fine-grained, read-only "Contents" on the
-#      dashboard repos) and your OpenAI key for the daily summaries:
-#        npx wrangler secret put GITHUB_TOKEN
+#   4) Add the two account read-tokens and your OpenAI key (for the summaries).
+#      Each dashboard repo belongs to ceekay or techmuns; the job matches the
+#      repo owner to the right token (and falls back to the other if needed):
+#        npx wrangler secret put CEEKAY_AT        # ceekay account read token
+#        npx wrangler secret put TECHMUNS_AT      # techmuns account read token
 #        npx wrangler secret put OPENAI_API_KEY
 #   5) (Optional, for real-time) add a webhook on each repo (or one org-wide):
 #        Payload URL:  https://tracker.tech-441.workers.dev/api/gh-webhook
