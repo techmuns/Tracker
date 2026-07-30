@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor, mergeCommitsIntoActivity, overviewFromActivity, matchRepos } from '../src/commits.js';
+import { dayKey, parseCommits, aggregateByDay, recentDays, overviewFromRows, ghTokensFor, mergeCommitsIntoActivity, overviewFromActivity, matchRepos, pagesRepoMap } from '../src/commits.js';
 
 test('dayKey buckets by IST (UTC+5:30)', () => {
   assert.equal(dayKey(Date.parse('2026-07-28T18:29:00Z')), '2026-07-28'); // 23:59 IST
@@ -159,4 +159,21 @@ test('matchRepos uses the deploy-URL slug (strongest signal)', () => {
   const out = matchRepos(dashboards, repos);
   assert.equal(out.find(o => o.id === '1').suggestion, 'techmuns/oem-trends-tracker');
   assert.equal(out.find(o => o.id === '2').suggestion, 'ceekay/solardash');
+});
+
+test('pagesRepoMap + matchRepos gives exact repos from Cloudflare Pages', () => {
+  const projects = [
+    { subdomain: 'oem-trends-tracker.pages.dev', source: { config: { owner: 'techmuns', repo_name: 'oem-trends-tracker' } } },
+    { name: 'solardash', subdomain: 'solardash-2of.pages.dev', source: { config: { owner: 'ceekay', repo_name: 'solar-dashboard' } } },
+  ];
+  const map = pagesRepoMap(projects);
+  assert.equal(map['oem-trends-tracker'], 'techmuns/oem-trends-tracker');
+  assert.equal(map['solardash-2of'], 'ceekay/solar-dashboard');
+  // exactMap overrides fuzzy — note the repo name (solar-dashboard) differs from the slug
+  const out = matchRepos(
+    [{ id: '1', name: 'Solar Board', dashboardUrl: 'https://solardash-2of.pages.dev/' }],
+    [{ full_name: 'ceekay/misc', name: 'misc' }], 0.34, map);
+  assert.equal(out[0].suggestion, 'ceekay/solar-dashboard');
+  assert.equal(out[0].exact, true);
+  assert.equal(out[0].score, 100);
 });

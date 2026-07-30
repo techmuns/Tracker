@@ -10,7 +10,7 @@
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
 import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
-import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos } from './commits.js';
+import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap } from './commits.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -119,6 +119,32 @@ async function listReposForToken(token) {
     const arr = await res.json().catch(() => []);
     if (!Array.isArray(arr) || !arr.length) break;
     for (const r of arr) if (r && r.full_name) out.push({ full_name: r.full_name, name: r.name });
+    if (arr.length < 100) break;
+  }
+  return out;
+}
+// Cloudflare account id for the API (explicit secret, else the first account).
+async function cfAccountId(env) {
+  if (env.CF_ACCOUNT_ID) return env.CF_ACCOUNT_ID;
+  const res = await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=1', { headers: { Authorization: 'Bearer ' + env.CF_API_TOKEN } });
+  if (!res.ok) return '';
+  const j = await res.json().catch(() => ({}));
+  return (j && j.result && j.result[0] && j.result[0].id) || '';
+}
+// List Cloudflare Pages projects (each carries its connected GitHub repo).
+async function listCloudflarePages(env) {
+  if (!env.CF_API_TOKEN) return [];
+  const acct = await cfAccountId(env);
+  if (!acct) return [];
+  const headers = { Authorization: 'Bearer ' + env.CF_API_TOKEN };
+  const out = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acct}/pages/projects?per_page=100&page=${page}`, { headers });
+    if (!res.ok) break;
+    const j = await res.json().catch(() => ({}));
+    const arr = (j && j.result) || [];
+    if (!arr.length) break;
+    out.push(...arr);
     if (arr.length < 100) break;
   }
   return out;
@@ -1025,10 +1051,13 @@ export default {
           await writeManual(env, list);
           return json({ ok: true, applied });
         }
-        if (!hasGhToken(env)) return json({ ok: false, reason: 'Add the CEEKAY_AT / TECHMUNS_AT tokens first.' }, 503);
+        if (!hasGhToken(env) && !env.CF_API_TOKEN) return json({ ok: false, reason: 'Add the CEEKAY_AT / TECHMUNS_AT tokens (or a CF_API_TOKEN) first.' }, 503);
         const repos = await listAllRepos(env);
-        const suggestions = matchRepos(data.dashboards, repos);
-        return json({ ok: true, repoCount: repos.length, repos: repos.map((r) => r.full_name), suggestions });
+        // Exact matches from Cloudflare Pages (deploy URL → its connected repo).
+        let exactMap = null, exactCount = 0;
+        if (env.CF_API_TOKEN) { try { exactMap = pagesRepoMap(await listCloudflarePages(env)); exactCount = Object.keys(exactMap).length; } catch (e) {} }
+        const suggestions = matchRepos(data.dashboards, repos, 0.34, exactMap);
+        return json({ ok: true, repoCount: repos.length, cfProjects: exactCount, repos: repos.map((r) => r.full_name), suggestions });
       }
 
       if (pathname === '/api/gh-webhook') {
@@ -4183,10 +4212,12 @@ function renderLinkRepos(j){
   const rows = sugg.map(s=>{
     const val = s.current || s.suggestion || '';
     const cls = s.score>=55?'hi':(s.score>=34?'mid':'lo');
-    const badge = s.suggestion ? \`<span class="lk-score \${cls}" title="name-match confidence">\${s.score}%</span>\` : '<span class="lk-score lo" title="no confident match — type it in">?</span>';
+    const badge = s.exact ? '<span class="lk-score hi" title="exact match from Cloudflare Pages">✓ exact</span>'
+      : (s.suggestion ? \`<span class="lk-score \${cls}" title="name-match confidence">\${s.score}%</span>\` : '<span class="lk-score lo" title="no confident match — type it in">?</span>');
     return \`<div class="lk-row"><div class="lk-dn">\${esc(s.name)}\${s.current?\`<span class="lk-cur">now: \${esc(s.current)}</span>\`:''}</div><input class="lk-in" data-id="\${esc(s.id)}" list="repoOpts" value="\${esc(val)}" placeholder="owner/repo" autocomplete="off">\${badge}</div>\`;
   }).join('');
-  modal.innerHTML = \`<div class="modal-head"><div><h3>🔗 Link GitHub repos</h3><div class="sub">Matched \${withSug} of \${sugg.length} by name (from \${j.repoCount} repos). Review, fix any, then Apply.</div></div><button class="x" id="linkX">×</button></div>
+  const src = j.cfProjects ? \`\${j.cfProjects} Cloudflare Pages + \${j.repoCount} repos\` : \`\${j.repoCount} repos\`;
+  modal.innerHTML = \`<div class="modal-head"><div><h3>🔗 Link GitHub repos</h3><div class="sub">Matched \${withSug} of \${sugg.length} (from \${src}). Review, fix any, then Apply.</div></div><button class="x" id="linkX">×</button></div>
     <div class="modal-body">\${dl}<div class="lk-list">\${rows||'<div class="dnote muted">No dashboards.</div>'}</div></div>
     <div class="modal-foot"><button class="btn" id="lkApply">Apply links</button><button class="btn ghost" id="lkCancel">Cancel</button><span class="msg" id="lkMsg"></span></div>\`;
   G('linkX').onclick = closeLinkRepos;

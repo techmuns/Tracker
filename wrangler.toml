@@ -52,6 +52,12 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 #   2) Deploy:  npm run deploy
 #   3) In the app, set each dashboard's GitHub repo (Edit → GitHub repo).
 #
+#   (Optional, exact auto-link) add a Cloudflare API token with Pages:Read so
+#   the "Auto-link" button reads each dashboard's EXACT repo from its Pages
+#   project instead of fuzzy-matching by name:
+#        npx wrangler secret put CF_API_TOKEN
+#        npx wrangler secret put CF_ACCOUNT_ID   # optional; else the first account
+#
 #   (Optional real-time) also add a push webhook on each repo (or org-wide):
 #        Payload URL:  https://tracker.tech-441.workers.dev/api/gh-webhook
 #        Content type: application/json   Event: "push"   Secret: <pick one>

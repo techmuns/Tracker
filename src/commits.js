@@ -160,12 +160,27 @@ export function urlSlug(url) {
   const m = String(url || '').match(/^https?:\/\/([a-z0-9-]+)\./i);
   return m ? m[1] : '';
 }
-// For each dashboard, pick the best-matching repo. Matches on the deploy-URL
-// slug (strongest signal — it's derived from the repo) AND the display name.
+// subdomain → "owner/repo" from Cloudflare Pages projects (the exact repo each
+// dashboard was deployed from). project.subdomain is like "oem-trends.pages.dev".
+export function pagesRepoMap(projects) {
+  const map = {};
+  for (const p of projects || []) {
+    const sub = String(p.subdomain || '').replace(/\.pages\.dev$/i, '').toLowerCase() || String(p.name || '').toLowerCase();
+    const cfg = p.source && p.source.config;
+    if (sub && cfg && cfg.owner && cfg.repo_name) map[sub] = cfg.owner + '/' + cfg.repo_name;
+  }
+  return map;
+}
+// For each dashboard, pick its repo. If `exactMap` (deploy-slug → repo, from
+// Cloudflare Pages) has an entry for the dashboard's deploy URL, that's used as
+// an exact 100% match. Otherwise fall back to fuzzy matching on the slug + name.
 // `repos`: [{ full_name, name }]. Returns a suggestion + 0–100 score per dash.
-export function matchRepos(dashboards, repos, threshold = 0.34) {
+export function matchRepos(dashboards, repos, threshold = 0.34, exactMap = null) {
   return (dashboards || []).map((d) => {
     const slug = urlSlug(d.dashboardUrl);
+    if (exactMap && slug && exactMap[slug]) {
+      return { id: d.id, name: d.name, current: d.githubRepo || '', suggestion: exactMap[slug], score: 100, margin: 100, exact: true };
+    }
     let best = '', bestScore = 0, second = 0;
     for (const r of repos || []) {
       const rn = r.name || String(r.full_name || '').split('/').pop();
