@@ -4133,8 +4133,8 @@ function perfSortByCommits(list){
   return list.slice().sort((a,b)=>{
     const ea=perfCE(a.id), eb=perfCE(b.id);
     const ta=ea?ea.today:0, tb=eb?eb.today:0;
-    if (tb!==ta) return tb-ta;
-    return (eb?eb.last7:0)-(ea?ea.last7:0);
+    if (ta!==tb) return ta-tb;
+    return (ea?ea.last7:0)-(eb?eb.last7:0);
   });
 }
 function perfTodaySum(list){ return list.reduce((n,d)=>{ const e=perfCE(d.id); return n+(e?e.today:0); },0); }
@@ -4260,11 +4260,11 @@ function renderPerformanceTab(){
   let people = owners.map(name => ({ name, kind:'owner', list: all.filter(d=>d.owner===name), ...perfOf(all.filter(d=>d.owner===name)) })).filter(r=>r.total);
   if (noOwner.length) people.push({ name:'Unassigned', kind:'none', list:noOwner, ...perfOf(noOwner) });
   people.forEach(r => { r.cToday = perfTodaySum(r.list); });
-  people.sort((a,b)=> b.cToday-a.cToday || b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
+  people.sort((a,b)=> a.cToday-b.cToday || a.total-b.total || a.pct-b.pct || a.name.localeCompare(b.name));
   // By client
   let clients = (DATA.customers||[]).map(c => { const list = all.filter(d=>d.customers.includes(c)); const team=[...new Set(list.map(d=>d.owner).filter(Boolean))]; return { name:c, team, list, ...perfOf(list) }; }).filter(r=>r.total);
   clients.forEach(r => { r.cToday = perfTodaySum(r.list); });
-  clients.sort((a,b)=> b.cToday-a.cToday || b.total-a.total || b.pct-a.pct || a.name.localeCompare(b.name));
+  clients.sort((a,b)=> a.cToday-b.cToday || a.total-b.total || a.pct-b.pct || a.name.localeCompare(b.name));
 
   const kpi = (n,l,cls)=>\`<div class="pf-kpi \${cls||''}"><div class="n">\${n}</div><div class="l">\${l}</div></div>\`;
   const overall = \`<div class="pf-overall"><h3>Overall progress</h3><div class="pf-kpis">
