@@ -4153,9 +4153,19 @@ function perfClientSummaryHtml(name){
   const groupsHtml = groups.map(g => \`<div class="pf-cgroup"><div class="pf-cg-head">\${g.owner!=='Unassigned'?avatar(g.owner):''}<b>\${esc(g.owner)}</b><span class="pf-cg-meta">\${g.list.length} dashboard\${g.list.length!==1?'s':''}\${(perfCommits&&perfCommits.enabled)?' · '+g.list.reduce((n,d)=>{const e=perfCE(d.id);return n+(e?e.last7:0);},0)+' commits · 7d':''}</span></div><div class="pf-pd-list" style="padding:8px 0 0">\${g.list.map(perfDashItem).join('')}</div></div>\`).join('') || '<div class="pf-empty">No dashboards for this client.</div>';
   return \`<div class="pf-embed"><div class="pf-overall" style="margin:0 0 12px"><h3>\${esc(name)} · work done</h3>\${perfKpisFor(all)}</div>\${perfOffNote()}<div class="section-t">By teammate</div>\${groupsHtml}</div>\`;
 }
-function wirePerfEmbed(root){
-  root.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
+// Dashboard row → open it to edit; the caret alone expands the breakdown/commits inline.
+function wirePfDashRows(root){
+  root.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => {
+    ev.stopPropagation();
+    if (ev.target.closest('.pf-caret')){
+      const b = h.parentElement.querySelector('.pf-pd-body');
+      if (b){ b.hidden = !b.hidden; h.classList.toggle('open', !b.hidden); }
+      return;
+    }
+    closeDrawer(); openDetail(h.dataset.pddash);
+  });
 }
+function wirePerfEmbed(root){ wirePfDashRows(root); }
 function perfCE(id){ if(!perfCommits||!perfCommits.enabled) return null; return (perfCommits.dashboards||[]).find(d=>d.id===id)||null; }
 // A "commits (7d)" table cell for a set of dashboards. '…' loading, '—' off.
 function perfCommitSumCell(list){
@@ -4236,7 +4246,7 @@ function perfDashItem(d){
   const tdChip = todos.length ? \`<span class="pf-todochip" title="\${todos.filter(t=>t.done).length} of \${todos.length} filed to-dos done">✅ \${todos.filter(t=>t.done).length}/\${todos.length}</span>\` : '';
   const pct = perfDashPct(d);
   const pctHtml = \`<span class="pf-pd-pct" title="Work done — \${pct}% through the build stages"><b>\${pct}%</b><i style="--w:\${pct}%"></i></span>\`;
-  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${pctHtml}\${cm}<span class="pf-caret">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashBreakdown(d)}\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
+  return \`<div class="pf-pd"><div class="pf-pd-h clk" data-pddash="\${esc(d.id)}" title="Open \${esc(d.name)} to edit"><div class="pf-pd-main"><div class="pf-pd-top"><span class="pf-pd-name">\${esc(d.name)}</span>\${perfStateLabel(d.state)}</div><div class="pf-pd-sub"><span class="pf-stagechip" style="color:\${stg.color};background:color-mix(in srgb, \${stg.color} 14%, transparent)">\${esc(stg.label)}</span>\${tdChip}\${d.customers.length?\`<span class="tmut">· \${esc(d.customers.join(', '))}</span>\`:''}</div></div><div class="pf-pd-r">\${pctHtml}\${cm}<span class="pf-caret" title="Show breakdown, to-dos & commits">▾</span></div></div><div class="pf-pd-body" hidden>\${perfDashBreakdown(d)}\${perfDashTodosHtml(d)}\${perfDashDaily(e)}</div></div>\`;
 }
 
 function renderPerformanceTab(){
@@ -4274,8 +4284,8 @@ function renderPerformanceTab(){
   el.innerHTML = \`<div class="pf-wrap">\${overall}\${personTable}\${clientTable}\${perfCommitPanel()}</div>\`;
   // Person row → expand/collapse that person's own dashboards below it.
   el.querySelectorAll('.pf-prow').forEach(tr => tr.onclick = () => { const exp = tr.nextElementSibling; if (exp && exp.classList.contains('pf-pexp')) { exp.hidden = !exp.hidden; tr.classList.toggle('open', !exp.hidden); } });
-  // Dashboard header → expand/collapse its day-by-day commit log.
-  el.querySelectorAll('[data-pddash]').forEach(h => h.onclick = (ev) => { ev.stopPropagation(); const b=h.parentElement.querySelector('.pf-pd-body'); if(b){ b.hidden=!b.hidden; h.classList.toggle('open', !b.hidden); } });
+  // Dashboard row → open it to edit; the caret alone expands the day log inline.
+  wirePfDashRows(el);
   el.querySelectorAll('[data-perfclient]').forEach(tr => tr.onclick = () => openClient(tr.dataset.perfclient));
 }
 
