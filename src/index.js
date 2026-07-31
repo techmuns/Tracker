@@ -1546,7 +1546,7 @@ function renderPage(data, opts) {
   .pf-todos-h { font-size:11px; font-weight:700; color:var(--muted); letter-spacing:.02em; margin-bottom:6px; }
   .pf-todo { display:flex; align-items:baseline; gap:8px; font-size:12.5px; color:var(--txt2); padding:4px 0; line-height:1.45; }
   .pf-todo-x { flex:none; font-size:11px; }
-  .pf-todo.done span:last-child { text-decoration:line-through; color:var(--muted); }
+  .pf-todo.done span:last-child { color:var(--muted); }
   /* performance embedded in the Team profile / Client drawer */
   .pf-embed .pf-overall { box-shadow:none; }
   .pf-embed .pf-kpis { grid-template-columns:repeat(3,1fr); }
