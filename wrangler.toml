@@ -43,18 +43,23 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 # at 8pm IST a job pulls the last 24h of commits per repo and summarizes them
 # into a few plain-English bullet points. It's OFF until you add these secrets:
 #
-#   1) Add the two account read-tokens + your OpenAI key (for the summaries).
+#   1) Add the two account read-tokens + an LLM key (for the summaries).
 #      Each dashboard repo belongs to ceekay or techmuns; the job matches the
 #      repo owner to the right token (and falls back to the other if needed):
 #        npx wrangler secret put CEEKAY_AT        # ceekay account read token
 #        npx wrangler secret put TECHMUNS_AT      # techmuns account read token
-#        npx wrangler secret put OPENAI_API_KEY   # makes the bullets short/plain
 #
-#      (Optional) Claude via AWS Bedrock instead of OpenAI: set LLM_PROVIDER
-#      to "claude" ([vars] below or a secret) and add the Bedrock key. See
-#      src/claudeSummary.js — an entirely separate path from the OpenAI one
-#      above, off by default:
-#        npx wrangler secret put temp_claude_token
+#      The summaries run on Claude via Amazon Bedrock, with OpenAI as the
+#      automatic fallback. Add whichever keys you have — Bedrock is used
+#      whenever its key is present, and any Bedrock failure (missing key, 403,
+#      throttling, timeout) silently falls through to OpenAI:
+#        npx wrangler secret put BEDROCK_API_KEY  # primary — Claude on Bedrock
+#        npx wrangler secret put OPENAI_API_KEY   # fallback
+#
+#      Confirm the Bedrock key in ten seconds, without triggering real work:
+#        curl https://tracker.tech-441.workers.dev/api/health/llm
+#      (add  -H "x-edit-token: <EDIT_TOKEN>"  if you've set an edit token).
+#      It makes one cheap call and reports which provider and model answered.
 #   2) Deploy:  npm run deploy
 #   3) In the app, set each dashboard's GitHub repo (Edit → GitHub repo).
 #
@@ -76,3 +81,30 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 #        Payload URL:  https://tracker.tech-441.workers.dev/api/gh-webhook
 #        Content type: application/json   Event: "push"   Secret: <pick one>
 #        npx wrangler secret put GITHUB_WEBHOOK_SECRET
+
+# ── LLM settings (plain vars — the KEY itself is a secret, never here) ─────
+# BEDROCK_API_KEY is the only secret involved. Set it in the dashboard
+# (Workers → Settings → Variables and Secrets) or with `wrangler secret put`;
+# the Worker reads it from the env binding. It never reaches the browser: every
+# Bedrock call happens inside the Worker, and the client-side JS only ever
+# talks to this Worker's own routes.
+#
+#   BEDROCK_REGION  AWS region for the Bedrock endpoint,
+#                   https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages
+#                   Defaults to us-east-1 when unset.
+#   LLM_PROVIDER    Force a provider. Unset = Bedrock when BEDROCK_API_KEY is
+#                   present, else OpenAI. Set to "openai" to flip back to the
+#                   old behaviour with no code change; "bedrock" pins Bedrock
+#                   as primary even before the key is added.
+#   BEDROCK_MODEL   Pin one model and skip the fallback chain. Unset, the
+#                   Worker tries anthropic.claude-opus-5 →
+#                   anthropic.claude-opus-4-8 → anthropic.claude-sonnet-5 and
+#                   remembers the first that answers (Bedrock grants Opus 5
+#                   per-account, so a 403 on it is expected, not a bug).
+#
+# No nodejs_compat needed: this uses only fetch / URL / JSON / AbortController,
+# all of which are Workers built-ins. There is no AWS SDK and no SigV4 signing.
+[vars]
+BEDROCK_REGION = "us-east-1"
+# LLM_PROVIDER = "openai"
+# BEDROCK_MODEL = "anthropic.claude-opus-4-8"

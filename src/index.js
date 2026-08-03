@@ -11,6 +11,7 @@
 // the editing controls are hidden.
 import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
 import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap, recentDays } from './commits.js';
+import { llmHealth } from './bedrock.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -418,6 +419,19 @@ export default {
     const { pathname } = url;
 
     try {
+      // ── LLM health check ────────────────────────────────────────────────
+      // GET /api/health/llm → one cheap structured call, so "does the Bedrock
+      // key work?" is answerable in seconds without triggering any real work.
+      // Reports which provider and model actually answered, and which
+      // structured-output mode this deployment accepts. Returns no key, and no
+      // part of one. Behind the edit token when EDIT_TOKEN is set, so it can't
+      // be used to burn tokens from outside.
+      if (pathname === '/api/health/llm') {
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const health = await llmHealth(env);
+        return json(health, health.ok ? 200 : 503);
+      }
+
       // ── Manual entry API ────────────────────────────────────────────────
       if (pathname === '/api/manual') {
         if (!env.MANUAL) return json({ error: 'Manual entries are not enabled: bind a KV namespace as MANUAL.' }, 503);
