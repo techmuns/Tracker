@@ -7,6 +7,8 @@
 // no I/O and are unit-tested. The db* helpers take a D1 binding; summarizeDay
 // takes env. Everything degrades gracefully when D1 / keys are absent.
 
+import { summarizeMessagesClaude } from './claudeSummary.js';
+
 // The team works in India, so a "day" is bucketed in IST (UTC+5:30). A commit
 // pushed at 1am IST counts for that IST calendar day, not the UTC one.
 export const TZ_OFFSET_MIN = 330;
@@ -329,11 +331,17 @@ export async function dbPutSummary(db, repo, day, count, summary, nowMs) {
     .run();
 }
 
-// ── LLM summary (OpenAI) ─────────────────────────────────────────────────
+// ── LLM summary (OpenAI, or Claude via AWS Bedrock) ─────────────────────
 // Turn a day's raw commit messages into a few short, plain-English bullet
 // points a non-technical founder can read. Falls back to the first messages as
 // bullets when no key is set or the call fails. Returns '' for no commits.
+// Provider is chosen by the LLM_PROVIDER env var, defaulting to "openai" so
+// nothing changes unless it's explicitly set to "claude" — see
+// ./claudeSummary.js for that (entirely separate) path.
 export async function summarizeMessages(env, repo, day, messages) {
+  if (env && env.LLM_PROVIDER === 'claude') {
+    return summarizeMessagesClaude(env, repo, day, messages);
+  }
   const lines = (messages || []).map((m) => (typeof m === 'string' ? m : m.message)).filter(Boolean);
   if (!lines.length) return '';
   const fallback = lines.slice(0, 3).map((l) => '• ' + l).join('\n').slice(0, 500);

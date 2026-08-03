@@ -49,6 +49,12 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 #        npx wrangler secret put CEEKAY_AT        # ceekay account read token
 #        npx wrangler secret put TECHMUNS_AT      # techmuns account read token
 #        npx wrangler secret put OPENAI_API_KEY   # makes the bullets short/plain
+#
+#      (Optional) Claude via AWS Bedrock instead of OpenAI: set LLM_PROVIDER
+#      to "claude" ([vars] below or a secret) and add the Bedrock key. See
+#      src/claudeSummary.js — an entirely separate path from the OpenAI one
+#      above, off by default:
+#        npx wrangler secret put temp_claude_token
 #   2) Deploy:  npm run deploy
 #   3) In the app, set each dashboard's GitHub repo (Edit → GitHub repo).
 #
