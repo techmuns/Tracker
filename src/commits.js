@@ -8,6 +8,7 @@
 // takes env. Everything degrades gracefully when D1 / keys are absent.
 
 import { summarizeMessagesClaude } from './claudeSummary.js';
+import { llmProvider } from './bedrock.js';
 
 // The team works in India, so a "day" is bucketed in IST (UTC+5:30). A commit
 // pushed at 1am IST counts for that IST calendar day, not the UTC one.
@@ -331,20 +332,28 @@ export async function dbPutSummary(db, repo, day, count, summary, nowMs) {
     .run();
 }
 
-// ── LLM summary (OpenAI, or Claude via AWS Bedrock) ─────────────────────
+// ── LLM summary (Claude via Amazon Bedrock, falling back to OpenAI) ──────
 // Turn a day's raw commit messages into a few short, plain-English bullet
 // points a non-technical founder can read. Falls back to the first messages as
-// bullets when no key is set or the call fails. Returns '' for no commits.
-// Provider is chosen by the LLM_PROVIDER env var, defaulting to "openai" so
-// nothing changes unless it's explicitly set to "claude" — see
-// ./claudeSummary.js for that (entirely separate) path.
+// bullets when no provider is reachable. Returns '' for no commits.
+//
+// Provider order: Claude on Bedrock is primary whenever BEDROCK_API_KEY is
+// present, and OpenAI is the automatic fallback for any Bedrock failure — no
+// key, 403, throttling, timeout. Set the LLM_PROVIDER variable to "openai" to
+// force the old behaviour back without a code change. See ./bedrock.js for the
+// transport and ./claudeSummary.js for the Claude prompt; the OpenAI call
+// below is untouched.
 export async function summarizeMessages(env, repo, day, messages) {
-  if (env && env.LLM_PROVIDER === 'claude') {
-    return summarizeMessagesClaude(env, repo, day, messages);
-  }
   const lines = (messages || []).map((m) => (typeof m === 'string' ? m : m.message)).filter(Boolean);
   if (!lines.length) return '';
   const fallback = lines.slice(0, 3).map((l) => '• ' + l).join('\n').slice(0, 500);
+
+  if (llmProvider(env) === 'bedrock') {
+    const viaClaude = await summarizeMessagesClaude(env, repo, day, messages);
+    if (viaClaude) return viaClaude;
+    // Bedrock could not answer — fall through to OpenAI.
+  }
+
   const key = env && env.OPENAI_API_KEY;
   if (!key) return fallback;
   try {

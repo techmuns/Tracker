@@ -47,6 +47,57 @@ update that value.
 > private, switch to a Google service-account credential — only the data source
 > changes, not this code.
 
+### Commit summaries (LLM)
+
+The daily commit digest is written by **Claude via Amazon Bedrock**, with
+**OpenAI as an automatic fallback**. Bedrock is used whenever `BEDROCK_API_KEY`
+is present; any Bedrock failure — missing key, a 403, throttling, a timeout —
+falls through to OpenAI, and if neither answers the digest degrades to the raw
+commit messages as bullets. Nothing about the prompts or the output format
+changes between providers.
+
+| Setting | Kind | Purpose |
+|---|---|---|
+| `BEDROCK_API_KEY` | secret | Bedrock API key. Sent as a bearer token in the `x-api-key` header. |
+| `OPENAI_API_KEY` | secret | Fallback provider. |
+| `BEDROCK_REGION` | var | Region in the endpoint host. Defaults to `us-east-1`. |
+| `LLM_PROVIDER` | var | `openai` forces the old path back; `bedrock` pins Bedrock. Unset = auto. |
+| `BEDROCK_MODEL` | var | Pin one model instead of using the fallback chain. |
+
+Calls go to `https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages` with
+`anthropic-version: 2023-06-01` — plain `fetch`, no AWS SDK and no SigV4
+signing. Model IDs carry an `anthropic.` prefix, and because Bedrock grants
+Opus 5 per-account, the Worker tries `anthropic.claude-opus-5` →
+`anthropic.claude-opus-4-8` → `anthropic.claude-sonnet-5` and remembers the
+first that answers.
+
+**The key stays server-side.** Every Bedrock call happens inside the Worker; the
+browser only ever talks to this Worker's own routes, and no response includes
+the key or any part of it.
+
+Check the key without triggering any real work:
+
+```bash
+curl https://tracker.tech-441.workers.dev/api/health/llm
+# add  -H "x-edit-token: <EDIT_TOKEN>"  if you've set an edit token
+```
+
+It makes one cheap structured call and reports which provider and model
+answered, plus which structured-output mode this deployment accepts.
+
+**Local `wrangler dev`:** secrets set in the Cloudflare dashboard are *not*
+available locally. Put them in a `.dev.vars` file in the project root (already
+gitignored):
+
+```
+BEDROCK_API_KEY="..."
+OPENAI_API_KEY="..."
+```
+
+`BEDROCK_REGION` comes from `wrangler.toml`, so it works locally as-is. No
+`nodejs_compat` flag is needed — the Bedrock path uses only `fetch`, `URL`,
+`JSON` and `AbortController`, all Workers built-ins.
+
 ## Data clean-up applied automatically
 
 - Ignores spreadsheet noise (blank rows, repeated header cells, hundreds of

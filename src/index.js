@@ -9,8 +9,10 @@
 // All dashboards live in the KV namespace bound as MANUAL — there is no
 // external Google Sheet. If MANUAL isn't bound, the board works read-only and
 // the editing controls are hidden.
-import { buildDataset, manualToDashboard, normalizeSections, normalizeRepo, dedupeTasks, STATES } from './classify.js';
+import { buildDataset, manualToDashboard, normalizeRepo, dedupeTasks, STATES } from './classify.js';
 import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap, recentDays } from './commits.js';
+import { llmHealth } from './bedrock.js';
+import { publishToMuns } from './publish.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -284,35 +286,8 @@ async function fetchMunsDirectory(env) {
 }
 
 // ── Publish a dashboard onto the Munshot admin page ─────────────────────────
-// POSTs the dashboard (title + link + description + the section/subsection tree)
-// to the Munshot create-dashboard endpoint so it goes live on the admin page,
-// instead of re-entering it there by hand. The endpoint is configurable via
-// MUNS_DASHBOARD_URL; the token comes from the Worker env (never the browser).
-// NOTE: the payload keys below are a best-effort mapping — adjust them to the
-// exact Munshot create-dashboard contract once known (see PUBLISH_PAYLOAD).
-async function publishToMuns(env, entry) {
-  if (!env.MUNS_TOKEN) return { ok: false, error: 'MUNS_TOKEN is not set in the Worker environment.' };
-  const endpoint = env.MUNS_DASHBOARD_URL;
-  if (!endpoint) return { ok: false, error: 'MUNS_DASHBOARD_URL is not set — add the Munshot create-dashboard endpoint as a Worker var/secret.' };
-  const payload = {                                   // PUBLISH_PAYLOAD
-    title: String(entry.name || '').trim(),
-    type: entry.dashboardType || 'iframe',            // URL Embed (Iframe) by default
-    link: String(entry.dashboardUrl || '').trim(),
-    description: String(entry.note || '').trim(),
-    sections: normalizeSections(entry.sections),      // [{ name, children:[…] }]
-  };
-  try {
-    const r = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + env.MUNS_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const t = await r.text();
-    let j = null; try { j = JSON.parse(t); } catch (e) {}
-    const ref = j && (j.id || j._id || j.dashboardId || (j.data && (j.data.id || j.data._id)));
-    return { ok: r.ok, status: r.status, ref: ref ? String(ref) : '', response: (t || '').slice(0, 600) };
-  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
-}
+// Publishing a dashboard to the Munshot admin page lives in ./publish.js —
+// see publishToMuns() there for the endpoint, auth and payload mapping.
 
 // Nightly digest recipient — override with the DIGEST_TO env var/secret.
 const digestTo = (env) => env.DIGEST_TO || 'ceekay@muns.io';
@@ -418,6 +393,19 @@ export default {
     const { pathname } = url;
 
     try {
+      // ── LLM health check ────────────────────────────────────────────────
+      // GET /api/health/llm → one cheap structured call, so "does the Bedrock
+      // key work?" is answerable in seconds without triggering any real work.
+      // Reports which provider and model actually answered, and which
+      // structured-output mode this deployment accepts. Returns no key, and no
+      // part of one. Behind the edit token when EDIT_TOKEN is set, so it can't
+      // be used to burn tokens from outside.
+      if (pathname === '/api/health/llm') {
+        if (!authorized(request, env)) return json({ error: 'Unauthorized.' }, 401);
+        const health = await llmHealth(env);
+        return json(health, health.ok ? 200 : 503);
+      }
+
       // ── Manual entry API ────────────────────────────────────────────────
       if (pathname === '/api/manual') {
         if (!env.MANUAL) return json({ error: 'Manual entries are not enabled: bind a KV namespace as MANUAL.' }, 503);
@@ -2428,7 +2416,11 @@ async function publishDash(id, btn){
     render();
     const dbg = G('detailBg'); if (dbg && dbg.classList.contains('open')) openDetail(id);
   } else {
-    uiToast('Publish failed: ' + (j.error || j.response || ('HTTP '+res.status)));
+    // Show what Munshot actually said, not just "failed" — with the endpoint
+    // and payload logged so a contract mismatch is one console glance away.
+    const detail = j.error || (j.status ? 'HTTP ' + j.status + (j.response ? ' — ' + j.response : ' (empty response)') : 'HTTP ' + res.status);
+    uiToast('Publish failed: ' + detail);
+    if (j.endpoint || j.sent) console.warn('[publish] POST', j.endpoint, '\\nsent:', j.sent, '\\ngot:', j.status, j.response);
     if (btn){ btn.disabled = false; btn.innerHTML = old; }
   }
 }
