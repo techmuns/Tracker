@@ -2418,7 +2418,8 @@ async function publishDash(id, btn){
   } else {
     // Show what Munshot actually said, not just "failed" — with the endpoint
     // and payload logged so a contract mismatch is one console glance away.
-    const detail = j.error || (j.status ? 'HTTP ' + j.status + (j.response ? ' — ' + j.response : ' (empty response)') : 'HTTP ' + res.status);
+    // Prefer a plain-English hint (auth failures) over the raw upstream JSON.
+    const detail = j.hint || j.error || (j.status ? 'HTTP ' + j.status + (j.response ? ' — ' + j.response : ' (empty response)') : 'HTTP ' + res.status);
     uiToast('Publish failed: ' + detail);
     if (j.endpoint || j.sent) console.warn('[publish] POST', j.endpoint, '\\nsent:', j.sent, '\\ngot:', j.status, j.response);
     if (btn){ btn.disabled = false; btn.innerHTML = old; }

@@ -114,6 +114,43 @@ test('a rejection reports the endpoint and what was sent', async () => {
   }
 });
 
+test('MUNS_DASHBOARD_TOKEN takes precedence over MUNS_TOKEN', async () => {
+  const orig = globalThis.fetch;
+  let auth = null;
+  globalThis.fetch = async (u, init) => {
+    auth = init.headers.Authorization;
+    return { ok: true, status: 200, text: async () => '{}' };
+  };
+  try {
+    await publishToMuns({ MUNS_TOKEN: 'email-tok', MUNS_DASHBOARD_TOKEN: 'admin-tok' }, entry);
+    assert.equal(auth, 'Bearer admin-tok');
+    await publishToMuns({ MUNS_TOKEN: 'email-tok' }, entry);
+    assert.equal(auth, 'Bearer email-tok', 'falls back when the override is unset');
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
+test('403 vs 401 get distinct, readable hints', async () => {
+  const orig = globalThis.fetch;
+  const withStatus = (status, body) => async () => ({ ok: false, status, text: async () => body });
+  try {
+    globalThis.fetch = withStatus(403, '{"message":{"message":"Insufficient authority"}}');
+    const forbidden = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
+    assert.match(forbidden.hint, /not allowed to create dashboards/);
+
+    globalThis.fetch = withStatus(401, '{"message":"Unauthorized"}');
+    const unauth = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
+    assert.match(unauth.hint, /rejected the token itself/);
+
+    globalThis.fetch = withStatus(400, '{"message":"category should not be empty"}');
+    const badReq = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
+    assert.equal(badReq.hint, undefined, 'validation errors speak for themselves');
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
 test('missing token and missing title are caught before any request', async () => {
   const orig = globalThis.fetch;
   let called = false;

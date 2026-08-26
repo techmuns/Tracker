@@ -31,10 +31,20 @@ id = "fe377c45c1fa42cb803f04235c726823"
 #   POST https://birdnest.muns.io/agents/dashboards
 #   Authorization: Bearer <MUNS_TOKEN>
 #
-# No extra configuration needed — the endpoint is the built-in default and auth
-# reuses MUNS_TOKEN (the same secret the digest emails use). Set
-# MUNS_DASHBOARD_URL only if the endpoint ever moves:
+# The endpoint is the built-in default; set MUNS_DASHBOARD_URL only if it moves:
 #   npx wrangler secret put MUNS_DASHBOARD_URL
+#
+# ⚠️ Auth needs MORE than the email/directory token. Creating a dashboard is a
+# privileged action: a token that sends digest emails and reads the people
+# directory quite happily can still come back
+#   403 {"message":"Insufficient authority"}
+# here. That is NOT a bad token — 401 means rejected, 403 means accepted but
+# not permitted. Fix it by having the Munshot API owner grant dashboard-create
+# permission to the account behind MUNS_TOKEN, or by putting a token that
+# already has it in MUNS_DASHBOARD_TOKEN, which publishing prefers when set:
+#   npx wrangler secret put MUNS_DASHBOARD_TOKEN
+# Keeping it separate matters — overwriting MUNS_TOKEN would break the digest
+# emails and the people directory, which depend on that same secret.
 #
 # Field mapping lives in src/publish.js (buildPublishPayload). The tracker fills
 # in title, link, description, type, sections and githubLink. The API's other

@@ -61,8 +61,19 @@ export function buildPublishPayload(entry) {
   return payload;
 }
 
+// Creating a dashboard needs more authority than sending an email or reading
+// the directory, so the endpoint can 403 ("Insufficient authority") on a token
+// that works fine elsewhere. MUNS_DASHBOARD_TOKEN lets publishing use a
+// higher-privilege token without disturbing MUNS_TOKEN, which the digest
+// emails and the people directory both depend on. Falls back to MUNS_TOKEN
+// when it isn't set, so nothing changes until you need it.
+export function publishToken(env) {
+  return (env && (env.MUNS_DASHBOARD_TOKEN || env.MUNS_TOKEN)) || '';
+}
+
 export async function publishToMuns(env, entry) {
-  if (!env || !env.MUNS_TOKEN) {
+  const token = publishToken(env);
+  if (!token) {
     return { ok: false, error: 'MUNS_TOKEN is not set in the Worker environment (wrangler secret put MUNS_TOKEN).' };
   }
   const endpoint = env.MUNS_DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
@@ -75,7 +86,7 @@ export async function publishToMuns(env, entry) {
       headers: {
         'accept': '*/*',
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + env.MUNS_TOKEN,
+        'Authorization': 'Bearer ' + token,
       },
       body: JSON.stringify(payload),
     });
@@ -86,7 +97,18 @@ export async function publishToMuns(env, entry) {
     // On rejection, echo where we posted and what we sent, so a contract
     // mismatch is visible in one round. No secrets: the token travels in the
     // Authorization header and is never part of the body.
-    if (!r.ok) { out.endpoint = String(endpoint); out.sent = payload; }
+    if (!r.ok) {
+      out.endpoint = String(endpoint);
+      out.sent = payload;
+      // Translate the two auth failures, which are otherwise indistinguishable
+      // walls of JSON. The 401/403 split is the whole diagnosis: 401 means the
+      // token was rejected, 403 means it was accepted but lacks the role.
+      if (r.status === 403) {
+        out.hint = 'Munshot accepted the token but this account is not allowed to create dashboards. Ask for the dashboard-create permission on it, or put a token that already has it in MUNS_DASHBOARD_TOKEN.';
+      } else if (r.status === 401) {
+        out.hint = 'Munshot rejected the token itself — check MUNS_TOKEN (or MUNS_DASHBOARD_TOKEN if set).';
+      }
+    }
     return out;
   } catch (e) {
     return {
