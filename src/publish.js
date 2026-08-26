@@ -61,20 +61,33 @@ export function buildPublishPayload(entry) {
   return payload;
 }
 
-// Creating a dashboard needs more authority than sending an email or reading
-// the directory, so the endpoint can 403 ("Insufficient authority") on a token
-// that works fine elsewhere. MUNS_DASHBOARD_TOKEN lets publishing use a
-// higher-privilege token without disturbing MUNS_TOKEN, which the digest
-// emails and the people directory both depend on. Falls back to MUNS_TOKEN
-// when it isn't set, so nothing changes until you need it.
-export function publishToken(env) {
-  return (env && (env.MUNS_DASHBOARD_TOKEN || env.MUNS_TOKEN)) || '';
+// Which credential creates the dashboard, in order of preference:
+//
+//  1. userToken — the signed-in Munshot user's JWT, handed to the browser by
+//     the host iframe and forwarded on this one request. This is the one that
+//     actually works: creating a dashboard is a privileged action and the
+//     user has that authority in their own right.
+//  2. MUNS_DASHBOARD_TOKEN — an optional higher-privilege service token, for
+//     publishing outside the iframe (a cron, say) if one is ever issued.
+//  3. MUNS_TOKEN — the everyday service token. Fine for digest emails and the
+//     people directory; Munshot answers 403 "Insufficient authority" when it
+//     tries to create a dashboard, so it is the last resort, not the default.
+//
+// The user's JWT is used for this call and nothing else: never stored, never
+// logged, never sent anywhere but Munshot. We don't verify it here either —
+// Munshot is the authority on its own token and will reject a bad one.
+export function publishToken(env, userToken) {
+  const fromUser = typeof userToken === 'string' ? userToken.trim() : '';
+  if (fromUser) return { token: fromUser, source: 'host-user' };
+  if (env && env.MUNS_DASHBOARD_TOKEN) return { token: env.MUNS_DASHBOARD_TOKEN, source: 'dashboard-token' };
+  if (env && env.MUNS_TOKEN) return { token: env.MUNS_TOKEN, source: 'muns-token' };
+  return { token: '', source: 'none' };
 }
 
-export async function publishToMuns(env, entry) {
-  const token = publishToken(env);
+export async function publishToMuns(env, entry, userToken) {
+  const { token, source } = publishToken(env, userToken);
   if (!token) {
-    return { ok: false, error: 'MUNS_TOKEN is not set in the Worker environment (wrangler secret put MUNS_TOKEN).' };
+    return { ok: false, error: 'No Munshot credential available — open the tracker from the Munshot site so it can pass your session, or set MUNS_TOKEN.' };
   }
   const endpoint = env.MUNS_DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
   const payload = buildPublishPayload(entry);
@@ -93,7 +106,10 @@ export async function publishToMuns(env, entry) {
     const t = await r.text();
     let j = null; try { j = JSON.parse(t); } catch (e) {}
     const ref = j && (j.id || j._id || j.dashboardId || (j.data && (j.data.id || j.data._id)));
-    const out = { ok: r.ok, status: r.status, ref: ref ? String(ref) : '', response: (t || '').slice(0, 600) };
+    // authSource names WHICH credential was used, never its value — the whole
+    // 403 diagnosis turns on knowing whether the user's JWT or a service token
+    // made the call.
+    const out = { ok: r.ok, status: r.status, ref: ref ? String(ref) : '', response: (t || '').slice(0, 600), authSource: source };
     // On rejection, echo where we posted and what we sent, so a contract
     // mismatch is visible in one round. No secrets: the token travels in the
     // Authorization header and is never part of the body.
@@ -104,9 +120,13 @@ export async function publishToMuns(env, entry) {
       // walls of JSON. The 401/403 split is the whole diagnosis: 401 means the
       // token was rejected, 403 means it was accepted but lacks the role.
       if (r.status === 403) {
-        out.hint = 'Munshot accepted the token but this account is not allowed to create dashboards. Ask for the dashboard-create permission on it, or put a token that already has it in MUNS_DASHBOARD_TOKEN.';
+        out.hint = source === 'host-user'
+          ? 'Munshot recognised you but your user account is not allowed to create dashboards — ask for that permission on your Munshot account.'
+          : 'Published with a service token, which Munshot does not allow to create dashboards. Open the tracker from inside the Munshot site so it can use your own session instead.';
       } else if (r.status === 401) {
-        out.hint = 'Munshot rejected the token itself — check MUNS_TOKEN (or MUNS_DASHBOARD_TOKEN if set).';
+        out.hint = source === 'host-user'
+          ? 'Munshot rejected your session — it may have expired. Reload the Munshot page and try again.'
+          : 'Munshot rejected the service token — check MUNS_TOKEN (or MUNS_DASHBOARD_TOKEN if set).';
       }
     }
     return out;

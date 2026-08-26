@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPublishPayload, sectionsToMap, publishToMuns, DEFAULT_DASHBOARD_URL } from '../src/publish.js';
+import { buildPublishPayload, sectionsToMap, publishToMuns, publishToken, DEFAULT_DASHBOARD_URL } from '../src/publish.js';
 
 const entry = {
   name: 'The Wrap',
@@ -114,6 +114,49 @@ test('a rejection reports the endpoint and what was sent', async () => {
   }
 });
 
+test("the host user's JWT outranks every service token", async () => {
+  const orig = globalThis.fetch;
+  let auth = null;
+  globalThis.fetch = async (u, init) => {
+    auth = init.headers.Authorization;
+    return { ok: true, status: 200, text: async () => '{}' };
+  };
+  try {
+    const env = { MUNS_TOKEN: 'email-tok', MUNS_DASHBOARD_TOKEN: 'admin-tok' };
+    const r = await publishToMuns(env, entry, 'user-jwt');
+    assert.equal(auth, 'Bearer user-jwt');
+    assert.equal(r.authSource, 'host-user');
+
+    // Blank/whitespace user tokens fall through rather than sending garbage.
+    const blank = await publishToMuns(env, entry, '   ');
+    assert.equal(auth, 'Bearer admin-tok');
+    assert.equal(blank.authSource, 'dashboard-token');
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
+test('publishToken reports the source without leaking the value', () => {
+  assert.deepEqual(publishToken({ MUNS_TOKEN: 'm' }, 'jwt'), { token: 'jwt', source: 'host-user' });
+  assert.deepEqual(publishToken({ MUNS_TOKEN: 'm', MUNS_DASHBOARD_TOKEN: 'd' }), { token: 'd', source: 'dashboard-token' });
+  assert.deepEqual(publishToken({ MUNS_TOKEN: 'm' }), { token: 'm', source: 'muns-token' });
+  assert.deepEqual(publishToken({}), { token: '', source: 'none' });
+});
+
+test('403 hint depends on which credential was used', async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 403, text: async () => '{"message":"Insufficient authority"}' });
+  try {
+    const asUser = await publishToMuns({ MUNS_TOKEN: 't' }, entry, 'user-jwt');
+    assert.match(asUser.hint, /your user account is not allowed/);
+
+    const asService = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
+    assert.match(asService.hint, /Open the tracker from inside the Munshot site/);
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
 test('MUNS_DASHBOARD_TOKEN takes precedence over MUNS_TOKEN', async () => {
   const orig = globalThis.fetch;
   let auth = null;
@@ -137,11 +180,16 @@ test('403 vs 401 get distinct, readable hints', async () => {
   try {
     globalThis.fetch = withStatus(403, '{"message":{"message":"Insufficient authority"}}');
     const forbidden = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
-    assert.match(forbidden.hint, /not allowed to create dashboards/);
+    assert.match(forbidden.hint, /does not allow to create dashboards/);
 
     globalThis.fetch = withStatus(401, '{"message":"Unauthorized"}');
     const unauth = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
-    assert.match(unauth.hint, /rejected the token itself/);
+    assert.match(unauth.hint, /rejected the service token/);
+
+    // Same statuses, but as the signed-in user — different advice entirely.
+    globalThis.fetch = withStatus(401, '{"message":"Unauthorized"}');
+    const staleSession = await publishToMuns({ MUNS_TOKEN: 't' }, entry, 'jwt');
+    assert.match(staleSession.hint, /may have expired/);
 
     globalThis.fetch = withStatus(400, '{"message":"category should not be empty"}');
     const badReq = await publishToMuns({ MUNS_TOKEN: 't' }, entry);

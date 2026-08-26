@@ -13,6 +13,7 @@ import { buildDataset, manualToDashboard, normalizeRepo, dedupeTasks, STATES } f
 import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap, recentDays } from './commits.js';
 import { llmHealth } from './bedrock.js';
 import { publishToMuns } from './publish.js';
+import { resolveAllowedOrigins, isTrustedOrigin, isValidSessionPayload } from './hostGuard.js';
 
 const CACHE_SECONDS = 180;
 const KV_KEY = 'manual_entries';
@@ -487,7 +488,12 @@ export default {
         const i = list.findIndex((e) => e.id === id);
         if (i === -1) return json({ error: 'Dashboard not found (only app-created cards can be published).' }, 404);
         if (!String(list[i].name || '').trim()) return json({ error: 'A dashboard title is required before publishing.' }, 400);
-        const res = await publishToMuns(env, list[i]);
+        // The signed-in user's Munshot JWT, handed to the browser by the host
+        // iframe and forwarded on this request only. Used for the outbound
+        // Munshot call and nothing else — never stored, never logged. Munshot
+        // verifies it; we don't need to, and must not act on it ourselves.
+        const hostToken = request.headers.get('x-muns-user-token') || '';
+        const res = await publishToMuns(env, list[i], hostToken);
         if (res.ok) {
           list[i].publishedAt = new Date().toISOString();
           if (res.ref) list[i].publishRef = res.ref;
@@ -1117,7 +1123,7 @@ export default {
         });
       }
 
-      return new Response(renderPage(data, { manualEnabled: !!env.MANUAL, editProtected: !!env.EDIT_TOKEN, standalone: true }), {
+      return new Response(renderPage(data, { manualEnabled: !!env.MANUAL, editProtected: !!env.EDIT_TOKEN, standalone: true, allowedHostOrigins: resolveAllowedOrigins(env.MUNS_ALLOWED_ORIGINS) }), {
         headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
       });
     } catch (err) {
@@ -1158,6 +1164,13 @@ function renderPage(data, opts) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Munshot Dashboard SDK. Classic script, loaded in <head> BEFORE the app
+     script below: the host sends host:init (the message carrying the JWT)
+     within milliseconds of the iframe loading, and the SDK only starts
+     listening once the client is constructed. Miss that message and the
+     client is permanently deaf — the host never re-sends it. Do not add
+     defer/async or type="module". -->
+<script src="https://munshot.s3.ap-south-1.amazonaws.com/SDK+script/munshot-dashboard-sdk.v1.0.0.min.js"></script>
 <style>
   :root {
     --bg:#f7f8fa; --surface:#ffffff; --surface2:#fbfcfd;
@@ -2332,6 +2345,65 @@ ${opts.manualEnabled ? `
 <input type="file" id="filePick" hidden>
 
 <script>
+// ── Munshot host session ─────────────────────────────────────────────────
+// The tracker is embedded in an iframe on the Munshot site, and the host
+// pushes the signed-in user's JWT to us over postMessage. Publishing uses THAT
+// token: creating a dashboard needs the user's own authority, and the Worker's
+// service token gets 403 "Insufficient authority".
+//
+// This block runs first, before any UI, so the SDK's listener is live before
+// host:init can arrive. The guards below are injected verbatim from
+// src/hostGuard.js — same code, unit-tested there.
+const MUNS_ALLOWED_ORIGINS = ${JSON.stringify((opts && opts.allowedHostOrigins) || [])};
+${isTrustedOrigin.toString()}
+${isValidSessionPayload.toString()}
+
+let HOST_SESSION = { token:null, userName:null, email:null, orgId:null, orgName:null };
+
+function applyHostSession(raw){
+  if (!isValidSessionPayload(raw)){ console.warn('[tracker] ignoring malformed host session payload'); return; }
+  const next = { token:null, userName:null, email:null, orgId:null, orgName:null };
+  for (const k in next) if (typeof raw[k] === 'string') next[k] = raw[k];
+  const had = !!HOST_SESSION.token;
+  HOST_SESSION = next;
+  // Log presence, never the value.
+  if (!!next.token !== had) console.info('[tracker] host session ' + (next.token ? 'received' : 'cleared'), { email: next.email, userName: next.userName });
+}
+
+const MUNS_SDK = (function(){
+  const g = window.MunshotDashboardSDK;
+  if (!g) return null;   // not embedded, or the SDK script didn't load
+  // allowedOrigins must never be empty: the SDK treats [] as "not provided"
+  // and then accepts the first message from ANY origin. Empty fails open.
+  if (!MUNS_ALLOWED_ORIGINS.length){ console.error('[tracker] empty host origin allow-list — refusing to start the SDK'); return null; }
+  const config = {
+    dashboardId: 'munshot-tracker',
+    dashboardName: 'Dashboard Tracker',
+    lockOriginOnFirstMessage: true,
+    allowedOrigins: MUNS_ALLOWED_ORIGINS,
+  };
+  const factory = g.createDashboardClientSdk || g.createClient;
+  if (typeof factory === 'function'){ try { return factory(config); } catch(e){ console.error('[tracker] SDK factory failed', e); } }
+  const Ctor = g.DashboardClientSdk || g.Client;
+  if (typeof Ctor === 'function'){ try { return new Ctor(config); } catch(e){ console.error('[tracker] SDK constructor failed', e); } }
+  return null;
+})();
+
+if (MUNS_SDK){
+  // host:init may already have landed and been origin-checked by the SDK, in
+  // which case there is no MessageEvent left for us to see — so read the
+  // cached context first, THEN subscribe. Doing only one of the two is a bug.
+  const ctx0 = MUNS_SDK.getContext();
+  if (ctx0 && ctx0.session) applyHostSession(ctx0.session);
+  MUNS_SDK.onMessage(function(env, meta){
+    const origin = meta && meta.origin;
+    if (!isTrustedOrigin(origin, MUNS_ALLOWED_ORIGINS)){ console.warn('[tracker] ignoring postMessage from untrusted origin:', origin); return; }
+    if (!env || env.source !== 'host') return;
+    const ctx = MUNS_SDK.getContext();   // fresh deep clone each call
+    if (ctx && ctx.session) applyHostSession(ctx.session);
+  });
+}
+
 const DATA = ${payload};
 const STATES = ${statesJson};
 const CFG = ${cfg};
@@ -2409,7 +2481,11 @@ async function publishDash(id, btn){
   if (!(await uiConfirm('Publish "'+d.name+'" to the admin page now?'+(again?'\\n\\nAlready published — this pushes the latest version again.':''), {okText:'Publish'}))) return;
   const old = btn ? btn.innerHTML : '';
   if (btn){ btn.disabled = true; btn.textContent = 'Publishing…'; }
-  const res = await api('POST', '/api/publish', { id });
+  // Forward the host session on this one request so the Worker can publish as
+  // the signed-in user. Sent as a header (never a URL, never stored) and only
+  // to our own Worker, which passes it straight to Munshot and nowhere else.
+  const res = await api('POST', '/api/publish', { id },
+    HOST_SESSION.token ? { 'x-muns-user-token': HOST_SESSION.token } : undefined);
   const j = await res.json().catch(() => ({}));
   if (res.ok){
     d.publishedAt = j.publishedAt || new Date().toISOString(); if (j.ref) d.publishRef = j.ref;
@@ -2636,9 +2712,10 @@ async function editToken(){
   if (!t){ t = (await uiPrompt('Enter edit password:')) || ''; if (t) localStorage.setItem('editToken', t); }
   return t;
 }
-async function api(method, path, body){
+async function api(method, path, body, extraHeaders){
   const headers = { 'content-type':'application/json' };
   if (CFG.editProtected) headers['x-edit-token'] = await editToken();
+  if (extraHeaders) Object.assign(headers, extraHeaders);
   const res = await fetch(path, { method, headers, body: body?JSON.stringify(body):undefined });
   if (res.status === 401){ localStorage.removeItem('editToken'); }
   return res;

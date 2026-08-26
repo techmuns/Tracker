@@ -34,17 +34,36 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # The endpoint is the built-in default; set MUNS_DASHBOARD_URL only if it moves:
 #   npx wrangler secret put MUNS_DASHBOARD_URL
 #
-# ⚠️ Auth needs MORE than the email/directory token. Creating a dashboard is a
-# privileged action: a token that sends digest emails and reads the people
-# directory quite happily can still come back
+# Auth: publishing uses the SIGNED-IN USER'S session, not a service token.
+# Creating a dashboard is a privileged action — MUNS_TOKEN sends digest emails
+# and reads the people directory quite happily, but Munshot answers
 #   403 {"message":"Insufficient authority"}
-# here. That is NOT a bad token — 401 means rejected, 403 means accepted but
-# not permitted. Fix it by having the Munshot API owner grant dashboard-create
-# permission to the account behind MUNS_TOKEN, or by putting a token that
-# already has it in MUNS_DASHBOARD_TOKEN, which publishing prefers when set:
-#   npx wrangler secret put MUNS_DASHBOARD_TOKEN
-# Keeping it separate matters — overwriting MUNS_TOKEN would break the digest
-# emails and the people directory, which depend on that same secret.
+# when it tries to create one. (That is not a bad token: 401 means rejected,
+# 403 means accepted but not permitted.)
+#
+# The tracker runs in an iframe on the Munshot site, so the host hands the
+# browser the user's JWT over postMessage via the Munshot Dashboard SDK. The
+# page forwards it on the publish request only, as an x-muns-user-token header,
+# and the Worker uses it as the Bearer for that one outbound call — never
+# stored, never logged, never sent anywhere else. Credential order:
+#   1. the host user's JWT   2. MUNS_DASHBOARD_TOKEN   3. MUNS_TOKEN
+#
+#   MUNS_ALLOWED_ORIGINS  Comma-separated exact origins allowed to postMessage
+#                         a session in. Defaults to https://chat.muns.io. This
+#                         is the ENTIRE trust boundary — exact scheme+host, no
+#                         wildcards, and it must never be empty (the SDK treats
+#                         an empty list as "no list" and then accepts the first
+#                         message from any origin). Add an entry if Munshot
+#                         ever embeds the tracker from another subdomain.
+#   MUNS_DASHBOARD_TOKEN  Optional service token for publishing outside the
+#                         iframe, if one with dashboard-create rights is ever
+#                         issued: npx wrangler secret put MUNS_DASHBOARD_TOKEN
+#                         Keep it separate — overwriting MUNS_TOKEN would break
+#                         the digest emails and the people directory.
+#
+# Because publishing now depends on the host session, the tracker must be
+# opened FROM the Munshot site. Opened standalone it still runs, but publishing
+# falls back to the service token and will 403 until one has the right.
 #
 # Field mapping lives in src/publish.js (buildPublishPayload). The tracker fills
 # in title, link, description, type, sections and githubLink. The API's other
