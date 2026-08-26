@@ -26,23 +26,23 @@ id = "fe377c45c1fa42cb803f04235c726823"
 #   npx wrangler secret put MUNSBOT_TOKEN
 
 # ── Publish to the Munshot admin page ─────────────────────────────────────
-# The "Publish" button POSTs a dashboard (title + link + description + the
-# section tree) to Munshot's create-dashboard endpoint, using MUNS_TOKEN for
-# auth. It needs the endpoint URL, which is NOT yet configured — until it is,
-# Publish fails with "MUNS_DASHBOARD_URL is not set".
+# The "Publish" button POSTs a dashboard to Munshot's create-dashboard endpoint:
 #
+#   POST https://birdnest.muns.io/agents/dashboards
+#   Authorization: Bearer <MUNS_TOKEN>
+#
+# No extra configuration needed — the endpoint is the built-in default and auth
+# reuses MUNS_TOKEN (the same secret the digest emails use). Set
+# MUNS_DASHBOARD_URL only if the endpoint ever moves:
 #   npx wrangler secret put MUNS_DASHBOARD_URL
 #
-# To find the URL (and confirm the request body): open the Munshot admin page,
-# open DevTools → Network, create one dashboard by hand, then click the request
-# that fires. Its URL is the value to set; its JSON body is the contract.
-#
-# ⚠️ The payload this Worker sends (title / type / link / description /
-# sections — see PUBLISH_PAYLOAD in src/index.js) was written before anyone had
-# the real contract, so it is a guess. If Publish returns a 400 after the URL
-# is set, compare that captured body against PUBLISH_PAYLOAD and rename the
-# keys to match — the failure toast and the browser console both print exactly
-# what was sent and what came back.
+# Field mapping lives in src/publish.js (buildPublishPayload). The tracker fills
+# in title, link, description, type, sections and githubLink. The API's other
+# optional fields — category, tickers, sectors, industries, keywords,
+# widgetConfig, organizationIds, userIds — are omitted unless a stored entry
+# carries them, because inventing organizationIds/userIds would expose a
+# dashboard to the wrong client. If Munshot rejects a publish, the toast shows
+# its exact message and the browser console prints what was sent.
 
 # Nightly Build Update digest recipient. Defaults to tech@muns.io (your test
 # inbox). Once verified, switch to the founder:
