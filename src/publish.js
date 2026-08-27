@@ -30,7 +30,27 @@ const PASSTHROUGH = [
 // own API example, so it is known-good rather than invented; override it per
 // deployment with MUNS_DEFAULT_CATEGORY, or per dashboard by putting a
 // `category` on the stored entry.
-export const DEFAULT_CATEGORY = 'markets';
+export const DEFAULT_CATEGORY = 'General';
+
+// The categories Munshot's own "Create Dashboard" form offers. It also accepts
+// a new one typed in free-hand, so this is a suggestion list, not an enum —
+// the field is a datalist, not a locked dropdown. (Their live list also holds
+// case-duplicates and a couple of test entries; those are left out here.)
+export const MUNS_CATEGORIES = [
+  'Analytics', 'Companies', 'Crypto', 'Design POC', 'ERP', 'General',
+  'Heatmaps', 'India', 'Industry', 'Insights', 'Labs', 'Macro', 'Markets',
+  'News', 'Portfolios', 'Private Markets', 'Research', 'Screener', 'Sectors',
+  'Trading', 'Workspace', 'Others',
+];
+
+// The two embed modes Munshot's form offers. "iframe" is confirmed by their
+// API example; the TradingView wire value is inferred from the label and
+// should be corrected here if Munshot rejects it. Every dashboard the tracker
+// holds is a URL embed, so that stays the default.
+export const MUNS_DASHBOARD_TYPES = [
+  { value: 'iframe', label: 'URL Embed (Iframe)' },
+  { value: 'tradingview', label: 'TradingView Widget (JSON)' },
+];
 
 // The tracker stores sections as a nested tree — [{ name, children:[…] }] —
 // but the API wants a flat object of { sectionName: description }. Flatten one
@@ -113,7 +133,25 @@ export async function publishToMuns(env, entry, userToken) {
   }
   const endpoint = env.MUNS_DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
   const payload = buildPublishPayload(entry, { defaultCategory: env.MUNS_DEFAULT_CATEGORY });
-  if (!payload.title) return { ok: false, error: 'A dashboard title is required before publishing.' };
+
+  // Munshot's own form makes these compulsory, and a dashboard published
+  // without them never goes live. Catching it here names the field plainly
+  // instead of bouncing off the API with a 400.
+  const missing = [];
+  if (!payload.title) missing.push('a dashboard name');
+  if (!payload.link) missing.push('a dashboard link');
+  if (!payload.category) missing.push('a category');
+  if (!payload.type) missing.push('a dashboard type');
+  if (!Array.isArray(payload.organizationIds) || !payload.organizationIds.length) {
+    missing.push('at least one organisation (who can see it on Munshot)');
+  }
+  if (missing.length) {
+    return {
+      ok: false,
+      error: 'Add ' + missing.join(', ') + ' in Edit, then publish again.',
+      missing,
+    };
+  }
 
   try {
     const r = await fetch(endpoint, {

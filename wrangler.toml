@@ -55,11 +55,10 @@ id = "fe377c45c1fa42cb803f04235c726823"
 #                         an empty list as "no list" and then accepts the first
 #                         message from any origin). Add an entry if Munshot
 #                         ever embeds the tracker from another subdomain.
-#   MUNS_DEFAULT_CATEGORY Munshot REQUIRES a category on every dashboard and
-#                         the tracker has no field for it, so publishing sends
-#                         this. Defaults to "markets" (the value from Munshot's
-#                         own API example). Override per deployment here, or
-#                         per dashboard by putting a `category` on the entry.
+#   MUNS_DEFAULT_CATEGORY Fallback category for older dashboards saved before
+#                         the Category field existed. Defaults to "General".
+#                         Normally unused — Category is set per dashboard in
+#                         Edit, and publishing refuses without one.
 #   MUNS_DASHBOARD_TOKEN  Optional service token for publishing outside the
 #                         iframe, if one with dashboard-create rights is ever
 #                         issued: npx wrangler secret put MUNS_DASHBOARD_TOKEN
@@ -70,13 +69,20 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # opened FROM the Munshot site. Opened standalone it still runs, but publishing
 # falls back to the service token and will 403 until one has the right.
 #
-# Field mapping lives in src/publish.js (buildPublishPayload). The tracker fills
-# in title, link, description, type, sections, githubLink and category. The
-# API's genuinely optional fields — tickers, sectors, industries, keywords,
-# widgetConfig, organizationIds, userIds — are omitted unless a stored entry
-# carries them, because inventing organizationIds/userIds would expose a
-# dashboard to the wrong client. If Munshot rejects a publish, the toast names
-# the offending field and the browser console prints what was sent.
+# Munshot makes five things compulsory, and a dashboard published without them
+# never goes live, so Edit collects all five and publishing refuses (naming the
+# gap) rather than bouncing off the API with a 400:
+#   name, link, Category, Dashboard type, and at least one Organisation.
+# Category is a pick-or-type list mirroring Munshot's own; Dashboard type is
+# URL Embed (Iframe) or TradingView Widget (JSON); Organisation visibility is a
+# multi-select whose numeric ids come from the Munshot directory (/orgs/users)
+# — the only place those ids exist.
+#
+# Field mapping lives in src/publish.js (buildPublishPayload). The API's
+# genuinely optional fields — tickers, sectors, industries, keywords,
+# widgetConfig, userIds — are omitted unless a stored entry carries them. If
+# Munshot still rejects a publish, the toast names the offending field and the
+# browser console prints exactly what was sent.
 
 # Nightly Build Update digest recipient. Defaults to tech@muns.io (your test
 # inbox). Once verified, switch to the founder:
@@ -159,6 +165,6 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 # all of which are Workers built-ins. There is no AWS SDK and no SigV4 signing.
 [vars]
 BEDROCK_REGION = "us-east-1"
-# MUNS_DEFAULT_CATEGORY = "markets"
+# MUNS_DEFAULT_CATEGORY = "General"
 # LLM_PROVIDER = "openai"
 # BEDROCK_MODEL = "anthropic.claude-opus-4-8"

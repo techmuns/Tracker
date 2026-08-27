@@ -12,7 +12,7 @@
 import { buildDataset, manualToDashboard, normalizeRepo, dedupeTasks, STATES } from './classify.js';
 import { parseCommits, overviewFromActivity, mergeCommitsIntoActivity, pruneActivity, summarizeMessages, fetchRepoCommits, hasGhToken, matchRepos, pagesRepoMap, recentDays } from './commits.js';
 import { llmHealth } from './bedrock.js';
-import { publishToMuns } from './publish.js';
+import { publishToMuns, MUNS_CATEGORIES, MUNS_DASHBOARD_TYPES } from './publish.js';
 import { resolveAllowedOrigins, isTrustedOrigin, isValidSessionPayload } from './hostGuard.js';
 
 const CACHE_SECONDS = 180;
@@ -252,7 +252,7 @@ async function sendMuns(env, recipients, subject, html, text) {
 // the browser. Responses are edge-cached briefly so we don't hammer the
 // upstream on every page load.
 async function fetchMunsDirectory(env) {
-  if (!env.MUNS_TOKEN) return { ok: false, error: 'MUNS_TOKEN not set', clients: [], team: [] };
+  if (!env.MUNS_TOKEN) return { ok: false, error: 'MUNS_TOKEN not set', clients: [], team: [], orgs: [] };
   const base = env.MUNS_USERS_URL || 'https://devde.muns.io/orgs/users';
   const headers = { 'accept': '*/*', 'Authorization': 'Bearer ' + env.MUNS_TOKEN };
   const dedupe = (arr) => {
@@ -265,7 +265,7 @@ async function fetchMunsDirectory(env) {
       fetch(base + '?limit=1000', { headers, cf: { cacheTtl: 300, cacheEverything: true } }),
       fetch(base + '?limit=1000&organizationId=1', { headers, cf: { cacheTtl: 300, cacheEverything: true } }),
     ]);
-    if (!allR.ok) return { ok: false, error: 'orgs ' + allR.status, clients: [], team: [] };
+    if (!allR.ok) return { ok: false, error: 'orgs ' + allR.status, clients: [], team: [], orgs: [] };
     const allJson = await allR.json().catch(() => ({}));
     const teamJson = teamR.ok ? await teamR.json().catch(() => ({})) : {};
     const orgs = Array.isArray(allJson.data) ? allJson.data : [];
@@ -273,6 +273,19 @@ async function fetchMunsDirectory(env) {
     const clients = dedupe(orgs
       .map((o) => String((o && o.name) || '').trim())
       .filter(Boolean));
+    // Same organisations, but keeping the numeric ids. Publishing needs
+    // organizationIds (which org may see a dashboard), and a name alone can't
+    // be turned into an id without guessing — so carry both.
+    const seenOrg = new Set();
+    const orgOptions = [];
+    for (const o of orgs) {
+      const id = o && o.organization_id;
+      const name = String((o && o.name) || '').trim();
+      if (typeof id !== 'number' || !Number.isFinite(id) || !name || seenOrg.has(id)) continue;
+      seenOrg.add(id);
+      orgOptions.push({ id, name });
+    }
+    orgOptions.sort((a, b) => a.name.localeCompare(b.name));
     // Team = active, named members of the munshot org.
     const teamOrg = (Array.isArray(teamJson.data) ? teamJson.data : []).find((o) => o && o.organization_id === 1)
       || orgs.find((o) => o && o.organization_id === 1) || { users: [] };
@@ -280,9 +293,9 @@ async function fetchMunsDirectory(env) {
       .filter((u) => u && u.isActive && u.name)
       .map((u) => String(u.name).trim())
       .filter(Boolean));
-    return { ok: true, clients, team };
+    return { ok: true, clients, team, orgs: orgOptions };
   } catch (e) {
-    return { ok: false, error: String((e && e.message) || e), clients: [], team: [] };
+    return { ok: false, error: String((e && e.message) || e), clients: [], team: [], orgs: [] };
   }
 }
 
@@ -442,6 +455,10 @@ export default {
             briefLinks: Array.isArray(body.briefLinks) ? body.briefLinks : [],
             githubRepo: body.githubRepo || '',
             githubRepos: Array.isArray(body.githubRepos) ? body.githubRepos : [],
+            // Required by Munshot when publishing (see src/publish.js).
+            category: body.category || '',
+            dashboardType: body.dashboardType || 'iframe',
+            organizationIds: Array.isArray(body.organizationIds) ? body.organizationIds : [],
           };
           const list = await readManual(env);
           list.push(entry);
@@ -458,7 +475,7 @@ export default {
           const list = await readManual(env);
           const i = list.findIndex((e) => e.id === id);
           if (i === -1) return json({ error: 'Entry not found (only app-created cards are editable).' }, 404);
-          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks', 'githubRepo', 'githubRepos'];
+          const FIELDS = ['name', 'customer', 'owner', 'liveRaw', 'stage', 'status', 'requirements', 'improvement', 'feedback', 'meetingUrl', 'dashboardUrl', 'links', 'lastUpdated', 'note', 'dueDate', 'manualStatus', 'requirementFiles', 'feedbacks', 'sections', 'brief', 'briefFiles', 'briefLinks', 'githubRepo', 'githubRepos', 'category', 'dashboardType', 'organizationIds'];
           for (const f of FIELDS) if (f in body) list[i][f] = body[f];
           list[i].updatedAt = new Date().toISOString();
           await writeManual(env, list);
@@ -2253,7 +2270,10 @@ ${opts.manualEnabled ? `
       <label>Stage<select id="f_stage">${STATES.map((s,i)=>`<option value="${s.id}">${i+1}. ${escapeHtml(s.label)}</option>`).join('')}</select></label>
       <label>Live on Munshot?<select id="f_live"><option value="Not Live">Not live</option><option value="Live on Munshot">Live on Munshot</option></select></label>
       <label>Priority<select id="f_prio"><option value="0">None</option><option value="1">1st priority</option><option value="2">2nd priority</option><option value="3">3rd priority</option><option value="4">4th priority</option><option value="5">5th priority</option></select></label>
-      <label class="wide">Dashboard link<input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
+      <label class="wide">Dashboard link *<span style="color:var(--muted);font-weight:400;font-size:11px"> — required to publish</span><input id="f_url" placeholder="https://app.munshot.com/…" autocomplete="off"></label>
+      <label>Category *<span style="color:var(--muted);font-weight:400;font-size:11px"> — pick or type</span><input id="f_category" list="catOpts" placeholder="e.g. Research" autocomplete="off"><datalist id="catOpts">${MUNS_CATEGORIES.map((c) => `<option value="${escapeHtml(c)}"></option>`).join('')}</datalist></label>
+      <label>Dashboard type *<select id="f_dashtype">${MUNS_DASHBOARD_TYPES.map((t) => `<option value="${escapeHtml(t.value)}">${escapeHtml(t.label)}</option>`).join('')}</select></label>
+      <label class="wide">Organisation visibility *<span style="color:var(--muted);font-weight:400;font-size:11px"> — who sees it on Munshot. Ctrl/Cmd-click for several.</span><select id="f_orgs" multiple size="4"></select></label>
       <label class="wide">GitHub repo <span style="color:var(--muted);font-weight:400;font-size:11px">(for commit tracking — owner/repo or the repo URL)</span><input id="f_repo" list="repoOptsForm" placeholder="munshot/paragon-dashboard" autocomplete="off"><datalist id="repoOptsForm"></datalist></label>
       <label class="wide">More repos <span style="color:var(--muted);font-weight:400;font-size:11px">(optional — one per line, if this dashboard spans multiple repos)</span>
         <div class="dd" id="repoDD">
@@ -2743,7 +2763,7 @@ function recount(){ const c = Object.fromEntries(STATES.map(s => [s.id,0])); DAT
 const G = (id) => document.getElementById(id);
 
 // ── Directory-backed dropdowns: Clients (multi-select) + Assigned-to (combo) ──
-let DIR = { clients: [], team: [] };   // filled from /api/directory (Muns platform)
+let DIR = { clients: [], team: [], orgs: [] };   // filled from /api/directory (Muns platform)
 let clientSel = [];                    // currently selected client names
 const uniqSort = (a) => { const s=new Set(), o=[]; a.forEach(n=>{ n=String(n||'').trim(); const k=n.toLowerCase(); if(n && !s.has(k)){ s.add(k); o.push(n); } }); return o.sort((x,y)=>x.localeCompare(y)); };
 function clientOptions(){ return uniqSort([...(DATA.customers||[]), ...DIR.clients]); }
@@ -3030,6 +3050,29 @@ function applyUnassigned(){
   const dd = G('ownerDD'); if (dd) dd.style.opacity = uc.checked ? '.5' : '';
   if (uc.checked) closeOwnerDD();
 }
+// Organisation visibility options come from the Munshot directory, which is
+// the only place the numeric org ids exist. Selected ids are preserved even if
+// the directory hasn't loaded yet, so editing and saving a dashboard can never
+// silently wipe its audience.
+function fillOrgOptions(selectedIds){
+  const sel = G('f_orgs'); if (!sel) return;
+  const chosen = (selectedIds || []).map(Number).filter((n) => Number.isFinite(n));
+  const orgs = (DIR && Array.isArray(DIR.orgs)) ? DIR.orgs : [];
+  const known = new Set(orgs.map((o) => Number(o.id)));
+  const rows = orgs.map((o) => ({ id: Number(o.id), name: o.name }));
+  // An id we can't name yet (directory still loading, or org since removed)
+  // still gets an option, so saving keeps it.
+  for (const id of chosen) if (!known.has(id)) rows.push({ id, name: 'Organisation #' + id });
+  sel.innerHTML = rows.map((o) =>
+    '<option value="' + o.id + '"' + (chosen.indexOf(o.id) !== -1 ? ' selected' : '') + '>' + esc(o.name) + '</option>'
+  ).join('');
+  if (!rows.length) sel.innerHTML = '<option disabled>Directory unavailable — check MUNS_TOKEN</option>';
+}
+function getOrgIds(){
+  const sel = G('f_orgs'); if (!sel) return [];
+  return Array.from(sel.selectedOptions || []).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
+}
+
 function setForm(d){
   G('f_id').value = d ? d.id : '';
   G('f_name').value = d ? d.name : '';
@@ -3041,6 +3084,11 @@ function setForm(d){
   G('f_live').value = d && d.isLive ? 'Live on Munshot' : 'Not Live';
   G('f_prio').value = d ? String(d.priorityLevel || 0) : '0';
   G('f_url').value = d ? (d.dashboardUrl || '') : '';
+  // Munshot publish fields. Rebuild the org list each time so it reflects the
+  // directory even if it loaded after the form was first opened.
+  if (G('f_category')) G('f_category').value = d ? (d.category || '') : '';
+  if (G('f_dashtype')) G('f_dashtype').value = (d && d.dashboardType) || 'iframe';
+  fillOrgOptions(d ? (d.organizationIds || []) : []);
   if (G('f_repo')) G('f_repo').value = d ? (d.githubRepo || '') : '';
   if (G('f_repos')) G('f_repos').value = d ? ((d.githubRepos || []).join('\\n')) : '';
   setDue(d ? (d.dueDate || '') : '');
@@ -3192,6 +3240,9 @@ if (CFG.manualEnabled){
       links,
       meetingUrl: links[0] ? links[0].url : '',
       dashboardUrl: G('f_url').value.trim(),
+      category: (G('f_category') ? G('f_category').value : '').trim(),
+      dashboardType: (G('f_dashtype') ? G('f_dashtype').value : '') || 'iframe',
+      organizationIds: getOrgIds(),
       githubRepo: (G('f_repo') ? G('f_repo').value : '').trim(),
       githubRepos: (G('f_repos') ? G('f_repos').value : '').split('\\n').map(s => s.trim()).filter(Boolean),
       dueDate: G('f_due').value,
@@ -5307,6 +5358,10 @@ async function loadDirectory(){
     if (!d || !d.ok) return;
     DIR.clients = Array.isArray(d.clients) ? d.clients : [];
     DIR.team = Array.isArray(d.team) ? d.team : [];
+    DIR.orgs = Array.isArray(d.orgs) ? d.orgs : [];
+    // The directory usually lands after the form exists, so refresh the org
+    // list in place — keeping whatever was already selected.
+    if (G('f_orgs')) fillOrgOptions(getOrgIds());
     const cdd = document.getElementById('clientDD'), odd = document.getElementById('ownerDD');
     if (cdd && cdd.classList.contains('open')) renderClientMenu();
     if (odd && odd.classList.contains('open')) renderOwnerMenu();

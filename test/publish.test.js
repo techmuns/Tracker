@@ -2,10 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPublishPayload, sectionsToMap, publishToMuns, publishToken, DEFAULT_DASHBOARD_URL } from '../src/publish.js';
 
+// A complete, publishable entry: Munshot requires name, link, category, type
+// and at least one organisation.
 const entry = {
   name: 'The Wrap',
   dashboardUrl: 'https://app.munshot.com/d/the-wrap',
   note: 'Weekly wrap dashboard',
+  category: 'Research',
+  dashboardType: 'iframe',
+  organizationIds: [1],
   githubRepo: 'techmuns/the-wrap',
   sections: [
     { name: 'Overview', children: [{ name: 'Summary' }, { name: 'Highlights' }] },
@@ -21,6 +26,8 @@ test('payload matches the documented Munshot contract', () => {
   assert.equal(p.description, 'Weekly wrap dashboard');
   assert.equal(p.githubLink, 'https://github.com/techmuns/the-wrap');
   assert.equal(p.favourite, false);
+  assert.equal(p.category, 'Research');
+  assert.deepEqual(p.organizationIds, [1]);
 });
 
 test('sections flatten from the stored tree into the API object map', () => {
@@ -49,14 +56,14 @@ test('githubLink accepts a full URL as well as owner/repo', () => {
 
 test('category is always sent — Munshot rejects a publish without it', () => {
   // 400 ["category should not be empty", "category must be a string"]
-  assert.equal(buildPublishPayload({ name: 'x' }).category, 'markets');
+  assert.equal(buildPublishPayload({ name: 'x' }).category, 'General');
   assert.equal(buildPublishPayload({ name: 'x', category: 'research' }).category, 'research');
   // Deployment-wide override, and the per-entry value still wins over it.
   assert.equal(buildPublishPayload({ name: 'x' }, { defaultCategory: 'internal' }).category, 'internal');
   assert.equal(buildPublishPayload({ name: 'x', category: 'research' }, { defaultCategory: 'internal' }).category, 'research');
   // Never blank, whatever junk arrives.
-  assert.equal(buildPublishPayload({ name: 'x', category: '   ' }).category, 'markets');
-  assert.equal(buildPublishPayload({ name: 'x' }, { defaultCategory: '  ' }).category, 'markets');
+  assert.equal(buildPublishPayload({ name: 'x', category: '   ' }).category, 'General');
+  assert.equal(buildPublishPayload({ name: 'x' }, { defaultCategory: '  ' }).category, 'General');
   for (const p of [buildPublishPayload({ name: 'x' }), buildPublishPayload({ name: 'x', category: 'z' })]) {
     assert.equal(typeof p.category, 'string');
     assert.ok(p.category.length > 0);
@@ -243,9 +250,20 @@ test('missing token and missing title are caught before any request', async () =
     assert.equal(noTok.ok, false);
     assert.match(noTok.error, /MUNS_TOKEN/);
 
-    const noTitle = await publishToMuns({ MUNS_TOKEN: 't' }, { name: '   ' });
-    assert.equal(noTitle.ok, false);
-    assert.match(noTitle.error, /title is required/);
+    // Munshot's form makes name, link, category, type and organisation
+    // compulsory; catch them here rather than bouncing off the API.
+    const bare = await publishToMuns({ MUNS_TOKEN: 't' }, { name: '   ' });
+    assert.equal(bare.ok, false);
+    assert.deepEqual(bare.missing, [
+      'a dashboard name',
+      'a dashboard link',
+      'at least one organisation (who can see it on Munshot)',
+    ]);
+    assert.match(bare.error, /then publish again/);
+
+    // A complete entry missing only its audience.
+    const noOrg = await publishToMuns({ MUNS_TOKEN: 't' }, { ...entry, organizationIds: [] });
+    assert.deepEqual(noOrg.missing, ['at least one organisation (who can see it on Munshot)']);
 
     assert.equal(called, false, 'no request should be attempted');
   } finally {

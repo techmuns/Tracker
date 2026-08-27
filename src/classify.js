@@ -315,6 +315,12 @@ export function manualToDashboard(m) {
     allRepos: [...new Set([normalizeRepo(m.githubRepo), ...(Array.isArray(m.githubRepos) ? m.githubRepos : []).map(normalizeRepo)].filter(Boolean))],
     publishedAt: m.publishedAt || '',
     publishRef: m.publishRef || '',
+    // Munshot publish requirements — category, embed type and which orgs may
+    // see the dashboard. Surfaced so the edit form can round-trip them.
+    category: clean(m.category),
+    dashboardType: clean(m.dashboardType) || 'iframe',
+    organizationIds: (Array.isArray(m.organizationIds) ? m.organizationIds : [])
+      .map((n) => Number(n)).filter((n) => Number.isFinite(n)),
   };
 }
 
