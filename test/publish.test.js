@@ -47,9 +47,44 @@ test('githubLink accepts a full URL as well as owner/repo', () => {
   assert.equal('githubLink' in buildPublishPayload({ name: 'x' }), false);
 });
 
+test('category is always sent — Munshot rejects a publish without it', () => {
+  // 400 ["category should not be empty", "category must be a string"]
+  assert.equal(buildPublishPayload({ name: 'x' }).category, 'markets');
+  assert.equal(buildPublishPayload({ name: 'x', category: 'research' }).category, 'research');
+  // Deployment-wide override, and the per-entry value still wins over it.
+  assert.equal(buildPublishPayload({ name: 'x' }, { defaultCategory: 'internal' }).category, 'internal');
+  assert.equal(buildPublishPayload({ name: 'x', category: 'research' }, { defaultCategory: 'internal' }).category, 'research');
+  // Never blank, whatever junk arrives.
+  assert.equal(buildPublishPayload({ name: 'x', category: '   ' }).category, 'markets');
+  assert.equal(buildPublishPayload({ name: 'x' }, { defaultCategory: '  ' }).category, 'markets');
+  for (const p of [buildPublishPayload({ name: 'x' }), buildPublishPayload({ name: 'x', category: 'z' })]) {
+    assert.equal(typeof p.category, 'string');
+    assert.ok(p.category.length > 0);
+  }
+});
+
+test('validation errors are surfaced field by field', async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 400,
+    text: async () => JSON.stringify({
+      message: { message: ['category should not be empty', 'category must be a string'], error: 'Bad Request', statusCode: 400 },
+    }),
+  });
+  try {
+    const r = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
+    assert.match(r.hint, /category should not be empty; category must be a string/);
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
 test('optional API fields are omitted unless the entry actually carries them', () => {
   const bare = buildPublishPayload({ name: 'x' });
-  for (const k of ['organizationIds', 'userIds', 'tickers', 'sectors', 'industries', 'keywords', 'category', 'widgetConfig']) {
+  // category is deliberately NOT in this list — Munshot requires it, so it
+  // always ships with a default (see the category test above).
+  for (const k of ['organizationIds', 'userIds', 'tickers', 'sectors', 'industries', 'keywords', 'widgetConfig']) {
     assert.equal(k in bare, false, `${k} must not be invented`);
   }
   const rich = buildPublishPayload({ name: 'x', organizationIds: [1, 2], keywords: ['equity'], category: 'markets' });
@@ -191,9 +226,9 @@ test('403 vs 401 get distinct, readable hints', async () => {
     const staleSession = await publishToMuns({ MUNS_TOKEN: 't' }, entry, 'jwt');
     assert.match(staleSession.hint, /may have expired/);
 
-    globalThis.fetch = withStatus(400, '{"message":"category should not be empty"}');
+    globalThis.fetch = withStatus(400, '{"message":"link must be a URL address"}');
     const badReq = await publishToMuns({ MUNS_TOKEN: 't' }, entry);
-    assert.equal(badReq.hint, undefined, 'validation errors speak for themselves');
+    assert.match(badReq.hint, /link must be a URL address/, 'a 400 names the offending field');
   } finally {
     globalThis.fetch = orig;
   }

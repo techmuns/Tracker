@@ -55,6 +55,11 @@ id = "fe377c45c1fa42cb803f04235c726823"
 #                         an empty list as "no list" and then accepts the first
 #                         message from any origin). Add an entry if Munshot
 #                         ever embeds the tracker from another subdomain.
+#   MUNS_DEFAULT_CATEGORY Munshot REQUIRES a category on every dashboard and
+#                         the tracker has no field for it, so publishing sends
+#                         this. Defaults to "markets" (the value from Munshot's
+#                         own API example). Override per deployment here, or
+#                         per dashboard by putting a `category` on the entry.
 #   MUNS_DASHBOARD_TOKEN  Optional service token for publishing outside the
 #                         iframe, if one with dashboard-create rights is ever
 #                         issued: npx wrangler secret put MUNS_DASHBOARD_TOKEN
@@ -66,12 +71,12 @@ id = "fe377c45c1fa42cb803f04235c726823"
 # falls back to the service token and will 403 until one has the right.
 #
 # Field mapping lives in src/publish.js (buildPublishPayload). The tracker fills
-# in title, link, description, type, sections and githubLink. The API's other
-# optional fields — category, tickers, sectors, industries, keywords,
+# in title, link, description, type, sections, githubLink and category. The
+# API's genuinely optional fields — tickers, sectors, industries, keywords,
 # widgetConfig, organizationIds, userIds — are omitted unless a stored entry
 # carries them, because inventing organizationIds/userIds would expose a
-# dashboard to the wrong client. If Munshot rejects a publish, the toast shows
-# its exact message and the browser console prints what was sent.
+# dashboard to the wrong client. If Munshot rejects a publish, the toast names
+# the offending field and the browser console prints what was sent.
 
 # Nightly Build Update digest recipient. Defaults to tech@muns.io (your test
 # inbox). Once verified, switch to the founder:
@@ -154,5 +159,6 @@ crons = ["30 15 * * *", "30 15 * * 3", "30 14 * * *"]
 # all of which are Workers built-ins. There is no AWS SDK and no SigV4 signing.
 [vars]
 BEDROCK_REGION = "us-east-1"
+# MUNS_DEFAULT_CATEGORY = "markets"
 # LLM_PROVIDER = "openai"
 # BEDROCK_MODEL = "anthropic.claude-opus-4-8"

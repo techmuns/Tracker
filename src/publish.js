@@ -19,9 +19,18 @@ export const DEFAULT_DASHBOARD_URL = 'https://birdnest.muns.io/agents/dashboards
 // especially for organizationIds/userIds, where a wrong guess would expose a
 // dashboard to the wrong client.
 const PASSTHROUGH = [
-  'widgetConfig', 'category', 'tickers', 'sectors',
+  'widgetConfig', 'tickers', 'sectors',
   'industries', 'keywords', 'organizationIds', 'userIds',
 ];
+
+// `category` is REQUIRED — Munshot rejects a publish without it:
+//   400 ["category should not be empty", "category must be a string"]
+// The tracker has no category field of its own, so this is the fallback for
+// any dashboard that doesn't carry one. "markets" is the value from Munshot's
+// own API example, so it is known-good rather than invented; override it per
+// deployment with MUNS_DEFAULT_CATEGORY, or per dashboard by putting a
+// `category` on the stored entry.
+export const DEFAULT_CATEGORY = 'markets';
 
 // The tracker stores sections as a nested tree — [{ name, children:[…] }] —
 // but the API wants a flat object of { sectionName: description }. Flatten one
@@ -40,13 +49,16 @@ export function sectionsToMap(list) {
 }
 
 // Pure, so the mapping can be tested without touching the network.
-export function buildPublishPayload(entry) {
+export function buildPublishPayload(entry, opts) {
   const e = entry || {};
+  const fallbackCategory = String((opts && opts.defaultCategory) || DEFAULT_CATEGORY).trim() || DEFAULT_CATEGORY;
+  const category = String(e.category || '').trim() || fallbackCategory;
   const payload = {
     type: e.dashboardType || 'iframe',          // URL Embed (Iframe) by default
     link: String(e.dashboardUrl || '').trim(),
     title: String(e.name || '').trim(),
     description: String(e.note || '').trim(),
+    category,
     sections: sectionsToMap(e.sections),
     favourite: e.favourite === true,
   };
@@ -84,13 +96,23 @@ export function publishToken(env, userToken) {
   return { token: '', source: 'none' };
 }
 
+// Munshot nests validation errors as {message:{message:[...]}} — pull out the
+// human-readable rules wherever they sit.
+function validationMessages(j) {
+  const outer = j && j.message;
+  const inner = outer && typeof outer === 'object' && !Array.isArray(outer) ? outer.message : outer;
+  if (Array.isArray(inner)) return inner.filter((x) => typeof x === 'string');
+  if (typeof inner === 'string') return [inner];
+  return [];
+}
+
 export async function publishToMuns(env, entry, userToken) {
   const { token, source } = publishToken(env, userToken);
   if (!token) {
     return { ok: false, error: 'No Munshot credential available — open the tracker from the Munshot site so it can pass your session, or set MUNS_TOKEN.' };
   }
   const endpoint = env.MUNS_DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
-  const payload = buildPublishPayload(entry);
+  const payload = buildPublishPayload(entry, { defaultCategory: env.MUNS_DEFAULT_CATEGORY });
   if (!payload.title) return { ok: false, error: 'A dashboard title is required before publishing.' };
 
   try {
@@ -127,6 +149,11 @@ export async function publishToMuns(env, entry, userToken) {
         out.hint = source === 'host-user'
           ? 'Munshot rejected your session — it may have expired. Reload the Munshot page and try again.'
           : 'Munshot rejected the service token — check MUNS_TOKEN (or MUNS_DASHBOARD_TOKEN if set).';
+      } else if (r.status === 400) {
+        // Field-level validation. Munshot returns every failing rule at once,
+        // so surfacing them plainly names exactly what the payload is missing.
+        const msgs = validationMessages(j);
+        if (msgs.length) out.hint = 'Munshot rejected the dashboard: ' + msgs.join('; ');
       }
     }
     return out;
